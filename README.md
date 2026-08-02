@@ -25,6 +25,19 @@
 3. 切到「比价与导出」页查看矩阵，必要时调整美元汇率（默认 6.5）与汇总名称
 4. 点「导出 KK 汇总 Excel」选择保存位置
 
+## 直接下载安装包（推荐）
+
+仓库配有 GitHub Actions 工作流（`.github/workflows/build-win.yml`）：每次推送都会在
+GitHub 的 Windows 机器上自动打出 NSIS 安装包。下载方法：
+
+1. 打开仓库的 **Actions** 页面 → 选择最新一次「打包 Windows 安装包」运行
+2. 在页面底部 **Artifacts** 里下载 `询价比价系统-Setup-win-x64`（zip 内即 Setup.exe）
+3. 安装包未做代码签名，首次运行 Windows SmartScreen 会提示"未知发布者"——
+   点「更多信息 → 仍要运行」即可
+
+> Linux/无 wine 环境交叉打包只能出免安装 zip（`npx electron-builder --win zip`）；
+> NSIS 安装包需在 Windows 上构建，Actions 工作流已代劳。
+
 ## 开发与打包（Windows）
 
 需要 Node.js ≥ 20（建议 22）。

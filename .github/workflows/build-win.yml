@@ -1,0 +1,27 @@
+name: 打包 Windows 安装包
+
+on:
+  push:
+    branches: [claude/quote-comparison-system-6lsud6, main, master]
+  workflow_dispatch:
+
+jobs:
+  win-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 打包 NSIS 安装包
+        run: npm run dist:win
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: 询价比价系统-Setup-win-x64
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 90
