@@ -1,2 +1,19 @@
 __pycache__/
 *.pyc
+
+node_modules/
+dist/
+dist-web/
+out/
+release/
+*.log
+*.tsbuildinfo
+
+# 测试产物
+playwright-report/
+test-results/
+e2e/.tmp/
+tests/.tmp/
+
+# 真实报价样本回归（含商业数据，仅本地使用，不入库）
+tests/local/
