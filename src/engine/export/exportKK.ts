@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs'
+import { formatLeadTime } from '../normalize/leadtime'
 import { letterToIdx } from '../util'
 import type { CompareCell, CompareResult, CompareRow, QuoteRow } from '../types'
 import type { Vendor } from '../vendor'
@@ -256,7 +257,7 @@ export async function buildKkWorkbook(
       const c = row.cells[vendorId]
       if (!c) continue
       if (c.source.quoteNo && !quoteNos.includes(c.source.quoteNo)) quoteNos.push(c.source.quoteNo)
-      if (c.leadTime.raw) leadTimes.push(c.leadTime.raw)
+      if (c.leadTime.raw) leadTimes.push(formatLeadTime(c.leadTime))
     }
     if (quoteNos.length > 0) set(KK_COL.quoteNo, quoteNos.join('/'))
     if (leadTimes.length > 0) set(KK_COL.leadTime, leadTimes.join('/'))

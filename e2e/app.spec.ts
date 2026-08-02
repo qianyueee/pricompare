@@ -19,7 +19,11 @@ test.beforeAll(async () => {
 test('导入 → 映射确认 → 比价矩阵 → KK 导出 → 指纹模板复用', async ({ page }) => {
   await page.goto('/')
 
-  // 同时拖入两份不同格式的报价
+  // 打开即是比价表格本体：表头骨架 + 空态拖入提示
+  await expect(page.getByTestId('matrix')).toBeVisible()
+  await expect(page.getByText('把供应商报价 Excel 拖到窗口任意位置')).toBeVisible()
+
+  // 同时导入两份不同格式的报价（真实使用为整窗拖放，E2E 走同一入口的文件选择）
   await page.setInputFiles('[data-testid=file-input]', [KV_PATH, HC_PATH])
 
   // 第一份（KV 风格）：自动猜出供应商 SKW，直接确认
@@ -35,13 +39,13 @@ test('导入 → 映射确认 → 比价矩阵 → KK 导出 → 指纹模板复
   await page.getByTestId('confirm-mapping').click()
   await expect(dialog).toBeHidden()
 
-  await expect(page.getByTestId('file-card')).toHaveCount(2)
+  await expect(page.getByTestId('file-chip')).toHaveCount(2)
 
-  // 比价矩阵：9 行、最低价标记、溢价百分比
-  await page.getByTestId('tab-compare').click()
+  // 确认后矩阵直接出现在同一界面：9 行、最低价标记、溢价百分比、纯数字交期补 days
   await expect(page.getByTestId('matrix-row')).toHaveCount(9)
   await expect(page.getByText('+26.0%').first()).toBeVisible() // 56.7 vs 45
   await expect(page.getByText('最低').first()).toBeVisible()
+  await expect(page.getByText('22days').first()).toBeVisible()
   await expect(page.getByText('最优组合（每行取最低）')).toBeVisible()
 
   // 导出并校验 KK 格式内容
@@ -66,7 +70,7 @@ test('导入 → 映射确认 → 比价矩阵 → KK 导出 → 指纹模板复
   expect(r2.getCell(8).value).toBe(Math.min(FILE_A_PRICES[0]!, FILE_B_PRICES[0]!))
   const minFill = r2.getCell(11).fill as ExcelJS.FillPattern
   expect(minFill.fgColor?.argb).toBe('FFC6EFCE')
-  expect(r2.getCell(23).value).toBe('22/3 weeks+cleaning') // HC(J) 在前、SKW(K) 在后
+  expect(r2.getCell(23).value).toBe('22days/3 weeks+cleaning') // HC(J) 在前、SKW(K) 在后，纯数字补单位
 
   // 刷新后重拖同格式文件：指纹命中，自动映射免确认
   await page.reload()

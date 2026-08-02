@@ -42,6 +42,7 @@ describe('解析管线：HC 风格（文件 B，表头第 3 行，#REF!，垃圾
     expect(a.headerRow).toBe(2)
     expect(a.needsManualHeader).toBe(false)
     expect(a.mapping.priceCol).toBe(9) // J "Quote Each RMB"（空的 H 模板列要让位）
+    expect(a.candidates[0]!.col).toBe(9) // "Quote each" 一族有值时必须排第一（用户约定的默认单价列）
     expect(a.rows).toHaveLength(9)
     expect(a.rows[0]!.price).toMatchObject({ status: 'ok', amount: FILE_B_PRICES[0], currency: 'RMB' })
     expect(a.rows[0]!.leadTime.days).toBe(22)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parsePrice } from '@engine/normalize/price'
-import { parseLeadTime } from '@engine/normalize/leadtime'
+import { formatLeadTime, parseLeadTime } from '@engine/normalize/leadtime'
 import type { Cell } from '@engine/types'
 
 const cell = (v: string | number | null, isError = false, w?: string): Cell => ({ v, isError, w })
@@ -38,6 +38,13 @@ describe('parseLeadTime', () => {
     expect(days('15Days/3 weeks+cleaning')).toBe(21)
     expect(days('4-5 days')).toBe(5)
     expect(days('2 days + cleaning')).toBe(2)
+  })
+  it('formatLeadTime：纯数字补 days 单位，其余原样', () => {
+    expect(formatLeadTime(parseLeadTime(cell(22)))).toBe('22days')
+    expect(formatLeadTime(parseLeadTime(cell('22')))).toBe('22days')
+    expect(formatLeadTime(parseLeadTime(cell('3 weeks+cleaning')))).toBe('3 weeks+cleaning')
+    expect(formatLeadTime(parseLeadTime(cell('明天提供报价')))).toBe('明天提供报价')
+    expect(formatLeadTime(parseLeadTime(undefined))).toBe('')
   })
   it('解析不了保留原文，days 为 null', () => {
     const lt = parseLeadTime(cell('明天提供报价'))

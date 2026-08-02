@@ -100,7 +100,8 @@ describe('KK 汇总导出', () => {
     expect(r2.getCell(16).value).toBeCloseTo(13.85)
     // V/W 按列序拼接（I 新供应商 → J HC → K SKW → O US）
     expect(r2.getCell(22).value).toBe('NV001/KT001/KV001/US001')
-    expect(r2.getCell(23).value).toBe('10天/22/3 weeks+cleaning/30 days')
+    // 纯数字交期在导出里也补单位（用户约定 "22days"）
+    expect(r2.getCell(23).value).toBe('10天/22days/3 weeks+cleaning/30 days')
     // B 列汇总名称
     expect(r2.getCell(2).value).toBe('20260802 测试')
     // P-2 行：HC TDB（琥珀色），H 也是 TDB

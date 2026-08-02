@@ -1,3 +1,4 @@
+import { formatLeadTime } from '@engine/index'
 import type { CompareResult, CompareRow } from '@engine/types'
 import { fmtMoney, fmtPct } from '../../utils/format'
 
@@ -10,7 +11,9 @@ function PriceCell({ row, vendorId }: { row: CompareRow; vendorId: string }) {
     return (
       <td className="border-b border-slate-100 bg-amber-50 px-3 py-1.5 text-center">
         <span className="text-sm font-medium text-amber-700">待定</span>
-        {cell.leadTime.raw && <div className="text-[11px] text-slate-400">{cell.leadTime.raw}</div>}
+        {cell.leadTime.raw && (
+          <div className="text-[11px] text-slate-400">{formatLeadTime(cell.leadTime)}</div>
+        )}
       </td>
     )
   }
@@ -40,7 +43,11 @@ function PriceCell({ row, vendorId }: { row: CompareRow; vendorId: string }) {
           <span className="text-red-500">{fmtPct(cell.deltaPct)}</span>
         )}
         {cell.isMin && <span className="text-green-600">最低</span>}
-        {cell.leadTime.raw && <span className="text-slate-400" title="交期">{cell.leadTime.raw}</span>}
+        {cell.leadTime.raw && (
+          <span className="text-slate-400" title="交期">
+            {formatLeadTime(cell.leadTime)}
+          </span>
+        )}
       </div>
     </td>
   )
@@ -90,7 +97,20 @@ export default function MatrixTable({ result, rows }: { result: CompareResult; r
               </td>
             </tr>
           ))}
-          {rows.length === 0 && (
+          {result.vendors.length === 0 && (
+            <tr>
+              <td colSpan={5} className="px-4 py-24 text-center">
+                <div className="text-4xl">📥</div>
+                <div className="mt-3 text-base font-medium text-slate-600">
+                  把供应商报价 Excel 拖到窗口任意位置，或点上方「＋ 添加报价」
+                </div>
+                <div className="mt-1.5 text-xs text-slate-400">
+                  支持 .xlsx / .xlsm / .xls，可一次拖入多份 · 所有数据仅在本机处理，不会上传
+                </div>
+              </td>
+            </tr>
+          )}
+          {result.vendors.length > 0 && rows.length === 0 && (
             <tr>
               <td colSpan={5 + result.vendors.length} className="px-4 py-10 text-center text-sm text-slate-400">
                 没有匹配的比价行
