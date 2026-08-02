@@ -13,6 +13,9 @@ win:
       arch:
         - x64
   artifactName: '询价比价系统-Setup-${version}.${ext}'
+  # 在 Linux 容器交叉打包时跳过 exe 资源编辑与签名（否则需要 wine 跑 signtool）。
+  # 代价：安装包/主程序保留 Electron 默认图标与版本元数据，功能不受影响。
+  signAndEditExecutable: false
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
