@@ -1,0 +1,41 @@
+{
+  "name": "pricompare",
+  "version": "0.1.0",
+  "description": "询价比价系统 - 供应商报价 Excel 统一解析、比价与 KK 格式导出",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:web": "vite --config vite.web.config.ts",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "verify": "npm run typecheck && npm run test && npm run e2e",
+    "dist:win": "electron-vite build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "xlsx": "0.18.5",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^4.1.10"
+  }
+}
