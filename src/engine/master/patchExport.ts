@@ -94,6 +94,20 @@ export interface PatchResult {
   formulaCellsReplaced: number
 }
 
+/**
+ * 工作簿内容类型是否为"启用宏"（.xlsm 专用）。补丁导出保留原字节，
+ * 扩展名必须与内容类型一致，否则 Excel 报"文件格式或扩展名无效"拒绝打开。
+ */
+export function isMacroEnabledWorkbook(buffer: ArrayBuffer): boolean {
+  try {
+    const files = unzipSync(new Uint8Array(buffer))
+    const ct = files['[Content_Types].xml']
+    return ct ? dec.decode(ct).includes('macroEnabled.main') : false
+  } catch {
+    return false
+  }
+}
+
 export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuffer): PatchResult | null {
   const files = unzipSync(new Uint8Array(originalBuffer))
   const sheetPath = findSheetPath(files, master.sheetName)

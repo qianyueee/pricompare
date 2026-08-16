@@ -1,7 +1,15 @@
 import ExcelJS from 'exceljs'
 import { KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
 import { KK_COL_COUNT, type MasterCell, type MasterData } from './model'
-import { patchMasterWorkbook } from './patchExport'
+import { isMacroEnabledWorkbook, patchMasterWorkbook } from './patchExport'
+
+export interface MasterExportOutput {
+  buffer: ArrayBuffer
+  /** 与内容类型一致的扩展名：macroEnabled 工作簿必须存成 .xlsm，否则 Excel 拒绝打开 */
+  extension: 'xlsx' | 'xlsm'
+  /** patch=字节级保真；rewrite=exceljs 降级重写（可能丢公式/样式）；fresh=从零重建 */
+  mode: 'patch' | 'rewrite' | 'fresh'
+}
 
 /**
  * 导出汇总。优先级：
@@ -12,21 +20,28 @@ import { patchMasterWorkbook } from './patchExport'
 export async function buildMasterWorkbook(
   master: MasterData,
   originalBuffer: ArrayBuffer | null,
-): Promise<ArrayBuffer> {
+): Promise<MasterExportOutput> {
   if (originalBuffer) {
     try {
       const patched = patchMasterWorkbook(master, originalBuffer)
-      if (patched) return patched.buffer
+      if (patched) {
+        return {
+          buffer: patched.buffer,
+          extension: isMacroEnabledWorkbook(originalBuffer) ? 'xlsm' : 'xlsx',
+          mode: 'patch',
+        }
+      }
     } catch {
       // 补丁失败 → 退回 exceljs 重写
     }
     try {
-      return await rewriteOriginal(master, originalBuffer)
+      // exceljs 重写生成的是标准 xlsx 内容类型
+      return { buffer: await rewriteOriginal(master, originalBuffer), extension: 'xlsx', mode: 'rewrite' }
     } catch {
       // 原文件加载失败 → 退化为从零重建
     }
   }
-  return buildFresh(master)
+  return { buffer: await buildFresh(master), extension: 'xlsx', mode: 'fresh' }
 }
 
 async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer): Promise<ArrayBuffer> {

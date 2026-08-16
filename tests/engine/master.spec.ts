@@ -147,9 +147,11 @@ describe('合并规则', () => {
 describe('汇总导出', () => {
   it('无原文件：从零重建（表头逐字节 + 数据 + NEGO 透传）', async () => {
     const master = await loadMaster()
-    const buffer = await buildMasterWorkbook(master, null)
+    const out = await buildMasterWorkbook(master, null)
+    expect(out.mode).toBe('fresh')
+    expect(out.extension).toBe('xlsx')
     const wb = new ExcelJS.Workbook()
-    await wb.xlsx.load(buffer)
+    await wb.xlsx.load(out.buffer)
     const ws = wb.getWorksheet('KK询价汇总')!
     KK_HEADERS.forEach((h, i) => expect(ws.getRow(1).getCell(i + 1).value).toBe(h))
     expect(ws.getCell('D2').value).toBe(FIXTURE_PNS[0])
@@ -161,9 +163,11 @@ describe('汇总导出', () => {
     const original = await makeMasterFile()
     const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsm')!
     master.rows[0]!.cells[9] = 999.5 // 模拟编辑 J2
-    const buffer = await buildMasterWorkbook(master, original)
+    const out = await buildMasterWorkbook(master, original)
+    expect(out.mode).toBe('patch')
+    expect(out.extension).toBe('xlsx') // 固件由 exceljs 生成，标准内容类型
     const wb = new ExcelJS.Workbook()
-    await wb.xlsx.load(buffer)
+    await wb.xlsx.load(out.buffer)
     const ws = wb.getWorksheet('KK询价汇总')!
     expect(ws.getCell('J2').value).toBe(999.5)
     expect(ws.getCell('H3').value).toBe(90) // 未动的行保持

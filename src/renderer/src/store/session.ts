@@ -405,13 +405,23 @@ export const useSession = create<SessionState>((set, get) => ({
     if (!master) return
     set({ exporting: true })
     try {
-      const buffer = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
+      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
       const saved = await api.saveXlsx({
-        defaultFileName: `KK询价汇总表${todayBatch()}.xlsx`,
-        data: buffer,
+        // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
+        defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,
+        data: out.buffer,
       })
       if (saved.saved) {
-        set({ masterDirty: false, toast: { message: '汇总表已导出', path: saved.path } })
+        set({
+          masterDirty: false,
+          toast: {
+            message:
+              out.mode === 'rewrite'
+                ? '汇总表已导出（注意：保真补丁失败，本次为降级导出，公式/样式可能有损，请反馈）'
+                : '汇总表已导出',
+            path: saved.path,
+          },
+        })
       }
     } catch (err) {
       set({ toast: { message: `导出失败：${err instanceof Error ? err.message : String(err)}` } })

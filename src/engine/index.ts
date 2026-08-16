@@ -38,5 +38,5 @@ export {
   type MergeChange,
   type MergePlan,
 } from './master/merge'
-export { buildMasterWorkbook } from './master/exportMaster'
-export { patchMasterWorkbook, type PatchResult } from './master/patchExport'
+export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
+export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult } from './master/patchExport'

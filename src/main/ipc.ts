@@ -9,7 +9,7 @@ export function registerIpc(): void {
     const { canceled, filePath } = await dialog.showSaveDialog(win!, {
       title: '导出 KK 汇总',
       defaultPath: req.defaultFileName,
-      filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
+      filters: [{ name: 'Excel 工作簿', extensions: ['xlsm', 'xlsx'] }],
     })
     if (canceled || !filePath) return { saved: false }
     writeFileSync(filePath, Buffer.from(req.data))
