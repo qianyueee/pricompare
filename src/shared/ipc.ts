@@ -10,7 +10,13 @@ export const IPC = {
 } as const
 
 /** userData 里持久化的 JSON 键 */
-export type StoreKey = 'settings' | 'vendorRegistry' | 'mappingTemplates' | 'lastSession'
+export type StoreKey =
+  | 'settings'
+  | 'vendorRegistry'
+  | 'mappingTemplates'
+  | 'lastSession'
+  | 'master'
+  | 'masterFile'
 
 export interface SaveXlsxRequest {
   defaultFileName: string

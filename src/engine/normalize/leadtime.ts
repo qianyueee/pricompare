@@ -8,6 +8,15 @@ import type { Cell, LeadTime } from '../types'
 const SEG_RE =
   /(\d+(?:\.\d+)?)(?:\s*[-~～至到]\s*(\d+(?:\.\d+)?))?[\s-]*(天|日|days?|d\b|周|星期|weeks?|wks?|w\b|个月|月|months?|mo\b)?/giu
 
+/**
+ * 展示/导出用交期文本：纯数字补单位（"22" → "22Days"，与汇总表 "15Days" 惯例一致），
+ * 其余写法（"3 weeks+cleaning"、"明天提供报价"）原样保留。
+ */
+export function formatLeadTime(lt: LeadTime): string {
+  if (/^\d+(\.\d+)?$/.test(lt.raw)) return `${lt.raw}Days`
+  return lt.raw
+}
+
 export function parseLeadTime(cell: Cell | undefined): LeadTime {
   if (!cell || cell.v === null || cell.v === undefined) return { raw: '', days: null }
   if (cell.isError) return { raw: cell.w ?? '#ERROR', days: null }

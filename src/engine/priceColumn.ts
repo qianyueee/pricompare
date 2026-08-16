@@ -74,6 +74,8 @@ export function rankPriceCandidates(
     }
     if (numeric === 0 && !isPriceSyn) continue
     let score = (isPriceSyn ? 3 : 0) + (isVendorHeader ? 2 : 0) + density
+    // "Quote (each)" 一族是模板约定的单价列，有值时永远优先于供应商别名列
+    if (numeric > 0 && /^quote\(?each/.test(n)) score += 1.5
     if (/rmb|￥|人民币/.test(n)) score += 0.5
     if (DERIVED_RE.test(n)) score -= 2
     // 一整列都没有有效数值的"单价"表头（模板留空列）要输给真正填了价的列

@@ -2,12 +2,18 @@ import { create } from 'zustand'
 import {
   SEED_VENDORS,
   analyzeSheet,
+  applyMerge,
+  buildMasterWorkbook,
+  guessBatchLabel,
+  isMasterWorkbook,
+  parseMasterWorkbook,
+  planMerge,
   readWorkbook,
   type AnalyzedSheet,
   type ColumnMapping,
+  type MasterData,
   type ParsedWorkbook,
   type Vendor,
-  type VendorQuotes,
 } from '@engine/index'
 import { api } from '../api'
 
@@ -32,6 +38,15 @@ export interface LoadedFile {
   vendorDisplay: string
   confirmed: boolean
   autoMapped: boolean
+  /** 已并入汇总的结果摘要 */
+  merged?: { fill: number; append: number; batch: string }
+}
+
+export interface PendingMaster {
+  fileName: string
+  master: MasterData
+  b64: string
+  dataRows: number
 }
 
 export interface ToastMsg {
@@ -44,10 +59,14 @@ interface SessionState {
   files: LoadedFile[]
   registry: Vendor[]
   templates: Record<string, MappingTemplate>
-  usdRate: number
-  batchName: string
+  master: MasterData | null
+  masterOriginalB64: string | null
+  /** 有尚未导出的更改 */
+  masterDirty: boolean
+  pendingMaster: PendingMaster | null
   activeMappingFileId: string | null
   importing: boolean
+  exporting: boolean
   toast: ToastMsg | null
 
   init(): Promise<void>
@@ -57,27 +76,47 @@ interface SessionState {
   closeMapping(): void
   setSheet(id: string, sheetName: string): Promise<void>
   setHeaderRow(id: string, row: number): Promise<void>
-  confirmMapping(input: {
+  confirmMerge(input: {
     fileId: string
     mapping: ColumnMapping
     vendorDisplay: string
     saveTemplate: boolean
+    batch: string
+    vendorSlot: number
   }): Promise<void>
-  setUsdRate(rate: number): void
-  setBatchName(name: string): void
+  confirmMasterImport(): void
+  cancelMasterImport(): void
+  editMasterCell(rowIndex: number, col: number, rawInput: string): void
+  exportMaster(): Promise<void>
   showToast(toast: ToastMsg | null): void
 }
 
 let seq = 1
 
-function defaultBatchName(): string {
+export function todayBatch(): string {
   const d = new Date()
-  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  return `${ymd} 询价`
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+}
+
+function bufToB64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let bin = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(bin)
+}
+
+function b64ToBuf(b64: string): ArrayBuffer {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes.buffer
 }
 
 /** 供应商显示名 → 注册表 id（命中别名归并；否则以名字本身作为自定义 id） */
-function resolveVendorId(registry: Vendor[], display: string): string {
+export function resolveVendorId(registry: Vendor[], display: string): string {
   const n = display.trim().toLowerCase()
   for (const v of registry) {
     if (v.id === n || v.display.toLowerCase() === n) return v.id
@@ -86,32 +125,44 @@ function resolveVendorId(registry: Vendor[], display: string): string {
   return display.trim()
 }
 
+function emptyMaster(): MasterData {
+  return {
+    rows: [],
+    sheetName: 'KK询价汇总',
+    passthrough: [],
+    sourceFileName: null,
+    importedAt: Date.now(),
+  }
+}
+
 export const useSession = create<SessionState>((set, get) => ({
   ready: false,
   files: [],
   registry: SEED_VENDORS,
   templates: {},
-  usdRate: 6.5,
-  batchName: defaultBatchName(),
+  master: null,
+  masterOriginalB64: null,
+  masterDirty: false,
+  pendingMaster: null,
   activeMappingFileId: null,
   importing: false,
+  exporting: false,
   toast: null,
 
   async init() {
     try {
-      const [settings, registry, templates] = await Promise.all([
-        api.storeGet('settings'),
+      const [registry, templates, master, masterFile] = await Promise.all([
         api.storeGet('vendorRegistry'),
         api.storeGet('mappingTemplates'),
+        api.storeGet('master'),
+        api.storeGet('masterFile'),
       ])
       set({
         ready: true,
-        usdRate:
-          settings && typeof (settings as { usdRate?: unknown }).usdRate === 'number'
-            ? (settings as { usdRate: number }).usdRate
-            : 6.5,
         registry: Array.isArray(registry) && registry.length > 0 ? (registry as Vendor[]) : SEED_VENDORS,
         templates: (templates as Record<string, MappingTemplate> | null) ?? {},
+        master: (master as MasterData | null) ?? null,
+        masterOriginalB64: (masterFile as { b64?: string } | null)?.b64 ?? null,
       })
     } catch {
       set({ ready: true })
@@ -127,9 +178,24 @@ export const useSession = create<SessionState>((set, get) => ({
       try {
         const buf = await f.arrayBuffer()
         const pw = readWorkbook(buf)
+        // 汇总表拖入 → 走"更新汇总"确认流程，而不是报价映射
+        if (isMasterWorkbook(pw)) {
+          const master = parseMasterWorkbook(pw, f.name)
+          if (master) {
+            set({
+              pendingMaster: {
+                fileName: f.name,
+                master,
+                b64: bufToB64(buf),
+                dataRows: master.rows.filter((r) => r.cells.some((c, i) => i > 0 && c !== null)).length,
+              },
+              importing: false,
+            })
+            continue
+          }
+        }
         let analysis = await analyzeSheet(pw, { fileName: f.name, vendors: registry })
         const tpl = templates[analysis.fingerprint]
-        let confirmed = false
         let autoMapped = false
         let vendorId = ''
         let vendorDisplay = ''
@@ -140,7 +206,6 @@ export const useSession = create<SessionState>((set, get) => ({
             sheetName: tpl.sheetName,
             mappingOverride: tpl.mapping,
           })
-          confirmed = true
           autoMapped = true
           vendorId = tpl.vendorId
           vendorDisplay = tpl.vendorDisplay
@@ -157,7 +222,7 @@ export const useSession = create<SessionState>((set, get) => ({
           analysis,
           vendorId,
           vendorDisplay,
-          confirmed,
+          confirmed: false,
           autoMapped,
         })
       } catch (err) {
@@ -189,6 +254,8 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   openMapping(id: string) {
+    const file = get().files.find((f) => f.id === id)
+    if (file?.merged) return // 已并入的文件不允许重复合并
     set({ activeMappingFileId: id })
   },
 
@@ -223,7 +290,7 @@ export const useSession = create<SessionState>((set, get) => ({
     }))
   },
 
-  async confirmMapping({ fileId, mapping, vendorDisplay, saveTemplate }) {
+  async confirmMerge({ fileId, mapping, vendorDisplay, saveTemplate, batch, vendorSlot }) {
     const state = get()
     const file = state.files.find((f) => f.id === fileId)
     if (!file?.pw || !file.analysis) return
@@ -255,24 +322,102 @@ export const useSession = create<SessionState>((set, get) => ({
       }
       void api.storeSet('mappingTemplates', templates)
     }
+    const masterBefore = state.master ?? emptyMaster()
+    const plan = planMerge(masterBefore, analysis.rows, {
+      batch,
+      vendorSlot,
+      vendorId,
+      vendorDisplay: display,
+    })
+    const master = applyMerge(masterBefore, plan)
+    void api.storeSet('master', master)
     set((s) => {
       const files = s.files.map((f) =>
         f.id === fileId
-          ? { ...f, analysis, vendorId, vendorDisplay: display, confirmed: true, autoMapped: false }
+          ? {
+              ...f,
+              analysis,
+              vendorId,
+              vendorDisplay: display,
+              confirmed: true,
+              merged: { fill: plan.fillCount, append: plan.appendCount, batch },
+            }
           : f,
       )
-      const next = files.find((f) => f.status === 'ok' && !f.confirmed)
-      return { files, registry, templates, activeMappingFileId: next?.id ?? null }
+      const next = files.find((x) => x.status === 'ok' && !x.confirmed)
+      return {
+        files,
+        registry,
+        templates,
+        master,
+        masterDirty: true,
+        activeMappingFileId: next?.id ?? null,
+        toast: {
+          message: `已并入汇总：更新 ${plan.fillCount} 行，新增 ${plan.appendCount} 行（批次 ${batch}）`,
+        },
+      }
     })
   },
 
-  setUsdRate(rate: number) {
-    set({ usdRate: rate })
-    void api.storeSet('settings', { usdRate: rate })
+  confirmMasterImport() {
+    const pending = get().pendingMaster
+    if (!pending) return
+    void api.storeSet('master', pending.master)
+    void api.storeSet('masterFile', { name: pending.fileName, b64: pending.b64 })
+    set({
+      master: pending.master,
+      masterOriginalB64: pending.b64,
+      masterDirty: false,
+      pendingMaster: null,
+      toast: { message: `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` },
+    })
   },
 
-  setBatchName(name: string) {
-    set({ batchName: name })
+  cancelMasterImport() {
+    set({ pendingMaster: null })
+  },
+
+  editMasterCell(rowIndex: number, col: number, rawInput: string) {
+    const master = get().master
+    if (!master || col === 0) return
+    const row = master.rows[rowIndex]
+    if (!row) return
+    const trimmed = rawInput.trim()
+    let value: string | number | null
+    if (trimmed === '') value = null
+    else {
+      const num = Number(trimmed.replace(/[,，]/g, ''))
+      value = Number.isFinite(num) && /^[-+]?[\d.,，]+$/.test(trimmed) ? num : rawInput
+    }
+    if (row.cells[col] === value) return
+    const rows = [...master.rows]
+    const cells = [...row.cells]
+    cells[col] = value
+    rows[rowIndex] = { cells }
+    const next = { ...master, rows }
+    set({ master: next, masterDirty: true })
+    // 编辑即持久化（防抖会在刷新/关闭时丢数据；777 行序列化只有几毫秒）
+    void api.storeSet('master', next)
+  },
+
+  async exportMaster() {
+    const { master, masterOriginalB64 } = get()
+    if (!master) return
+    set({ exporting: true })
+    try {
+      const buffer = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
+      const saved = await api.saveXlsx({
+        defaultFileName: `KK询价汇总表${todayBatch()}.xlsx`,
+        data: buffer,
+      })
+      if (saved.saved) {
+        set({ masterDirty: false, toast: { message: '汇总表已导出', path: saved.path } })
+      }
+    } catch (err) {
+      set({ toast: { message: `导出失败：${err instanceof Error ? err.message : String(err)}` } })
+    } finally {
+      set({ exporting: false })
+    }
   },
 
   showToast(toast: ToastMsg | null) {
@@ -280,18 +425,4 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 }))
 
-/** 已确认文件按供应商合并为比价输入 */
-export function collectVendorQuotes(files: LoadedFile[]): VendorQuotes[] {
-  const map = new Map<string, VendorQuotes>()
-  for (const f of files) {
-    if (f.status !== 'ok' || !f.confirmed || !f.analysis) continue
-    const key = f.vendorId || f.vendorDisplay || f.fileName
-    let vq = map.get(key)
-    if (!vq) {
-      vq = { vendorId: key, vendorDisplay: f.vendorDisplay || key, rows: [] }
-      map.set(key, vq)
-    }
-    vq.rows.push(...f.analysis.rows)
-  }
-  return [...map.values()]
-}
+export { guessBatchLabel }

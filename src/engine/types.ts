@@ -37,6 +37,7 @@ export type FieldKey =
   | 'description'
   | 'qty'
   | 'price'
+  | 'quoteEa'
   | 'leadTime'
   | 'material'
   | 'surfaceFinish'
@@ -80,6 +81,10 @@ export interface QuoteRow {
   qty: number | null
   price: PriceValue
   leadTime: LeadTime
+  /** 批次内项次（汇总 C 列） */
+  item: string
+  /** 对客报价 Quote(EA)：KV 家文件的 U 列随宏算好，合并时带入汇总 */
+  quoteEa: string
   description: string
   material: string
   surfaceFinish: string

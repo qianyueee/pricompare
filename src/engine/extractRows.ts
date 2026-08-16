@@ -95,6 +95,8 @@ export function extractRows(
       qty: qtyNum,
       price,
       leadTime: parseLeadTime(colOf.leadTime !== undefined ? grid[r]?.[colOf.leadTime] : undefined),
+      item: cellStr(grid, r, colOf.item),
+      quoteEa: cellStr(grid, r, colOf.quoteEa),
       description: cellStr(grid, r, colOf.description),
       material: cellStr(grid, r, colOf.material),
       surfaceFinish: cellStr(grid, r, colOf.surfaceFinish),
