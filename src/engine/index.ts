@@ -39,3 +39,4 @@ export {
   type MergePlan,
 } from './master/merge'
 export { buildMasterWorkbook } from './master/exportMaster'
+export { patchMasterWorkbook, type PatchResult } from './master/patchExport'

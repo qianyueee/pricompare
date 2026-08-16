@@ -1,6 +1,6 @@
 {
   "name": "pricompare",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "询价比价系统 - 供应商报价 Excel 统一解析、比价与 KK 格式导出",
   "private": true,
   "type": "module",
@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "exceljs": "^4.4.0",
+    "fflate": "^0.8.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "xlsx": "0.18.5",

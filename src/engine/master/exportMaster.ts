@@ -1,16 +1,25 @@
 import ExcelJS from 'exceljs'
 import { KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
 import { KK_COL_COUNT, type MasterCell, type MasterData } from './model'
+import { patchMasterWorkbook } from './patchExport'
 
 /**
- * 导出汇总：优先以【原始上传的工作簿】为底，只重写汇总 sheet 的数据区——
- * NEGO 等其他 sheet、列宽、样式原样保留；没有原文件（或加载失败）时从零重建。
+ * 导出汇总。优先级：
+ * 1) zip 级补丁（原文件字节级保真：公式/批注/样式/customXml 全保留，只改动过的单元格）
+ * 2) exceljs 以原工作簿为底整本重写（兜底，会丢部分样式与公式）
+ * 3) 从零重建（无原文件时）
  */
 export async function buildMasterWorkbook(
   master: MasterData,
   originalBuffer: ArrayBuffer | null,
 ): Promise<ArrayBuffer> {
   if (originalBuffer) {
+    try {
+      const patched = patchMasterWorkbook(master, originalBuffer)
+      if (patched) return patched.buffer
+    } catch {
+      // 补丁失败 → 退回 exceljs 重写
+    }
     try {
       return await rewriteOriginal(master, originalBuffer)
     } catch {
