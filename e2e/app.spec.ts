@@ -89,4 +89,43 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.reload()
   await expect(page.getByTestId('master-row')).toHaveCount(10)
   await expect(page.locator('[data-cell="0:9"]')).toHaveText('60')
+
+  // ---- NEGO 比价面板 ----
+  // 点 A 列选中两行（行0：J=60/K=45 qty10；行1：J=100/K=90 qty5）→ Ctrl+B 进入
+  await page.locator('[data-cell="0:0"]').click()
+  await page.locator('[data-cell="1:0"]').click()
+  await expect(page.locator('[data-cell="0:0"]')).toHaveText('✓')
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2 行')
+  await page.keyboard.press('Control+b')
+  const nego = page.getByTestId('nego-panel')
+  await expect(nego).toBeVisible()
+  await expect(page.getByTestId('nego-line')).toHaveCount(2)
+  // 每行最低单价高亮（两行都是 SKW 低）；各家总额与最优组合
+  await expect(nego.locator('[data-min="1"]')).toHaveCount(2)
+  await expect(page.getByTestId('nego-sum-9')).toContainText('1100') // HC 60×10+100×5
+  await expect(page.getByTestId('nego-sum-10')).toContainText('900') // SKW 45×10+90×5
+  await expect(page.getByTestId('nego-sum-optimal')).toHaveText('900')
+
+  // 输入 P/N 回车 → 数量档 chip（10）→ 点击加入一行（SKW 250，HC 缺报）
+  await page.getByTestId('nego-pn-input').fill(FIXTURE_PNS[1]!)
+  await page.getByTestId('nego-pn-input').press('Enter')
+  await expect(page.getByText('数量档：')).toBeVisible()
+  await expect(page.getByTestId('nego-tier-chip')).toHaveText('10')
+  await page.getByTestId('nego-tier-chip').click()
+  await expect(page.getByTestId('nego-line')).toHaveCount(3)
+  await expect(page.getByTestId('nego-sum-10')).toContainText('3400') // 900 + 250×10
+  await expect(page.getByTestId('nego-sum-9')).toContainText('缺1行') // 新行 HC 无报价
+  await expect(page.getByTestId('nego-sum-optimal')).toHaveText('3400')
+
+  // 改下单数量 10 → 20：该行总价翻倍
+  await page.getByTestId('nego-qty').nth(2).fill('20')
+  await expect(page.getByTestId('nego-sum-optimal')).toHaveText('5900') // 900 + 250×20
+
+  // 复制为表格（剪贴板 TSV）→ toast 提示
+  await page.getByTestId('nego-copy-btn').click()
+  await expect(page.getByTestId('toast')).toContainText('复制')
+
+  // Esc 关闭
+  await page.keyboard.press('Escape')
+  await expect(nego).toBeHidden()
 })

@@ -40,4 +40,16 @@ export {
 } from './master/merge'
 export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
 export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
+export {
+  pnTiers,
+  buildNegoLine,
+  buildNegoSummary,
+  negoToTsv,
+  type PnTier,
+  type NegoLine,
+  type NegoVendor,
+  type NegoSummary,
+  type NegoSummaryLine,
+} from './master/nego'
+export { KK_VENDOR_SLOT_HEADERS } from './export/kkLayout'
 export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult } from './master/patchExport'

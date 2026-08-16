@@ -4,6 +4,7 @@ import {
   SEED_VENDORS,
   analyzeSheet,
   applyMerge,
+  buildNegoLine,
   buildMasterWorkbook,
   cleanAmountString,
   cleanMasterAmounts,
@@ -73,6 +74,9 @@ interface SessionState {
   importing: boolean
   exporting: boolean
   toast: ToastMsg | null
+  negoOpen: boolean
+  /** NEGO 面板行：来源总表行下标 + 可改的下单数量 */
+  negoLines: { rowIndex: number; qty: number | null }[]
 
   init(): Promise<void>
   addFiles(files: File[]): Promise<void>
@@ -94,6 +98,11 @@ interface SessionState {
   editMasterCell(rowIndex: number, col: number, rawInput: string): void
   exportMaster(): Promise<void>
   showToast(toast: ToastMsg | null): void
+  openNego(rowIdxs: number[]): void
+  closeNego(): void
+  addNegoLine(rowIndex: number, qty: number | null): void
+  setNegoQty(index: number, qty: number | null): void
+  removeNegoLine(index: number): void
 }
 
 let seq = 1
@@ -153,6 +162,8 @@ export const useSession = create<SessionState>((set, get) => ({
   importing: false,
   exporting: false,
   toast: null,
+  negoOpen: false,
+  negoLines: [],
 
   async init() {
     try {
@@ -459,6 +470,38 @@ export const useSession = create<SessionState>((set, get) => ({
 
   showToast(toast: ToastMsg | null) {
     set({ toast })
+  },
+
+  openNego(rowIdxs: number[]) {
+    const master = get().master
+    const lines = master
+      ? [...new Set(rowIdxs)]
+          .filter((i) => master.rows[i])
+          .sort((a, b) => a - b)
+          .map((rowIndex) => ({ rowIndex, qty: buildNegoLine(master, rowIndex).qty }))
+      : []
+    set({ negoOpen: true, negoLines: lines })
+  },
+
+  closeNego() {
+    set({ negoOpen: false, negoLines: [] })
+  },
+
+  addNegoLine(rowIndex: number, qty: number | null) {
+    set((s) => {
+      if (s.negoLines.some((l) => l.rowIndex === rowIndex)) return s
+      return { negoLines: [...s.negoLines, { rowIndex, qty }] }
+    })
+  },
+
+  setNegoQty(index: number, qty: number | null) {
+    set((s) => ({
+      negoLines: s.negoLines.map((l, i) => (i === index ? { ...l, qty } : l)),
+    }))
+  },
+
+  removeNegoLine(index: number) {
+    set((s) => ({ negoLines: s.negoLines.filter((_, i) => i !== index) }))
   },
 }))
 

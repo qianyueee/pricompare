@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isDataRow } from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable from '../components/MasterTable'
@@ -12,13 +12,46 @@ export default function MainPage() {
   const exporting = useSession((s) => s.exporting)
   const addFiles = useSession((s) => s.addFiles)
   const exportMaster = useSession((s) => s.exportMaster)
+  const openNego = useSession((s) => s.openNego)
   const inputRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   const [batchFilter, setBatchFilter] = useState('')
   const [showEmpty, setShowEmpty] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
 
   const rows = master?.rows ?? []
   const dataCount = useMemo(() => rows.filter(isDataRow).length, [rows])
+
+  // 汇总整表更换或行数变化（并入报价）时行号含义改变，清空选中
+  const importedAt = master?.importedAt
+  const rowCount = rows.length
+  useEffect(() => {
+    setSelected(new Set())
+  }, [importedAt, rowCount])
+
+  const toggleRow = useCallback((rowIndex: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowIndex)) next.delete(rowIndex)
+      else next.add(rowIndex)
+      return next
+    })
+  }, [])
+
+  const clearSelection = useCallback(() => setSelected(new Set()), [])
+
+  // Ctrl/Cmd+B：带选中行进入 NEGO 比价面板（面板已开时忽略）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'b') return
+      const s = useSession.getState()
+      if (s.negoOpen || !s.master) return
+      e.preventDefault()
+      openNego([...selected])
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, openNego])
 
   const batches = useMemo(() => {
     const seen = new Set<string>()
@@ -96,6 +129,21 @@ export default function MainPage() {
           {exporting ? '导出中…' : '导出汇总表'}
           {masterDirty && <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-300" title="有未导出的更改" />}
         </button>
+        <button
+          type="button"
+          data-testid="nego-btn"
+          disabled={!master}
+          onClick={() => openNego([...selected])}
+          title="选中若干行后进入 NEGO 比价（快捷键 Ctrl+B）；不选行则打开空面板按 P/N 添加"
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          比价 <span className="ml-1 rounded bg-indigo-500 px-1 py-0.5 text-[10px]">Ctrl+B</span>
+        </button>
+        {selected.size > 0 && (
+          <span data-testid="selected-count" className="text-xs font-medium text-blue-600">
+            已选 {selected.size} 行
+          </span>
+        )}
         {master && (
           <span className="text-xs text-slate-400">
             {master.sourceFileName ?? '新建汇总'} · {dataCount} 行数据 · {batches.length} 个批次
@@ -132,10 +180,17 @@ export default function MainPage() {
         </label>
         <span className="text-xs text-slate-400">显示 {visible.length} 行</span>
       </div>
-      <MasterTable rows={visible} hasMaster={master !== null} />
+      <MasterTable
+        rows={visible}
+        hasMaster={master !== null}
+        selected={selected}
+        onToggleRow={toggleRow}
+        onClearSelection={clearSelection}
+      />
       <div className="text-[11px] text-slate-400">
         最新批次显示在最上（导出仍按原顺序）· 点击任意单元格可直接编辑（Enter 保存 / Esc 取消）·
-        供应商列绿色 = 本行最低价 · 拖入报价文件按规则并入汇总，拖入 KK 汇总表可整表更新
+        供应商列绿色 = 本行最低价 · 点 A 列选行，Ctrl+B 进入 NEGO 比价 ·
+        拖入报价文件按规则并入汇总，拖入 KK 汇总表可整表更新
       </div>
     </div>
   )

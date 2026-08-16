@@ -72,6 +72,8 @@ interface RowProps {
   row: MasterRow
   rowIndex: number
   editingCol: number | null
+  selected: boolean
+  onToggleRow: (rowIndex: number) => void
   onStartEdit: (rowIndex: number, col: number) => void
   onFinishEdit: (rowIndex: number, col: number, value: string | null) => void
 }
@@ -80,6 +82,8 @@ const MasterRowView = memo(function MasterRowView({
   row,
   rowIndex,
   editingCol,
+  selected,
+  onToggleRow,
   onStartEdit,
   onFinishEdit,
 }: RowProps) {
@@ -89,7 +93,10 @@ const MasterRowView = memo(function MasterRowView({
   const min = valid.length >= 2 ? Math.min(...valid) : null
 
   return (
-    <tr data-testid="master-row" className="group hover:bg-blue-50/40">
+    <tr
+      data-testid="master-row"
+      className={`group ${selected ? 'bg-blue-100/70' : 'hover:bg-blue-50/40'}`}
+    >
       {row.cells.map((v, c) => {
         const isSticky = c < STICKY_COUNT
         const isVendor = c >= 8 && c <= 13
@@ -101,23 +108,37 @@ const MasterRowView = memo(function MasterRowView({
           <td
             key={c}
             data-cell={`${rowIndex}:${c}`}
-            onClick={c === 0 || isEditing ? undefined : () => onStartEdit(rowIndex, c)}
-            title={cellText(v)}
+            onClick={
+              c === 0 ? () => onToggleRow(rowIndex) : isEditing ? undefined : () => onStartEdit(rowIndex, c)
+            }
+            title={c === 0 ? '点击选中本行（用于比价），再点取消' : cellText(v)}
             style={{
               minWidth: COL_WIDTHS[c],
               maxWidth: COL_WIDTHS[c]! * 1.6,
               ...(isSticky ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 1 } : {}),
             }}
             className={`overflow-hidden border-r border-b border-slate-100 px-1.5 py-0.5 text-xs text-ellipsis whitespace-nowrap ${
-              c === 0 ? 'bg-slate-50 text-center text-slate-400' : 'cursor-text'
-            } ${isSticky && c !== 0 ? 'bg-white group-hover:bg-blue-50' : ''} ${
-              c === KK_COL.pn ? 'font-mono font-medium' : ''
-            } ${isMin ? 'bg-green-100 font-semibold text-green-700' : ''} ${
-              isTdb ? 'bg-amber-50 text-amber-700' : ''
-            } ${c === KK_COL.quoteEach ? 'bg-blue-50/60 font-medium' : ''} ${isEditing ? 'p-0' : ''}`}
+              c === 0
+                ? `cursor-pointer text-center select-none ${
+                    selected ? 'bg-blue-500 font-bold text-white' : 'bg-slate-50 text-slate-400 hover:bg-blue-100'
+                  }`
+                : 'cursor-text'
+            } ${
+              isSticky && c !== 0
+                ? selected
+                  ? 'bg-blue-50'
+                  : 'bg-white group-hover:bg-blue-50'
+                : ''
+            } ${c === KK_COL.pn ? 'font-mono font-medium' : ''} ${
+              isMin ? 'bg-green-100 font-semibold text-green-700' : ''
+            } ${isTdb ? 'bg-amber-50 text-amber-700' : ''} ${
+              c === KK_COL.quoteEach ? 'bg-blue-50/60 font-medium' : ''
+            } ${isEditing ? 'p-0' : ''}`}
           >
             {isEditing ? (
               <CellEditor initial={cellText(v)} onDone={(value) => onFinishEdit(rowIndex, c, value)} />
+            ) : c === 0 && selected ? (
+              '✓'
             ) : (
               cellText(v)
             )}
@@ -131,6 +152,9 @@ const MasterRowView = memo(function MasterRowView({
 export default function MasterTable(props: {
   rows: { row: MasterRow; index: number }[]
   hasMaster: boolean
+  selected: Set<number>
+  onToggleRow: (rowIndex: number) => void
+  onClearSelection: () => void
 }) {
   const editMasterCell = useSession((s) => s.editMasterCell)
   const [editing, setEditing] = useState<{ rowIndex: number; col: number } | null>(null)
@@ -148,13 +172,17 @@ export default function MasterTable(props: {
             {COL_LABELS.map((label, c) => (
               <th
                 key={c}
+                onClick={c === 0 ? props.onClearSelection : undefined}
+                title={c === 0 ? '点击清空全部选中' : undefined}
                 style={{
                   minWidth: COL_WIDTHS[c],
                   ...(c < STICKY_COUNT
                     ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 11 }
                     : {}),
                 }}
-                className="border-r border-b border-slate-200 bg-slate-100 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap text-slate-600"
+                className={`border-r border-b border-slate-200 bg-slate-100 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap text-slate-600 ${
+                  c === 0 ? 'cursor-pointer select-none hover:bg-slate-200' : ''
+                }`}
               >
                 <span className="mr-1 text-[10px] text-slate-400">{colLetter(c)}</span>
                 {label}
@@ -169,6 +197,8 @@ export default function MasterTable(props: {
               row={row}
               rowIndex={index}
               editingCol={editing?.rowIndex === index ? editing.col : null}
+              selected={props.selected.has(index)}
+              onToggleRow={props.onToggleRow}
               onStartEdit={(r, c) => setEditing({ rowIndex: r, col: c })}
               onFinishEdit={finishEdit}
             />
