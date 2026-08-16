@@ -82,6 +82,7 @@ export async function makeFileA(): Promise<ArrayBuffer> {
     r.getCell(8).value = FILE_A_PRICES[i]
     r.getCell(11).value = FILE_A_PRICES[i]
     r.getCell(16).value = FILE_A_PRICES[i]! / 6.5
+    r.getCell(21).value = Math.round(FILE_A_PRICES[i]! * 0.68) // U 对客报价（KV 家宏算好）
     r.getCell(22).value = 'KV202607133'
     r.getCell(23).value = '3 weeks+cleaning'
     r.getCell(24).value = i % 2 === 0 ? '304' : '6061'
@@ -212,6 +213,41 @@ export async function makeFileC(): Promise<ArrayBuffer> {
     r.getCell(10).value = price
     if (lead) r.getCell(23).value = lead
   })
+  return toArrayBuffer(wb)
+}
+
+/**
+ * KK 汇总固件：表头 33 列 + 2 行既有数据 + 3 行只有 A 列序号的预编号空行 + NEGO 透传 sheet。
+ * R2 与文件 A 的第一个零件同 P/N 同数量、HC(J) 已报、SKW(K) 空 —— 供"填充既有行"用例。
+ */
+export async function makeMasterFile(): Promise<ArrayBuffer> {
+  const { KK_HEADERS } = await import('@engine/export/kkLayout')
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet('KK询价汇总')
+  ws.getRow(1).values = [...KK_HEADERS]
+  const r2 = ws.getRow(2)
+  r2.getCell(1).value = 1
+  r2.getCell(2).value = '20260801 Old'
+  r2.getCell(3).value = 1
+  r2.getCell(4).value = FIXTURE_PNS[0] // 0100001-001
+  r2.getCell(5).value = 'AA'
+  r2.getCell(6).value = FIXTURE_DESCS[0]
+  r2.getCell(7).value = 10
+  r2.getCell(10).value = 56.7 // J HC 已报
+  r2.getCell(23).value = '22Days'
+  const r3 = ws.getRow(3)
+  r3.getCell(1).value = 2
+  r3.getCell(2).value = '20260801 Old'
+  r3.getCell(4).value = '0900001-000'
+  r3.getCell(5).value = 'AA'
+  r3.getCell(7).value = 5
+  r3.getCell(8).value = 90
+  r3.getCell(10).value = 100
+  r3.getCell(11).value = 90
+  for (let i = 0; i < 3; i++) ws.getRow(4 + i).getCell(1).value = 3 + i // 预编号空行 A=3..5
+  const nego = wb.addWorksheet('NEGO')
+  nego.getCell('B1').value = 'Basis For Negotiation'
+  nego.getCell('A2').value = 'marker'
   return toArrayBuffer(wb)
 }
 

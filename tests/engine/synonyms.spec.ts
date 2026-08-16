@@ -36,7 +36,7 @@ describe('matchField', () => {
     expect(matchField('Material Cost').field).toBe('ignore')
     expect(matchField('Shipping+Tariff').field).toBe('ignore')
     expect(matchField('USD').field).toBe('ignore')
-    expect(matchField('Quote  (EA)').field).toBe('ignore')
+    expect(matchField('Quote  (EA)').field).toBe('quoteEa')
     expect(matchField('').field).toBe('ignore')
   })
 })

@@ -43,9 +43,14 @@ export default function FileChip({ file }: { file: LoadedFile }) {
         {file.status === 'ok' && <span className="text-slate-400">{rowCount}行</span>}
         {file.status === 'error' && <span className="text-red-500">失败</span>}
         {file.status === 'ok' && !file.confirmed && <span className="text-amber-600">待确认</span>}
-        {file.confirmed && file.autoMapped && (
+        {file.merged && (
+          <span data-testid="badge-merged" className="text-green-600" title={`批次 ${file.merged.batch}`}>
+            已并入 +{file.merged.append}/改{file.merged.fill}
+          </span>
+        )}
+        {!file.confirmed && file.autoMapped && (
           <span data-testid="badge-auto" className="text-blue-500" title="已按保存的模板自动映射">
-            自动
+            模板
           </span>
         )}
       </button>

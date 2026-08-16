@@ -13,4 +13,29 @@ export { sheetFingerprint } from './fingerprint'
 export { analyzeSheet, pickBestSheet, type AnalyzeOptions } from './analyze'
 export { buildCompare } from './compare'
 export { buildKkWorkbook, type KkExportOptions, type KkExportOutput } from './export/exportKK'
-export { KK_HEADERS, KK_SHEET_NAME } from './export/kkLayout'
+export { KK_HEADERS, KK_SHEET_NAME, KK_COL } from './export/kkLayout'
+export {
+  KK_COL_COUNT,
+  MASTER_MAX_ROWS,
+  parseMasterWorkbook,
+  findMasterSheet,
+  isMasterWorkbook,
+  isPlaceholderRow,
+  isDataRow,
+  kkHeaderMatchCount,
+  type MasterCell,
+  type MasterRow,
+  type MasterData,
+  type PassthroughSheet,
+} from './master/model'
+export {
+  planMerge,
+  applyMerge,
+  isRealQuoteNo,
+  guessBatchLabel,
+  type MergeOptions,
+  type MergeAction,
+  type MergeChange,
+  type MergePlan,
+} from './master/merge'
+export { buildMasterWorkbook } from './master/exportMaster'

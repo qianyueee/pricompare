@@ -9,6 +9,8 @@ export interface MakeQuoteOpts {
   lead?: string
   leadDays?: number | null
   quoteNo?: string
+  item?: string
+  quoteEa?: string
   description?: string
   material?: string
   remark?: string
@@ -27,6 +29,8 @@ export function makeQuote(pn: string, o: MakeQuoteOpts = {}): QuoteRow {
     qty: o.qty === undefined ? 10 : o.qty,
     price,
     leadTime: { raw: o.lead ?? '', days: o.leadDays ?? null },
+    item: o.item ?? '',
+    quoteEa: o.quoteEa ?? '',
     description: o.description ?? `DESC ${pn}`,
     material: o.material ?? '',
     surfaceFinish: '',

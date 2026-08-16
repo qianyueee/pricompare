@@ -2,7 +2,14 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const VALID_KEYS = new Set(['settings', 'vendorRegistry', 'mappingTemplates', 'lastSession'])
+const VALID_KEYS = new Set([
+  'settings',
+  'vendorRegistry',
+  'mappingTemplates',
+  'lastSession',
+  'master',
+  'masterFile',
+])
 
 function storeDir(): string {
   const dir = join(app.getPath('userData'), 'store')

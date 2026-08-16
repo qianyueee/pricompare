@@ -3,11 +3,15 @@ import {
   ALL_FIELDS,
   FIELD_LABELS,
   colLetter,
+  guessBatchLabel,
+  letterToIdx,
+  planMerge,
   type Cell,
   type ColumnMapping,
   type FieldKey,
+  type MasterData,
 } from '@engine/index'
-import { useSession, type LoadedFile } from '../store/session'
+import { resolveVendorId, todayBatch, useSession, type LoadedFile } from '../store/session'
 
 function cellText(cell: Cell | undefined): string {
   if (!cell) return ''
@@ -16,21 +20,57 @@ function cellText(cell: Cell | undefined): string {
   return String(cell.v)
 }
 
+const EMPTY_MASTER: MasterData = {
+  rows: [],
+  sheetName: 'KK询价汇总',
+  passthrough: [],
+  sourceFileName: null,
+  importedAt: null,
+}
+
+const SLOT_OPTIONS = [
+  { idx: 8, label: 'I · Mao' },
+  { idx: 9, label: 'J · HC' },
+  { idx: 10, label: 'K · SKW' },
+  { idx: 11, label: 'L · BY' },
+  { idx: 12, label: 'M · YJ' },
+  { idx: 13, label: 'N · JM' },
+]
+
 function Inner({ file }: { file: LoadedFile }) {
   const analysis = file.analysis!
   const closeMapping = useSession((s) => s.closeMapping)
-  const confirmMapping = useSession((s) => s.confirmMapping)
+  const confirmMerge = useSession((s) => s.confirmMerge)
   const setHeaderRow = useSession((s) => s.setHeaderRow)
   const registry = useSession((s) => s.registry)
+  const master = useSession((s) => s.master)
 
   const [draftMap, setDraftMap] = useState<Record<number, FieldKey>>(() => ({ ...analysis.mapping.map }))
   const [priceCol, setPriceCol] = useState(analysis.mapping.priceCol)
   const [currency, setCurrency] = useState(analysis.mapping.priceCurrency)
   const [vendor, setVendor] = useState(file.vendorDisplay)
   const [saveTemplate, setSaveTemplate] = useState(true)
+  const [batch, setBatch] = useState(() => guessBatchLabel(analysis.rows, file.fileName) || todayBatch())
+  const [manualSlot, setManualSlot] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
 
   const cols = useMemo(() => Array.from({ length: analysis.columnCount }, (_, i) => i), [analysis])
+
+  const vendorId = resolveVendorId(registry, vendor)
+  const regVendor = registry.find((v) => v.id === vendorId)
+  const knownSlot = regVendor?.kkSlot ? letterToIdx(regVendor.kkSlot) : null
+  const vendorSlot = knownSlot ?? manualSlot ?? 8
+
+  // 合并预览（按当前解析行；确认时会以最终映射重新提取并重算）
+  const preview = useMemo(() => {
+    if (analysis.rows.length === 0) return null
+    return planMerge(master ?? EMPTY_MASTER, analysis.rows, {
+      batch,
+      vendorSlot,
+      vendorId,
+      vendorDisplay: vendor.trim() || vendorId,
+    })
+  }, [master, analysis.rows, batch, vendorSlot, vendorId, vendor])
 
   const setField = (col: number, field: FieldKey) => {
     setDraftMap((prev) => {
@@ -38,7 +78,6 @@ function Inner({ file }: { file: LoadedFile }) {
       if (field === 'ignore') {
         delete next[col]
       } else {
-        // 同一字段只保留一列（price 由 priceCol 单独管理）
         for (const [cStr, f] of Object.entries(next)) {
           if (f === field && Number(cStr) !== col) delete next[Number(cStr)]
         }
@@ -56,7 +95,7 @@ function Inner({ file }: { file: LoadedFile }) {
   }
 
   const pnMapped = Object.values(draftMap).includes('pn')
-  const canConfirm = pnMapped && priceCol >= 0 && vendor.trim() !== '' && !busy
+  const canConfirm = pnMapped && priceCol >= 0 && vendor.trim() !== '' && batch.trim() !== '' && !busy
 
   const onConfirm = async () => {
     setBusy(true)
@@ -72,7 +111,14 @@ function Inner({ file }: { file: LoadedFile }) {
       priceCurrency: currency,
       confidence: analysis.mapping.confidence,
     }
-    await confirmMapping({ fileId: file.id, mapping, vendorDisplay: vendor, saveTemplate })
+    await confirmMerge({
+      fileId: file.id,
+      mapping,
+      vendorDisplay: vendor,
+      saveTemplate,
+      batch: batch.trim(),
+      vendorSlot,
+    })
     setBusy(false)
   }
 
@@ -80,14 +126,15 @@ function Inner({ file }: { file: LoadedFile }) {
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
       <div
         data-testid="mapping-dialog"
-        className="flex max-h-[92vh] w-full max-w-6xl flex-col gap-3 overflow-hidden rounded-2xl bg-white p-5 shadow-2xl"
+        className="flex max-h-[94vh] w-full max-w-6xl flex-col gap-3 overflow-hidden rounded-2xl bg-white p-5 shadow-2xl"
       >
         <div className="flex items-baseline justify-between gap-4">
           <div>
-            <h2 className="text-base font-bold">确认列映射 · {file.fileName}</h2>
+            <h2 className="text-base font-bold">确认报价并入汇总 · {file.fileName}</h2>
             <p className="text-xs text-slate-500">
               工作表「{analysis.sheetName}」 · 表头第 {analysis.headerRow + 1} 行（点击左侧行号可改）
               {analysis.needsManualHeader && <span className="text-amber-600">（自动识别不可靠，请核对）</span>}
+              {file.autoMapped && <span className="text-blue-600">（已按保存的模板自动映射）</span>}
             </p>
           </div>
           <button type="button" onClick={closeMapping} className="text-slate-400 hover:text-slate-600">
@@ -95,16 +142,16 @@ function Inner({ file }: { file: LoadedFile }) {
           </button>
         </div>
 
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+        <div className="flex flex-wrap items-end gap-x-5 gap-y-2">
           <label className="flex flex-col gap-1 text-xs text-slate-600">
-            供应商（本文件归属）
+            供应商
             <input
               data-testid="vendor-input"
               list="vendor-datalist"
               value={vendor}
               onChange={(e) => setVendor(e.target.value)}
-              placeholder="如：SKW / 凯阔"
-              className="w-48 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              placeholder="如：SKW / HC"
+              className="w-40 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
             />
             <datalist id="vendor-datalist">
               {registry.map((v) => (
@@ -112,24 +159,76 @@ function Inner({ file }: { file: LoadedFile }) {
               ))}
             </datalist>
           </label>
-          {analysis.vendorGuess.evidence.length > 0 && (
-            <div className="pb-1 text-xs text-slate-400">识别依据：{analysis.vendorGuess.evidence.join('；')}</div>
-          )}
+          <label className="flex flex-col gap-1 text-xs text-slate-600">
+            汇总批次（B 列）
+            <input
+              data-testid="batch-input"
+              value={batch}
+              onChange={(e) => setBatch(e.target.value)}
+              placeholder="如：20260814 Natalie A"
+              className="w-52 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-slate-600">
+            价格落入汇总列
+            {knownSlot !== null ? (
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
+                {colLetter(knownSlot)} · {regVendor!.display}
+              </span>
+            ) : (
+              <select
+                value={vendorSlot}
+                onChange={(e) => setManualSlot(Number(e.target.value))}
+                className="w-32 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              >
+                {SLOT_OPTIONS.map((o) => (
+                  <option key={o.idx} value={o.idx}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
           <label className="flex flex-col gap-1 text-xs text-slate-600">
             价格币种
             <select
               value={currency}
               onChange={(e) => setCurrency(e.target.value as 'RMB' | 'USD')}
-              className="w-28 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              className="w-24 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
             >
               <option value="RMB">人民币 ¥</option>
               <option value="USD">美元 $</option>
             </select>
           </label>
+          {analysis.vendorGuess.evidence.length > 0 && (
+            <div className="pb-1 text-xs text-slate-400">识别依据：{analysis.vendorGuess.evidence.join('；')}</div>
+          )}
         </div>
 
+        {preview && (
+          <div
+            data-testid="merge-preview"
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs"
+          >
+            <span className="font-medium text-green-700">
+              并入预览：更新 {preview.fillCount} 行 · 新增 {preview.appendCount} 行
+            </span>
+            <span className="text-green-700/70">
+              {preview.actions
+                .slice(0, 5)
+                .map(
+                  (a) =>
+                    `${a.quote.pn}×${a.quote.qty ?? '—'}${a.kind === 'fill' ? `→第${a.excelRow}行` : '→新增'}`,
+                )
+                .join('　')}
+              {preview.actions.length > 5 && ` …共 ${preview.actions.length} 条`}
+            </span>
+            {!master && <span className="text-amber-600">当前没有汇总表，将新建一份</span>}
+          </div>
+        )}
+
         {analysis.candidates.length > 0 && (
-          <fieldset className="rounded-lg border border-slate-200 p-3">
+          <fieldset className="rounded-lg border border-slate-200 p-2.5">
             <legend className="px-1 text-xs font-medium text-slate-500">单价列（自动按数值密度推荐）</legend>
             <div className="flex flex-wrap gap-x-6 gap-y-1">
               {analysis.candidates.slice(0, 4).map((c) => (
@@ -157,12 +256,12 @@ function Inner({ file }: { file: LoadedFile }) {
           <table className="min-w-max border-collapse text-xs">
             <thead className="sticky top-0 z-10 bg-white shadow-sm">
               <tr>
-                <th className="border-b border-r border-slate-200 bg-slate-50 px-1 text-slate-400">行</th>
+                <th className="border-r border-b border-slate-200 bg-slate-50 px-1 text-slate-400">行</th>
                 {cols.map((c) => {
                   const field = c === priceCol ? 'price' : (draftMap[c] ?? 'ignore')
                   const conf = analysis.mapping.confidence[c]
                   return (
-                    <th key={c} className="border-b border-r border-slate-200 px-1 py-1 align-bottom">
+                    <th key={c} className="border-r border-b border-slate-200 px-1 py-1 align-bottom">
                       <div className="mb-0.5 text-center font-normal text-slate-400">{colLetter(c)}</div>
                       <select
                         value={field}
@@ -194,7 +293,7 @@ function Inner({ file }: { file: LoadedFile }) {
                   <td
                     onClick={() => void setHeaderRow(file.id, r)}
                     title="点击设为表头行"
-                    className={`cursor-pointer border-b border-r border-slate-100 px-1.5 text-center ${
+                    className={`cursor-pointer border-r border-b border-slate-100 px-1.5 text-center ${
                       r === analysis.headerRow ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-blue-100'
                     }`}
                   >
@@ -206,7 +305,7 @@ function Inner({ file }: { file: LoadedFile }) {
                       <td
                         key={c}
                         title={t}
-                        className="max-w-40 truncate border-b border-r border-slate-100 px-1.5 py-0.5 whitespace-nowrap"
+                        className="max-w-40 truncate border-r border-b border-slate-100 px-1.5 py-0.5 whitespace-nowrap"
                       >
                         {t}
                       </td>
@@ -234,7 +333,15 @@ function Inner({ file }: { file: LoadedFile }) {
           <div className="flex items-center gap-3">
             {!canConfirm && !busy && (
               <span className="text-xs text-red-500">
-                {!pnMapped ? '请为零件号 P/N 指定一列' : priceCol < 0 ? '请选择单价列' : vendor.trim() === '' ? '请填写供应商' : ''}
+                {!pnMapped
+                  ? '请为零件号 P/N 指定一列'
+                  : priceCol < 0
+                    ? '请选择单价列'
+                    : vendor.trim() === ''
+                      ? '请填写供应商'
+                      : batch.trim() === ''
+                        ? '请填写汇总批次'
+                        : ''}
               </span>
             )}
             <button
@@ -251,7 +358,7 @@ function Inner({ file }: { file: LoadedFile }) {
               onClick={() => void onConfirm()}
               className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {busy ? '导入中…' : '确认导入'}
+              {busy ? '并入中…' : '确认并入汇总'}
             </button>
           </div>
         </div>

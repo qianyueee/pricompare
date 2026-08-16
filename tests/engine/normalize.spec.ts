@@ -40,8 +40,8 @@ describe('parseLeadTime', () => {
     expect(days('2 days + cleaning')).toBe(2)
   })
   it('formatLeadTime：纯数字补 days 单位，其余原样', () => {
-    expect(formatLeadTime(parseLeadTime(cell(22)))).toBe('22days')
-    expect(formatLeadTime(parseLeadTime(cell('22')))).toBe('22days')
+    expect(formatLeadTime(parseLeadTime(cell(22)))).toBe('22Days')
+    expect(formatLeadTime(parseLeadTime(cell('22')))).toBe('22Days')
     expect(formatLeadTime(parseLeadTime(cell('3 weeks+cleaning')))).toBe('3 weeks+cleaning')
     expect(formatLeadTime(parseLeadTime(cell('明天提供报价')))).toBe('明天提供报价')
     expect(formatLeadTime(parseLeadTime(undefined))).toBe('')
