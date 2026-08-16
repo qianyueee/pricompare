@@ -35,7 +35,7 @@ export default function MainPage() {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return rows
+    const filtered = rows
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => {
         if (!showEmpty && !isDataRow(row)) return false
@@ -47,6 +47,18 @@ export default function MainPage() {
         }
         return true
       })
+    // 显示时最新批次在最上（按批次块倒序，批次内部保持原顺序）；导出仍按原表顺序
+    const data = filtered.filter((it) => isDataRow(it.row))
+    const empty = filtered.filter((it) => !isDataRow(it.row))
+    const blocks: { key: string; items: typeof data }[] = []
+    for (const it of data) {
+      const key = String(it.row.cells[1] ?? '').trim()
+      const last = blocks[blocks.length - 1]
+      if (last && last.key === key) last.items.push(it)
+      else blocks.push({ key, items: [it] })
+    }
+    blocks.reverse()
+    return [...blocks.flatMap((b) => b.items), ...empty]
   }, [rows, search, batchFilter, showEmpty])
 
   return (
@@ -122,8 +134,8 @@ export default function MainPage() {
       </div>
       <MasterTable rows={visible} hasMaster={master !== null} />
       <div className="text-[11px] text-slate-400">
-        点击任意单元格可直接编辑（Enter 保存 / Esc 取消）· 供应商列绿色 = 本行最低价 ·
-        拖入报价文件按规则并入汇总，拖入 KK 汇总表可整表更新
+        最新批次显示在最上（导出仍按原顺序）· 点击任意单元格可直接编辑（Enter 保存 / Esc 取消）·
+        供应商列绿色 = 本行最低价 · 拖入报价文件按规则并入汇总，拖入 KK 汇总表可整表更新
       </div>
     </div>
   )

@@ -43,6 +43,11 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(page.getByText('已并入 +8/改1')).toBeVisible()
   await expect(page.getByTestId('master-row')).toHaveCount(10)
 
+  // 显示层最新批次在最上（批次内保持原顺序）；数据/导出仍按原表顺序
+  const firstRow = page.getByTestId('master-row').first()
+  await expect(firstRow).toContainText('20260816 Test')
+  await expect(firstRow).toContainText(FIXTURE_PNS[1]!)
+
   // 合并结果：K=45、W 按列序拼接、H/U 取自 KV 家（带对客报价）
   await expect(page.locator('[data-cell="0:10"]')).toHaveText('45')
   await expect(page.locator('[data-cell="0:22"]')).toHaveText('22Days/3 weeks+cleaning')
