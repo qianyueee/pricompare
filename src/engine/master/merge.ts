@@ -1,4 +1,5 @@
 import { formatLeadTime } from '../normalize/leadtime'
+import { cleanAmountString } from './clean'
 import { KK_COL } from '../export/kkLayout'
 import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
 import type { QuoteRow } from '../types'
@@ -87,8 +88,8 @@ function priceCellValue(q: QuoteRow): MasterCell | undefined {
 }
 
 function numericOr(v: string): MasterCell {
-  const n = Number(v.replace(/[,，\s]/g, ''))
-  return Number.isFinite(n) && v.trim() !== '' ? n : v
+  const n = cleanAmountString(v)
+  return n !== null ? n : v
 }
 
 export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOptions): MergePlan {

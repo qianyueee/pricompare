@@ -25,11 +25,13 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(page.getByTestId('master-table')).toBeVisible()
   await expect(page.getByText('拖到窗口任意位置载入历史数据')).toBeVisible()
 
-  // 载入 KK 汇总表 → 确认弹窗 → 2 行数据（预编号空行默认隐藏）
+  // 载入 KK 汇总表 → 确认弹窗（含文本金额规范提示）→ 2 行数据（预编号空行默认隐藏）
   await page.setInputFiles('[data-testid=file-input]', [MASTER_PATH])
   await expect(page.getByTestId('master-import-dialog')).toBeVisible()
+  await expect(page.getByText('将自动规范 1 个文本格式金额')).toBeVisible()
   await page.getByTestId('confirm-master-import').click()
   await expect(page.getByTestId('master-row')).toHaveCount(2)
+  await expect(page.locator('[data-cell="1:9"]')).toHaveText('100') // '￥100.00' 已被规范为数字
 
   // 拖入 KV 风格报价 → 映射弹窗：供应商猜中 + 合并预览（1 行可填充、8 行新增）
   await page.setInputFiles('[data-testid=file-input]', [KV_PATH])
@@ -80,6 +82,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   expect(ws.getCell('V2').value).toBe('KV202607133')
   expect(ws.getCell('D4').value).toBe(FIXTURE_PNS[1]) // 新增行占用预编号行、A 序号保留
   expect(ws.getCell('A4').value).toBe(3)
+  expect(ws.getCell('J3').value).toBe(100) // 清洗后的文本金额以数字写回
   expect(wb.getWorksheet('NEGO')!.getCell('B1').value).toBe('Basis For Negotiation')
 
   // 刷新后汇总持久化（含编辑与并入结果）

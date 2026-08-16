@@ -19,6 +19,11 @@ export default function MasterImportDialog() {
         <p className="mt-2 text-sm text-slate-600">
           识别到汇总表 <span className="font-medium">{pending.fileName}</span>（{pending.dataRows} 行数据）。
         </p>
+        {pending.cleanedCount > 0 && (
+          <p className="mt-1 text-xs text-green-700">
+            将自动规范 {pending.cleanedCount} 个文本格式金额（如 ￥1,133.40 / "9000" → 数字），备注文字不受影响
+          </p>
+        )}
         {master ? (
           <p className="mt-2 text-sm text-slate-600">
             将<span className="font-medium text-red-600">替换</span>当前汇总（{currentRows} 行数据）

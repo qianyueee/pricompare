@@ -242,7 +242,7 @@ export async function makeMasterFile(): Promise<ArrayBuffer> {
   r3.getCell(5).value = 'AA'
   r3.getCell(7).value = 5
   r3.getCell(8).value = 90
-  r3.getCell(10).value = 100
+  r3.getCell(10).value = '￥100.00' // 历史遗留文本金额（导入时应被自动规范为 100）
   r3.getCell(11).value = 90
   for (let i = 0; i < 3; i++) ws.getRow(4 + i).getCell(1).value = 3 + i // 预编号空行 A=3..5
   const nego = wb.addWorksheet('NEGO')

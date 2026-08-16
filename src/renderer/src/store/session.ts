@@ -1,9 +1,12 @@
 import { create } from 'zustand'
 import {
+  AMOUNT_COLS,
   SEED_VENDORS,
   analyzeSheet,
   applyMerge,
   buildMasterWorkbook,
+  cleanAmountString,
+  cleanMasterAmounts,
   guessBatchLabel,
   isMasterWorkbook,
   parseMasterWorkbook,
@@ -47,6 +50,8 @@ export interface PendingMaster {
   master: MasterData
   b64: string
   dataRows: number
+  /** 导入时自动修正的文本金额单元格数 */
+  cleanedCount: number
 }
 
 export interface ToastMsg {
@@ -157,12 +162,26 @@ export const useSession = create<SessionState>((set, get) => ({
         api.storeGet('master'),
         api.storeGet('masterFile'),
       ])
+      let loadedMaster = (master as MasterData | null) ?? null
+      let cleanedOnInit = 0
+      if (loadedMaster) {
+        const cleaned = cleanMasterAmounts(loadedMaster)
+        loadedMaster = cleaned.master
+        cleanedOnInit = cleaned.changed
+        if (cleanedOnInit > 0) void api.storeSet('master', loadedMaster)
+      }
       set({
         ready: true,
         registry: Array.isArray(registry) && registry.length > 0 ? (registry as Vendor[]) : SEED_VENDORS,
         templates: (templates as Record<string, MappingTemplate> | null) ?? {},
-        master: (master as MasterData | null) ?? null,
+        master: loadedMaster,
         masterOriginalB64: (masterFile as { b64?: string } | null)?.b64 ?? null,
+        ...(cleanedOnInit > 0
+          ? {
+              masterDirty: true,
+              toast: { message: `已自动规范 ${cleanedOnInit} 个文本格式金额（如 ￥1,133.40 → 1133.4）` },
+            }
+          : {}),
       })
     } catch {
       set({ ready: true })
@@ -180,14 +199,16 @@ export const useSession = create<SessionState>((set, get) => ({
         const pw = readWorkbook(buf)
         // 汇总表拖入 → 走"更新汇总"确认流程，而不是报价映射
         if (isMasterWorkbook(pw)) {
-          const master = parseMasterWorkbook(pw, f.name)
-          if (master) {
+          const parsed = parseMasterWorkbook(pw, f.name)
+          if (parsed) {
+            const { master, changed } = cleanMasterAmounts(parsed)
             set({
               pendingMaster: {
                 fileName: f.name,
                 master,
                 b64: bufToB64(buf),
                 dataRows: master.rows.filter((r) => r.cells.some((c, i) => i > 0 && c !== null)).length,
+                cleanedCount: changed,
               },
               importing: false,
             })
@@ -369,7 +390,11 @@ export const useSession = create<SessionState>((set, get) => ({
       masterOriginalB64: pending.b64,
       masterDirty: false,
       pendingMaster: null,
-      toast: { message: `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` },
+      toast: {
+        message:
+          `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` +
+          (pending.cleanedCount > 0 ? `，已规范 ${pending.cleanedCount} 个文本金额` : ''),
+      },
     })
   },
 
@@ -385,7 +410,9 @@ export const useSession = create<SessionState>((set, get) => ({
     const trimmed = rawInput.trim()
     let value: string | number | null
     if (trimmed === '') value = null
-    else {
+    else if (AMOUNT_COLS.includes(col)) {
+      value = cleanAmountString(trimmed) ?? rawInput
+    } else {
       const num = Number(trimmed.replace(/[,，]/g, ''))
       value = Number.isFinite(num) && /^[-+]?[\d.,，]+$/.test(trimmed) ? num : rawInput
     }

@@ -39,4 +39,5 @@ export {
   type MergePlan,
 } from './master/merge'
 export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
+export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
 export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult } from './master/patchExport'
