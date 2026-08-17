@@ -7,6 +7,7 @@ import {
   KK_HEADERS,
   applyMerge,
   buildMasterWorkbook,
+  deleteMasterRows,
   guessBatchLabel,
   isMasterWorkbook,
   isPlaceholderRow,
@@ -157,6 +158,21 @@ describe('汇总导出', () => {
     expect(ws.getCell('D2').value).toBe(FIXTURE_PNS[0])
     expect(ws.getCell('J2').value).toBe(56.7)
     expect(wb.getWorksheet('NEGO')!.getCell('B1').value).toBe('Basis For Negotiation')
+  })
+
+  it('删行后补丁导出：后续行上移、A 重排、原尾行清空、行数收缩', async () => {
+    const original = await makeMasterFile()
+    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
+    const next = deleteMasterRows(master, [0]) // 删第一条数据行
+    expect(next.rows).toHaveLength(4)
+    const out = await buildMasterWorkbook(next, original)
+    expect(out.mode).toBe('patch')
+    const re = parseMasterWorkbook(readWorkbook(out.buffer), 'x.xlsx')!
+    expect(re.rows).toHaveLength(4) // 原第 6 行被整行清空 → 尾部裁剪
+    expect(re.rows[0]!.cells[KK_COL.pn]).toBe('0900001-000') // 原第 2 条数据上移
+    expect(re.rows[0]!.cells[KK_COL.quoteEach]).toBe(90)
+    expect(re.rows.map((r) => r.cells[0])).toEqual([1, 2, 3, 4]) // A 重排
+    expect(re.passthrough.map((s) => s.name)).toEqual(['NEGO'])
   })
 
   it('有原文件：以原工作簿为底只改汇总数据（编辑与合并结果写回、NEGO 保留）', async () => {

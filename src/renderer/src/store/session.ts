@@ -7,6 +7,8 @@ import {
   buildMasterWorkbook,
   cleanAmountString,
   cleanMasterAmounts,
+  clearMasterCells,
+  deleteMasterRows,
   guessBatchLabel,
   isMasterWorkbook,
   parseMasterWorkbook,
@@ -90,6 +92,8 @@ interface SessionState {
   importing: boolean
   exporting: boolean
   toast: ToastMsg | null
+  /** 最近一次破坏性编辑（单格改/删行/清空）前的 master——单槽撤销；不可变更新下存旧引用零成本 */
+  undoSnapshot: { master: MasterData; label: string } | null
   negoOpen: boolean
   /** NEGO 比价页行：自由输入的编号 + 下单数量（档位在渲染时按总表解析） */
   negoLines: { id: number; pn: string; qty: number | null }[]
@@ -112,6 +116,11 @@ interface SessionState {
   confirmMasterImport(): void
   cancelMasterImport(): void
   editMasterCell(rowIndex: number, col: number, rawInput: string): void
+  /** 删除整行（A 列重排）；可 Ctrl+Z 撤销一步 */
+  deleteRows(rowIdxs: number[]): void
+  /** 清空所选格内容（Excel Delete 语义，A 列不清）；可 Ctrl+Z 撤销一步 */
+  clearCells(targets: { rowIndex: number; cols: number[] }[]): void
+  undoMasterEdit(): void
   exportMaster(): Promise<void>
   showToast(toast: ToastMsg | null): void
   openNego(rowIdxs: number[]): void
@@ -181,6 +190,7 @@ export const useSession = create<SessionState>((set, get) => ({
   importing: false,
   exporting: false,
   toast: null,
+  undoSnapshot: null,
   negoOpen: false,
   negoLines: [emptyNegoLine()],
 
@@ -402,6 +412,7 @@ export const useSession = create<SessionState>((set, get) => ({
         templates,
         master,
         masterDirty: true,
+        undoSnapshot: null, // 并入后旧快照作废（撤销只针对手工编辑/删行/清空）
         activeMappingFileId: next?.id ?? null,
         toast: {
           message: `已并入汇总：更新 ${plan.fillCount} 行，新增 ${plan.appendCount} 行（批次 ${batch}）`,
@@ -420,6 +431,7 @@ export const useSession = create<SessionState>((set, get) => ({
       masterOriginalB64: pending.b64,
       masterDirty: false,
       pendingMaster: null,
+      undoSnapshot: null,
       toast: {
         message:
           `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` +
@@ -452,9 +464,49 @@ export const useSession = create<SessionState>((set, get) => ({
     cells[col] = value
     rows[rowIndex] = { cells }
     const next = { ...master, rows }
-    set({ master: next, masterDirty: true })
+    set({ master: next, masterDirty: true, undoSnapshot: { master, label: '单元格编辑' } })
     // 编辑即持久化（防抖会在刷新/关闭时丢数据；777 行序列化只有几毫秒）
     void api.storeSet('master', next)
+  },
+
+  deleteRows(rowIdxs: number[]) {
+    const master = get().master
+    if (!master || rowIdxs.length === 0) return
+    const next = deleteMasterRows(master, rowIdxs)
+    set({
+      master: next,
+      masterDirty: true,
+      undoSnapshot: { master, label: `删除 ${rowIdxs.length} 行` },
+      toast: { message: `已删除 ${rowIdxs.length} 行（A 列序号已重排，Ctrl+Z 可撤销）` },
+    })
+    void api.storeSet('master', next)
+  },
+
+  clearCells(targets: { rowIndex: number; cols: number[] }[]) {
+    const master = get().master
+    if (!master) return
+    const next = clearMasterCells(master, targets)
+    if (next === master) return
+    const count = targets.reduce((s, t) => s + t.cols.filter((c) => c > 0).length, 0)
+    set({
+      master: next,
+      masterDirty: true,
+      undoSnapshot: { master, label: '清空内容' },
+      toast: { message: `已清空 ${count} 个单元格（Ctrl+Z 可撤销）` },
+    })
+    void api.storeSet('master', next)
+  },
+
+  undoMasterEdit() {
+    const snap = get().undoSnapshot
+    if (!snap) return
+    set({
+      master: snap.master,
+      masterDirty: true,
+      undoSnapshot: null,
+      toast: { message: `已撤销：${snap.label}` },
+    })
+    void api.storeSet('master', snap.master)
   },
 
   async exportMaster() {

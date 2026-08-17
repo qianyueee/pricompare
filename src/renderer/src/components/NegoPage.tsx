@@ -2,28 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { buildNegoSummary, negoToTsv, resolveNegoInput } from '@engine/index'
 import type { NegoSummaryLine, PnResolution } from '@engine/index'
 import { useSession } from '../store/session'
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    // 无剪贴板权限时退回旧接口
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      const ok = document.execCommand('copy')
-      ta.remove()
-      return ok
-    } catch {
-      return false
-    }
-  }
-}
+import { copyText } from '../utils/clipboard'
 
 const fmt = (n: number | null | undefined): string => (n === null || n === undefined ? '—' : String(n))
 

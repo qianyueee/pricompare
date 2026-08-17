@@ -188,3 +188,61 @@ test('同一批不同供应商报价：第二家自动识别批次并落到同�
   await expect(page.locator('[data-cell="2:1"]')).toHaveText('20260816 Test E')
   await expect(page.getByTestId('batch-filter').locator('option')).toHaveCount(3) // 全部 + Old + Test E
 })
+
+test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一步撤销', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.setInputFiles('[data-testid=file-input]', [MASTER_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+
+  // 行拖选：A 格按住拖到下一行 → 已选 2 行 → Ctrl+C 复制整行 TSV
+  await page.locator('[data-cell="0:0"]').hover()
+  await page.mouse.down()
+  await page.locator('[data-cell="1:0"]').hover()
+  await page.mouse.up()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2 行')
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 2 行')
+
+  // 列拖选：表头 J 按住拖到 K → 已选 2 列 → Delete 清空可见行 → Ctrl+Z 撤销
+  await page.locator('th[data-colh="9"]').hover()
+  await page.mouse.down()
+  await page.locator('th[data-colh="10"]').hover()
+  await page.mouse.up()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2 列')
+  await page.keyboard.press('Delete')
+  await expect(page.locator('[data-cell="0:9"]')).toHaveText('')
+  await expect(page.locator('[data-cell="1:10"]')).toHaveText('')
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('[data-cell="0:9"]')).toHaveText('56.7')
+  await expect(page.locator('[data-cell="1:10"]')).toHaveText('90')
+
+  // 格区拖选：J2 按住拖到 K3 → 已选 2×2 格 → Delete 清空 → Ctrl+Z 撤销
+  await page.locator('[data-cell="0:9"]').hover()
+  await page.mouse.down()
+  await page.locator('[data-cell="1:10"]').hover()
+  await page.mouse.up()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2×2 格')
+  await page.keyboard.press('Delete')
+  await expect(page.locator('[data-cell="1:9"]')).toHaveText('')
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('[data-cell="1:9"]')).toHaveText('100')
+
+  // 回归：单击格仍进入编辑
+  await page.locator('[data-cell="0:9"]').click()
+  await expect(page.getByTestId('cell-editor')).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  // 删除行：单击 A 选 1 行 → 「删除行」→ 行数-1、后行上移、A 重排 → Ctrl+Z 恢复
+  await page.locator('[data-cell="0:0"]').click()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 1 行')
+  await page.getByTestId('delete-rows-btn').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(1)
+  await expect(page.locator('[data-cell="0:3"]')).toHaveText('0900001-000')
+  await expect(page.locator('[data-cell="0:0"]')).toHaveText('1')
+  await page.keyboard.press('Control+z')
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+  await expect(page.locator('[data-cell="0:3"]')).toHaveText(FIXTURE_PNS[0]!)
+})
