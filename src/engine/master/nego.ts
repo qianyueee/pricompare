@@ -77,6 +77,34 @@ export function buildNegoLine(master: MasterData, rowIndex: number, qtyOverride?
   }
 }
 
+export interface PnResolution {
+  /** 该 P/N 在总表的全部数量档（空数组 = 未找到） */
+  tiers: PnTier[]
+  /** 实际取价的档位（qty 未填或未找到 → null） */
+  usedTier: PnTier | null
+  /** 解析出的比价行（总价按输入 qty 计算）；无法取价 → null */
+  line: NegoLine | null
+}
+
+/**
+ * 比价页自由输入解析：给定 P/N 与下单数量，找到取价档位。
+ * qty 精确命中某档 → 该档；否则按阶梯语义取 ≤qty 的最大档；比最小档还小 → 最小档；
+ * qty 未填 → 只返回档位列表（界面在数量格中以 "1/3/6" 占位提示）。
+ */
+export function resolveNegoInput(master: MasterData, pn: string, qty: number | null): PnResolution {
+  const tiers = pnTiers(master, pn)
+  if (tiers.length === 0) return { tiers, usedTier: null, line: null }
+  if (qty === null) return { tiers, usedTier: null, line: null }
+  const numeric = tiers.filter((t): t is PnTier & { qty: number } => t.qty !== null)
+  let used: PnTier | null = numeric.find((t) => t.qty === qty) ?? null
+  if (!used && numeric.length > 0) {
+    const below = numeric.filter((t) => t.qty <= qty)
+    used = below.length > 0 ? below[below.length - 1]! : numeric[0]!
+  }
+  if (!used) used = tiers[0]! // 只有数量为空（'?'）的档
+  return { tiers, usedTier: used, line: buildNegoLine(master, used.rowIndex, qty) }
+}
+
 export interface NegoVendor {
   slot: number
   label: string

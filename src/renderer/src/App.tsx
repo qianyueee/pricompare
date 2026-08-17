@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import MappingDialog from './components/MappingDialog'
 import MasterImportDialog from './components/MasterImportDialog'
-import NegoPanel from './components/NegoPanel'
+import NegoPage from './components/NegoPage'
 import Toast from './components/common/Toast'
 import MainPage from './pages/MainPage'
 import { useSession } from './store/session'
@@ -73,7 +73,7 @@ export default function App() {
       )}
       <MasterImportDialog />
       <MappingDialog />
-      <NegoPanel />
+      <NegoPage />
       <Toast />
     </div>
   )

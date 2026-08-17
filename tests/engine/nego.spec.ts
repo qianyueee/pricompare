@@ -5,6 +5,7 @@ import {
   buildNegoSummary,
   negoToTsv,
   pnTiers,
+  resolveNegoInput,
 } from '@engine/index'
 import type { MasterCell, MasterData, MasterRow } from '@engine/index'
 
@@ -114,6 +115,43 @@ describe('buildNegoSummary 汇总', () => {
     expect(s.vendors).toEqual([])
     expect(s.lines).toEqual([])
     expect(s.optimalSum).toBe(0)
+  })
+})
+
+describe('resolveNegoInput 自由输入解析（比价页编号+数量格）', () => {
+  const master = mkMaster([
+    row({ 1: 'B1', 3: 'L-1', 6: 1, 9: 100 }),
+    row({ 1: 'B1', 3: 'L-1', 6: 6, 9: 80 }),
+    row({ 1: 'B1', 3: 'L-1', 6: 12, 9: 70 }),
+  ])
+
+  it('数量未填 → 只回档位列表（数量格 1/6/12 占位提示用），不出价', () => {
+    const r = resolveNegoInput(master, 'L-1', null)
+    expect(r.tiers.map((t) => t.qty)).toEqual([1, 6, 12])
+    expect(r.usedTier).toBeNull()
+    expect(r.line).toBeNull()
+  })
+
+  it('精确命中档位（编号大小写空格不敏感）', () => {
+    const r = resolveNegoInput(master, ' l-1 ', 6)
+    expect(r.usedTier?.qty).toBe(6)
+    expect(r.line?.unit[9]).toBe(80)
+    expect(r.line?.qty).toBe(6)
+  })
+
+  it('不在档上 → 阶梯语义取 ≤数量 的最大档，总价仍按输入数量', () => {
+    const r = resolveNegoInput(master, 'L-1', 8)
+    expect(r.usedTier?.qty).toBe(6)
+    expect(r.line?.unit[9]).toBe(80)
+    expect(r.line?.qty).toBe(8)
+  })
+
+  it('比最小档还小 → 取最小档；未找到编号 → 全空', () => {
+    expect(resolveNegoInput(master, 'L-1', 0.5).usedTier?.qty).toBe(1)
+    const miss = resolveNegoInput(master, 'NOPE', 5)
+    expect(miss.tiers).toEqual([])
+    expect(miss.usedTier).toBeNull()
+    expect(miss.line).toBeNull()
   })
 })
 

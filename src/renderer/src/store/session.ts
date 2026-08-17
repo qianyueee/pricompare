@@ -4,7 +4,6 @@ import {
   SEED_VENDORS,
   analyzeSheet,
   applyMerge,
-  buildNegoLine,
   buildMasterWorkbook,
   cleanAmountString,
   cleanMasterAmounts,
@@ -60,6 +59,23 @@ export interface ToastMsg {
   path?: string
 }
 
+/* ---- NEGO 比价页行辅助（自由输入 pn/qty，末尾恒保一空行供继续输入） ---- */
+let negoSeq = 1
+const emptyNegoLine = () => ({ id: negoSeq++, pn: '', qty: null as number | null })
+const isEmptyNegoLine = (l: { pn: string; qty: number | null }) => l.pn.trim() === '' && l.qty === null
+function withTrailingEmptyNego<T extends { pn: string; qty: number | null }>(lines: T[]): T[] {
+  const last = lines[lines.length - 1]
+  if (last && isEmptyNegoLine(last)) return lines
+  return [...lines, emptyNegoLine() as unknown as T]
+}
+const negoKey = (pn: string, qty: number | null) => `${pn.trim().toUpperCase()}|${qty ?? '?'}`
+/** 单元格/粘贴文本 → 数量：数字直取，文本走金额清洗（'12'、'￥12' → 12），其余 null */
+function negoQtyFrom(v: string | number | null): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (v === null) return null
+  return cleanAmountString(String(v))
+}
+
 interface SessionState {
   ready: boolean
   files: LoadedFile[]
@@ -75,8 +91,8 @@ interface SessionState {
   exporting: boolean
   toast: ToastMsg | null
   negoOpen: boolean
-  /** NEGO 面板行：来源总表行下标 + 可改的下单数量 */
-  negoLines: { rowIndex: number; qty: number | null }[]
+  /** NEGO 比价页行：自由输入的编号 + 下单数量（档位在渲染时按总表解析） */
+  negoLines: { id: number; pn: string; qty: number | null }[]
 
   init(): Promise<void>
   addFiles(files: File[]): Promise<void>
@@ -100,9 +116,12 @@ interface SessionState {
   showToast(toast: ToastMsg | null): void
   openNego(rowIdxs: number[]): void
   closeNego(): void
-  addNegoLine(rowIndex: number, qty: number | null): void
+  clearNego(): void
+  setNegoPn(index: number, pn: string): void
   setNegoQty(index: number, qty: number | null): void
   removeNegoLine(index: number): void
+  /** 类 Excel 粘贴：从 startIndex 行、col 列起铺开剪贴板网格（pn 列可带第二列数量） */
+  pasteNego(startIndex: number, col: 'pn' | 'qty', grid: string[][]): void
 }
 
 let seq = 1
@@ -163,7 +182,7 @@ export const useSession = create<SessionState>((set, get) => ({
   exporting: false,
   toast: null,
   negoOpen: false,
-  negoLines: [],
+  negoLines: [emptyNegoLine()],
 
   async init() {
     try {
@@ -473,35 +492,69 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   openNego(rowIdxs: number[]) {
-    const master = get().master
-    const lines = master
-      ? [...new Set(rowIdxs)]
-          .filter((i) => master.rows[i])
-          .sort((a, b) => a - b)
-          .map((rowIndex) => ({ rowIndex, qty: buildNegoLine(master, rowIndex).qty }))
-      : []
-    set({ negoOpen: true, negoLines: lines })
+    set((s) => {
+      const master = s.master
+      const kept = s.negoLines.filter((l) => !isEmptyNegoLine(l))
+      const seen = new Set(kept.map((l) => negoKey(l.pn, l.qty)))
+      if (master) {
+        for (const i of [...new Set(rowIdxs)].sort((a, b) => a - b)) {
+          const cells = master.rows[i]?.cells
+          if (!cells) continue
+          const pn = String(cells[3] ?? '').trim()
+          if (!pn) continue
+          const qty = negoQtyFrom(cells[6] ?? null)
+          const key = negoKey(pn, qty)
+          if (seen.has(key)) continue
+          seen.add(key)
+          kept.push({ id: negoSeq++, pn, qty })
+        }
+      }
+      return { negoOpen: true, negoLines: withTrailingEmptyNego(kept) }
+    })
   },
 
   closeNego() {
-    set({ negoOpen: false, negoLines: [] })
+    set({ negoOpen: false }) // 保留已填内容，下次进入接着用
   },
 
-  addNegoLine(rowIndex: number, qty: number | null) {
-    set((s) => {
-      if (s.negoLines.some((l) => l.rowIndex === rowIndex)) return s
-      return { negoLines: [...s.negoLines, { rowIndex, qty }] }
-    })
+  clearNego() {
+    set({ negoLines: [emptyNegoLine()] })
+  },
+
+  setNegoPn(index: number, pn: string) {
+    set((s) => ({
+      negoLines: withTrailingEmptyNego(s.negoLines.map((l, i) => (i === index ? { ...l, pn } : l))),
+    }))
   },
 
   setNegoQty(index: number, qty: number | null) {
     set((s) => ({
-      negoLines: s.negoLines.map((l, i) => (i === index ? { ...l, qty } : l)),
+      negoLines: withTrailingEmptyNego(s.negoLines.map((l, i) => (i === index ? { ...l, qty } : l))),
     }))
   },
 
   removeNegoLine(index: number) {
-    set((s) => ({ negoLines: s.negoLines.filter((_, i) => i !== index) }))
+    set((s) => ({ negoLines: withTrailingEmptyNego(s.negoLines.filter((_, i) => i !== index)) }))
+  },
+
+  pasteNego(startIndex: number, col: 'pn' | 'qty', grid: string[][]) {
+    set((s) => {
+      const lines = [...s.negoLines]
+      for (let i = 0; i < grid.length; i++) {
+        const idx = startIndex + i
+        while (lines.length <= idx) lines.push(emptyNegoLine())
+        const cells = grid[i]!
+        const line = { ...lines[idx]! }
+        if (col === 'pn') {
+          if (cells[0] !== undefined) line.pn = cells[0].trim()
+          if (cells.length > 1) line.qty = negoQtyFrom(cells[1]!.trim())
+        } else if (cells[0] !== undefined) {
+          line.qty = negoQtyFrom(cells[0].trim())
+        }
+        lines[idx] = line
+      }
+      return { negoLines: withTrailingEmptyNego(lines) }
+    })
   },
 }))
 
