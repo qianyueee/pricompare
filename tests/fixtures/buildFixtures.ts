@@ -111,7 +111,8 @@ export async function makeFileA(): Promise<ArrayBuffer> {
  * 文件 B：HC 风格。第 1 行公司抬头，表头第 3 行；价格在 J "Quote Each RMB"；
  * A4 是 #REF! 错误单元格；K–R 是 " 2"…" 9" 垃圾列；交期 W 为纯数字天数。
  */
-export async function makeFileB(): Promise<ArrayBuffer> {
+export async function makeFileB(opts?: { quoteNo?: string }): Promise<ArrayBuffer> {
+  const quoteNo = opts?.quoteNo ?? 'KT20260711B'
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet('报价单')
   ws.getCell('B1').value = 'HC Tech LLC Quoting Template (UPDATED 20260711)'
@@ -151,7 +152,7 @@ export async function makeFileB(): Promise<ArrayBuffer> {
   FIXTURE_PNS.forEach((pn, i) => {
     const r = ws.getRow(4 + i)
     if (i === 0) r.getCell(1).value = { error: '#REF!' } as ExcelJS.CellErrorValue
-    r.getCell(2).value = 'KT20260711B'
+    r.getCell(2).value = quoteNo
     r.getCell(3).value = i + 1
     r.getCell(4).value = pn
     r.getCell(5).value = FIXTURE_REVS[i]

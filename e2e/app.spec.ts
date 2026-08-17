@@ -3,17 +3,19 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ExcelJS from 'exceljs'
 import { expect, test } from '@playwright/test'
-import { FIXTURE_PNS, makeFileA, makeMasterFile } from '../tests/fixtures/buildFixtures'
+import { FILE_A_PRICES, FILE_B_PRICES, FIXTURE_PNS, makeFileA, makeFileB, makeMasterFile } from '../tests/fixtures/buildFixtures'
 
 const TMP = join(dirname(fileURLToPath(import.meta.url)), '.tmp')
 // 注意：容器内 Chromium 对非 ASCII 文件名的 setInputFiles 会静默丢文件，固件名保持 ASCII
 const KV_PATH = join(TMP, 'KV202608153_0815.xlsx')
 const MASTER_PATH = join(TMP, 'KKMaster.xlsx')
+const HC_LABELED_PATH = join(TMP, 'HCQuote20260816_TestE.xlsx')
 
 test.beforeAll(async () => {
   mkdirSync(TMP, { recursive: true })
   writeFileSync(KV_PATH, Buffer.from(await makeFileA()))
   writeFileSync(MASTER_PATH, Buffer.from(await makeMasterFile()))
+  writeFileSync(HC_LABELED_PATH, Buffer.from(await makeFileB({ quoteNo: '询价 20260816 Test E' })))
 })
 
 test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式导出 → 持久化', async ({ page }) => {
@@ -128,4 +130,43 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   // Esc 关闭
   await page.keyboard.press('Escape')
   await expect(nego).toBeHidden()
+})
+
+test('同一批不同供应商报价：第二家自动识别批次并落到同一行', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+
+  await page.setInputFiles('[data-testid=file-input]', [MASTER_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+
+  // 同时拖入：HC 风格（Quote No.=「询价 20260816 Test E」）+ KV 风格（只有真单号，无批次信息）
+  await page.setInputFiles('[data-testid=file-input]', [HC_LABELED_PATH, KV_PATH])
+
+  // 弹窗 1（HC）：批次自动取自「询价」标签；R2 的 J 已有旧价 → 9 行全新增
+  const dialog = page.getByTestId('mapping-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('vendor-input')).toHaveValue('HC')
+  await expect(page.getByTestId('batch-input')).toHaveValue('20260816 Test E')
+  await expect(page.getByTestId('merge-preview')).toContainText('更新 0 行 · 新增 9 行')
+  await page.getByTestId('confirm-mapping').click()
+
+  // 弹窗 2（KV）：无自带标签 → 按 (P/N,数量) 与总表匹配，自动识别为同一批
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('vendor-input')).toHaveValue('SKW')
+  await expect(page.getByTestId('batch-input')).toHaveValue('20260816 Test E')
+  await expect(page.getByTestId('batch-suggestion')).toContainText('已识别为同一批')
+  await expect(page.getByTestId('batch-suggestion')).toContainText('9/9')
+  await expect(page.getByTestId('merge-preview')).toContainText('更新 9 行 · 新增 0 行')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(dialog).toBeHidden()
+
+  // 两家价落在同一行（HC 新建的 PN0 行：J=56.7、K=45），批次同名；只多出一个批次
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+  await expect(page.locator('[data-cell="2:3"]')).toHaveText(FIXTURE_PNS[0]!)
+  await expect(page.locator('[data-cell="2:9"]')).toHaveText(String(FILE_B_PRICES[0]))
+  await expect(page.locator('[data-cell="2:10"]')).toHaveText(String(FILE_A_PRICES[0]))
+  await expect(page.locator('[data-cell="2:1"]')).toHaveText('20260816 Test E')
+  await expect(page.getByTestId('batch-filter').locator('option')).toHaveCount(3) // 全部 + Old + Test E
 })

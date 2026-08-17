@@ -38,6 +38,13 @@ export {
   type MergeChange,
   type MergePlan,
 } from './master/merge'
+export {
+  suggestBatchFromMaster,
+  partSetOverlap,
+  resolveBatchSuggestion,
+  type BatchSuggestion,
+  type BatchSibling,
+} from './master/batchMatch'
 export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
 export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
 export {
