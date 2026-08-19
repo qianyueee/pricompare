@@ -189,6 +189,33 @@ test('同一批不同供应商报价：第二家自动识别批次并落到同�
   await expect(page.getByTestId('batch-filter').locator('option')).toHaveCount(3) // 全部 + Old + Test E
 })
 
+test('HC 阶梯省略行：第二数量档自动继承零件号并入', async ({ page }) => {
+  const LADDER_PATH = join(TMP, 'HCQuote20260817_TedLadder.xlsx')
+  writeFileSync(LADDER_PATH, Buffer.from(await makeFileB({ quoteNo: '询价 20260817 Ted', ladder: true })))
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.setInputFiles('[data-testid=file-input]', [MASTER_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+
+  // 拖入阶梯省略行版 HC 报价：18 行全识别（9 零件 × 2 档），弹窗提示继承
+  await page.setInputFiles('[data-testid=file-input]', [LADDER_PATH])
+  const dialog = page.getByTestId('mapping-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('batch-input')).toHaveValue('20260817 Ted')
+  await expect(dialog.getByText(/省略零件号/)).toBeVisible()
+  await expect(page.getByTestId('merge-preview')).toContainText('更新 0 行 · 新增 18 行')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByTestId('master-row')).toHaveCount(20)
+
+  // 省略行档位落为独立行：PN1 × 20 → J=255（340×0.75），零件号继承
+  await expect(page.locator('[data-cell="5:3"]')).toHaveText(FIXTURE_PNS[1]!)
+  await expect(page.locator('[data-cell="5:6"]')).toHaveText('20')
+  await expect(page.locator('[data-cell="5:9"]')).toHaveText('255')
+})
+
 test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一步撤销', async ({ page }) => {
   await page.goto('/')
   await page.evaluate(() => localStorage.clear())

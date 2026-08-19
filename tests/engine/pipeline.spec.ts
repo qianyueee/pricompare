@@ -52,6 +52,29 @@ describe('解析管线：HC 风格（文件 B，表头第 3 行，#REF!，垃圾
     expect(a.warnings.some((w) => w.includes('#REF!') || w.includes('错误'))).toBe(true)
     expect(a.vendorGuess.vendorId).toBe('hc')
   })
+
+  it('阶梯省略行（第二档不写 P/N）：继承上一行零件号/Rev/描述，数量价格交期用本行', async () => {
+    const pw = readWorkbook(await makeFileB({ ladder: true }))
+    const a = await analyzeSheet(pw, {
+      fileName: 'HCQuote20260817_询价_20260817_Ted_1.xlsx',
+      vendors: SEED_VENDORS,
+    })
+    expect(a.rows).toHaveLength(18) // 9 零件 × 2 档
+    const first = a.rows[0]!
+    const cont = a.rows[1]!
+    expect(cont.pn).toBe(first.pn)
+    expect(cont.rev).toBe(first.rev)
+    expect(cont.description).toBe(first.description)
+    expect(cont.material).toBe(first.material) // 规格空则继承
+    expect(cont.qty).toBe(20)
+    expect(cont.price.amount).toBeCloseTo(FILE_B_PRICES[0]! * 0.75)
+    expect(cont.leadTime.days).toBe(30)
+    expect(cont.process).toBe('CNC') // 本行有值的字段不被覆盖
+    expect(a.warnings.some((w) => w.includes('省略零件号'))).toBe(true)
+    // 18 行 = 9 个 P/N 各 2 个数量档
+    const pns = new Set(a.rows.map((r) => r.pn))
+    expect(pns.size).toBe(9)
+  })
 })
 
 describe('解析管线：KK 汇总风格（文件 C，￥文本价 / TDB / $价 / 阶梯数量）', () => {

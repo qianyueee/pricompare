@@ -111,7 +111,7 @@ export async function makeFileA(): Promise<ArrayBuffer> {
  * 文件 B：HC 风格。第 1 行公司抬头，表头第 3 行；价格在 J "Quote Each RMB"；
  * A4 是 #REF! 错误单元格；K–R 是 " 2"…" 9" 垃圾列；交期 W 为纯数字天数。
  */
-export async function makeFileB(opts?: { quoteNo?: string }): Promise<ArrayBuffer> {
+export async function makeFileB(opts?: { quoteNo?: string; ladder?: boolean }): Promise<ArrayBuffer> {
   const quoteNo = opts?.quoteNo ?? 'KT20260711B'
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet('报价单')
@@ -149,11 +149,12 @@ export async function makeFileB(opts?: { quoteNo?: string }): Promise<ArrayBuffe
     'Type',
     'Comments',
   ]
+  const step = opts?.ladder ? 2 : 1
   FIXTURE_PNS.forEach((pn, i) => {
-    const r = ws.getRow(4 + i)
+    const r = ws.getRow(4 + i * step)
     if (i === 0) r.getCell(1).value = { error: '#REF!' } as ExcelJS.CellErrorValue
     r.getCell(2).value = quoteNo
-    r.getCell(3).value = i + 1
+    r.getCell(3).value = i * step + 1
     r.getCell(4).value = pn
     r.getCell(5).value = FIXTURE_REVS[i]
     r.getCell(6).value = FIXTURE_DESCS[i]
@@ -161,6 +162,16 @@ export async function makeFileB(opts?: { quoteNo?: string }): Promise<ArrayBuffe
     r.getCell(10).value = FILE_B_PRICES[i]
     r.getCell(23).value = 22
     r.getCell(24).value = i % 2 === 0 ? '304 SS' : 'ALUMINUM 6061-T6'
+    if (opts?.ladder) {
+      // 阶梯省略行（真实 HC 0817 写法）：第二数量档不写 P/N/Rev/描述（"同上"）
+      const r2 = ws.getRow(5 + i * step)
+      r2.getCell(2).value = quoteNo
+      r2.getCell(3).value = i * step + 2
+      r2.getCell(7).value = 20
+      r2.getCell(10).value = FILE_B_PRICES[i]! * 0.75
+      r2.getCell(23).value = 30
+      r2.getCell(27).value = 'CNC'
+    }
   })
   return toArrayBuffer(wb)
 }
