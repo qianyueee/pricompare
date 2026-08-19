@@ -198,6 +198,38 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
     if (xml.includes('</sheetData>')) xml = xml.replace('</sheetData>', `${appendRows.join('')}</sheetData>`)
     else xml = xml.replace('<sheetData/>', `<sheetData>${appendRows.join('')}</sheetData>`)
   }
+
+  // 追加行超出原底部时：扩展该 sheet 上的 Excel 表格（Table）ref/autoFilter 到新底部行——
+  // KK 模板的蓝白带状样式（row stripes）与筛选来自表格范围，不扩展则新增行没有斑马纹
+  const newBottom = master.rows.length + 1 // 1 基 Excel 行号（表头第 1 行）
+  if (newBottom > origRows.length + 1) {
+    const relsPath = sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')
+    const relsFile = files[relsPath]
+    if (relsFile) {
+      const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
+      for (const m of dec.decode(relsFile).matchAll(/<Relationship\b[^>]*\/?>/g)) {
+        if (!/\/table"/.test(m[0])) continue
+        const target = attrOf(m[0], 'Target')
+        if (!target) continue
+        const tablePath = target.startsWith('/')
+          ? target.slice(1)
+          : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
+        const tf = files[tablePath]
+        if (!tf) continue
+        const patched = dec.decode(tf).replace(
+          /(ref=")([A-Z]+\d+:[A-Z]+)(\d+)(")/g,
+          (all, p1: string, cols: string, bottom: string, p4: string) =>
+            Number(bottom) < newBottom ? `${p1}${cols}${newBottom}${p4}` : all,
+        )
+        files[tablePath] = enc.encode(patched)
+      }
+    }
+    // dimension 同步到新底部（Excel 容忍旧值，但保持一致更干净）
+    xml = xml.replace(
+      /(<dimension ref="[A-Z]+\d+:[A-Z]+)\d+("\/>)/,
+      (_all, p1: string, p2: string) => `${p1}${newBottom}${p2}`,
+    )
+  }
   files[sheetPath] = enc.encode(xml)
 
   // 覆盖过公式单元格 → calcChain 里的引用会悬空，整体移除（Excel 会自动重建）
