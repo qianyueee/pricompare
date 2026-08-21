@@ -46,6 +46,7 @@ export {
   type BatchSibling,
 } from './master/batchMatch'
 export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
+export { buildNegoWorkbook } from './export/exportNego'
 export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
 export { deleteMasterRows, clearMasterCells } from './master/edit'
 export {

@@ -101,6 +101,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.keyboard.press('Control+b')
   const nego = page.getByTestId('nego-page')
   await expect(nego).toBeVisible()
+  await expect(nego.getByText('最优总价(¥)')).toBeVisible() // 金额表头带 ¥
   // 选中 2 行带入 + 末尾恒保一空行；最低单价高亮；各家总额与最优组合
   await expect(page.getByTestId('nego-line')).toHaveCount(3)
   await expect(nego.locator('[data-min="1"]')).toHaveCount(2)
@@ -139,6 +140,21 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   // 复制为表格（剪贴板 TSV）→ toast 提示
   await page.getByTestId('nego-copy-btn').click()
   await expect(page.getByTestId('toast')).toContainText('复制')
+
+  // 导出表格：NEGO 布局 xlsx（RMB 表头、数量在描述后）
+  const negoDlPromise = page.waitForEvent('download')
+  await page.getByTestId('nego-export-btn').click()
+  const negoDl = await negoDlPromise
+  // 容器 Chromium 对非 ASCII 的 download 属性会退化为 'download'（真实 Windows/Electron 保存对话框不受影响）
+  expect(negoDl.suggestedFilename()).toMatch(/^(NEGO比价\d{8}\.xlsx|download)$/)
+  const negoOutPath = join(TMP, 'nego-out.xlsx')
+  await negoDl.saveAs(negoOutPath)
+  const negoWb = new ExcelJS.Workbook()
+  await negoWb.xlsx.load(readFileSync(negoOutPath) as unknown as ArrayBuffer)
+  const negoWs = negoWb.getWorksheet('NEGO比价')!
+  expect(negoWs.getCell('C1').value).toBe('Description')
+  expect(negoWs.getCell('D1').value).toBe("Q'ty")
+  expect(negoWs.getCell('E1').value).toBe('HC Unit (RMB)')
 
   // Esc 返回汇总；再次 Ctrl+B 内容仍在（页面工作区不清空）
   await page.keyboard.press('Escape')

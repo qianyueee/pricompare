@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react'
-import { buildNegoSummary, negoToTsv, resolveNegoInput } from '@engine/index'
+import { useEffect, useMemo, useState } from 'react'
+import { buildNegoSummary, buildNegoWorkbook, negoToTsv, resolveNegoInput } from '@engine/index'
 import type { NegoSummaryLine, PnResolution } from '@engine/index'
-import { useSession } from '../store/session'
+import { api } from '../api'
+import { todayBatch, useSession } from '../store/session'
 import { copyText } from '../utils/clipboard'
 
 const fmt = (n: number | null | undefined): string => (n === null || n === undefined ? '—' : String(n))
@@ -27,6 +28,7 @@ export default function NegoPage() {
   const removeNegoLine = useSession((s) => s.removeNegoLine)
   const pasteNego = useSession((s) => s.pasteNego)
   const showToast = useSession((s) => s.showToast)
+  const [exportingNego, setExportingNego] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -74,6 +76,19 @@ export default function NegoPage() {
     )
   }
 
+  const onExport = async () => {
+    setExportingNego(true)
+    try {
+      const buffer = await buildNegoWorkbook(summary)
+      const saved = await api.saveXlsx({ defaultFileName: `NEGO比价${todayBatch()}.xlsx`, data: buffer })
+      if (saved.saved) showToast({ message: '比价表已导出', path: saved.path })
+    } catch (err) {
+      showToast({ message: `导出失败：${err instanceof Error ? err.message : String(err)}` })
+    } finally {
+      setExportingNego(false)
+    }
+  }
+
   const colCount = 5 + vendors.length * 2 + 2 + 1
 
   return (
@@ -103,6 +118,15 @@ export default function NegoPage() {
         </button>
         <button
           type="button"
+          data-testid="nego-export-btn"
+          onClick={() => void onExport()}
+          disabled={view.validCount === 0 || exportingNego}
+          className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {exportingNego ? '导出中…' : '导出表格'}
+        </button>
+        <button
+          type="button"
           data-testid="nego-clear-btn"
           onClick={clearNego}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
@@ -127,30 +151,30 @@ export default function NegoPage() {
               <th className="min-w-40 border-b-2 border-slate-300 bg-white px-2 py-2 text-left font-medium text-slate-600">
                 P/N 编号
               </th>
-              <th className="w-24 border-b-2 border-slate-300 bg-white px-2 py-2 text-left font-medium text-slate-600">
-                数量
-              </th>
               <th className="w-14 border-b-2 border-slate-300 bg-white px-2 py-2 text-left font-medium text-slate-600">
                 Rev
               </th>
               <th className="min-w-44 border-b-2 border-slate-300 bg-white px-2 py-2 text-left font-medium text-slate-600">
                 描述
               </th>
+              <th className="w-24 border-b-2 border-slate-300 bg-white px-2 py-2 text-left font-medium text-slate-600">
+                数量
+              </th>
               {vendors.map((v) => (
                 <th key={`u${v.slot}`} className="border-b-2 border-slate-300 bg-white px-2 py-2 text-right font-medium text-slate-600">
-                  {v.label} 单价
+                  {v.label} 单价(¥)
                 </th>
               ))}
               <th className="border-b-2 border-slate-300 bg-white px-2 py-2 text-right font-medium text-green-700">
-                最低单价
+                最低单价(¥)
               </th>
               {vendors.map((v) => (
                 <th key={`t${v.slot}`} className="border-b-2 border-slate-300 bg-slate-50 px-2 py-2 text-right font-medium text-slate-600">
-                  {v.label} 总价
+                  {v.label} 总价(¥)
                 </th>
               ))}
               <th className="border-b-2 border-slate-300 bg-slate-50 px-2 py-2 text-right font-medium text-green-700">
-                最优总价
+                最优总价(¥)
               </th>
               <th className="w-8 rounded-tr-xl border-b-2 border-slate-300 bg-white" />
             </tr>
@@ -183,6 +207,15 @@ export default function NegoPage() {
                         notFound ? 'border-red-300 bg-red-50 text-red-700' : 'border-transparent hover:border-slate-200 focus:border-blue-400'
                       } outline-none`}
                     />
+                  </td>
+                  <td className="border-b border-slate-100 px-2 py-1">{res?.line?.rev ?? ''}</td>
+                  <td
+                    className={`max-w-64 overflow-hidden border-b border-slate-100 px-2 py-1 text-ellipsis whitespace-nowrap ${
+                      notFound ? 'text-red-500' : ''
+                    }`}
+                    title={res?.line?.description}
+                  >
+                    {notFound ? '总表中未找到该编号' : (res?.line?.description ?? '')}
                   </td>
                   <td className="border-b border-slate-100 p-0.5">
                     <div className="flex items-center gap-1">
@@ -219,15 +252,6 @@ export default function NegoPage() {
                         </span>
                       )}
                     </div>
-                  </td>
-                  <td className="border-b border-slate-100 px-2 py-1">{res?.line?.rev ?? ''}</td>
-                  <td
-                    className={`max-w-64 overflow-hidden border-b border-slate-100 px-2 py-1 text-ellipsis whitespace-nowrap ${
-                      notFound ? 'text-red-500' : ''
-                    }`}
-                    title={res?.line?.description}
-                  >
-                    {notFound ? '总表中未找到该编号' : (res?.line?.description ?? '')}
                   </td>
                   {vendors.map((v) => {
                     const u = res?.line?.unit[v.slot] ?? null

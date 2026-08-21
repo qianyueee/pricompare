@@ -1,8 +1,10 @@
+import ExcelJS from 'exceljs'
 import { describe, expect, it } from 'vitest'
 import {
   KK_COL_COUNT,
   buildNegoLine,
   buildNegoSummary,
+  buildNegoWorkbook,
   negoToTsv,
   pnTiers,
   resolveNegoInput,
@@ -152,6 +154,46 @@ describe('resolveNegoInput 自由输入解析（比价页编号+数量格）', (
     expect(miss.tiers).toEqual([])
     expect(miss.usedTier).toBeNull()
     expect(miss.line).toBeNull()
+  })
+})
+
+describe('buildNegoWorkbook 比价表导出（xlsx）', () => {
+  it('NEGO 布局 + RMB 表头 + 数量在描述后 + 最低价绿高亮 + 合计行', async () => {
+    const master = mkMaster([
+      row({ 3: 'A-1', 6: 10, 9: 56.7, 10: 45 }),
+      row({ 3: 'A-2', 6: 5, 9: 100 }),
+    ])
+    const summary = buildNegoSummary([buildNegoLine(master, 0), buildNegoLine(master, 1)])
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(await buildNegoWorkbook(summary))
+    const ws = wb.getWorksheet('NEGO比价')!
+    expect(ws.getRow(1).values).toEqual([
+      undefined,
+      'P/N',
+      'Rev',
+      'Description',
+      "Q'ty",
+      'HC Unit (RMB)',
+      'SKW Unit (RMB)',
+      'Min (RMB)',
+      'HC Total (RMB)',
+      'SKW Total (RMB)',
+      'Optimal (RMB)',
+    ])
+    expect(ws.getCell('A2').value).toBe('A-1')
+    expect(ws.getCell('D2').value).toBe(10) // 数量在描述后
+    expect(ws.getCell('F2').value).toBe(45) // SKW 单价
+    expect(ws.getCell('G2').value).toBe(45) // Min
+    expect(ws.getCell('J2').value).toBe(450) // Optimal
+    expect(ws.getCell('E3').value).toBe(100)
+    // 合计行：各家总额 + 最优
+    expect(ws.getCell('A4').value).toBe('合计')
+    expect(ws.getCell('H4').value).toBe(1067)
+    expect(ws.getCell('I4').value).toBe(450)
+    expect(ws.getCell('J4').value).toBe(950)
+    // 本行最低单价绿色填充
+    const fill = ws.getCell('F2').fill as { fgColor?: { argb?: string } }
+    expect(fill?.fgColor?.argb).toBe('FFC6EFCE')
   })
 })
 
