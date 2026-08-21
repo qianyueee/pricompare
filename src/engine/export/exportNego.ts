@@ -5,11 +5,11 @@ import type { NegoSummary } from '../master/nego'
 /**
  * 比价页「导出表格」：NEGO sheet 同构布局的独立工作簿——
  * P/N | Rev | Description | Q'ty | 各家 Unit (RMB) | Min (RMB) | 各家 Total (RMB) | Optimal (RMB)，
- * 最低单价与最优列绿色高亮，底部合计行。
+ * 最低单价与最优列绿色高亮，底部 Total 合计行。表内全英文（对外可直接转发）。
  */
 export async function buildNegoWorkbook(summary: NegoSummary): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook()
-  const ws = wb.addWorksheet('NEGO比价', { views: [{ state: 'frozen', ySplit: 1 }] })
+  const ws = wb.addWorksheet('NEGO', { views: [{ state: 'frozen', ySplit: 1 }] })
   const vendors = summary.vendors
   const headers = [
     'P/N',
@@ -72,9 +72,9 @@ export async function buildNegoWorkbook(summary: NegoSummary): Promise<ArrayBuff
     })
   })
 
-  // 合计行
+  // 合计行（表内不出现中文 → Total）
   const tr = ws.getRow(2 + summary.lines.length)
-  tr.getCell(1).value = '合计'
+  tr.getCell(1).value = 'Total'
   for (let ci = 0; ci < headers.length; ci++) tr.getCell(ci + 1).border = border
   summary.perVendor.forEach((v, i) => {
     const c = tr.getCell(minIdx + 2 + i)

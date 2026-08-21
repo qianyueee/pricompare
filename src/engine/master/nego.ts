@@ -178,7 +178,7 @@ export function negoToTsv(summary: NegoSummary): string {
     l.optimalTotal ?? '',
   ])
   const totalRow = [
-    '合计',
+    'Total', // 粘贴目标 NEGO sheet 为英文表，合计行不用中文
     '',
     '',
     '',

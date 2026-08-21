@@ -145,13 +145,12 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   const negoDlPromise = page.waitForEvent('download')
   await page.getByTestId('nego-export-btn').click()
   const negoDl = await negoDlPromise
-  // 容器 Chromium 对非 ASCII 的 download 属性会退化为 'download'（真实 Windows/Electron 保存对话框不受影响）
-  expect(negoDl.suggestedFilename()).toMatch(/^(NEGO比价\d{8}\.xlsx|download)$/)
+  expect(negoDl.suggestedFilename()).toMatch(/^NEGO_\d{8}\.xlsx$/)
   const negoOutPath = join(TMP, 'nego-out.xlsx')
   await negoDl.saveAs(negoOutPath)
   const negoWb = new ExcelJS.Workbook()
   await negoWb.xlsx.load(readFileSync(negoOutPath) as unknown as ArrayBuffer)
-  const negoWs = negoWb.getWorksheet('NEGO比价')!
+  const negoWs = negoWb.getWorksheet('NEGO')!
   expect(negoWs.getCell('C1').value).toBe('Description')
   expect(negoWs.getCell('D1').value).toBe("Q'ty")
   expect(negoWs.getCell('E1').value).toBe('HC Unit (RMB)')

@@ -166,7 +166,7 @@ describe('buildNegoWorkbook 比价表导出（xlsx）', () => {
     const summary = buildNegoSummary([buildNegoLine(master, 0), buildNegoLine(master, 1)])
     const wb = new ExcelJS.Workbook()
     await wb.xlsx.load(await buildNegoWorkbook(summary))
-    const ws = wb.getWorksheet('NEGO比价')!
+    const ws = wb.getWorksheet('NEGO')!
     expect(ws.getRow(1).values).toEqual([
       undefined,
       'P/N',
@@ -186,8 +186,8 @@ describe('buildNegoWorkbook 比价表导出（xlsx）', () => {
     expect(ws.getCell('G2').value).toBe(45) // Min
     expect(ws.getCell('J2').value).toBe(450) // Optimal
     expect(ws.getCell('E3').value).toBe(100)
-    // 合计行：各家总额 + 最优
-    expect(ws.getCell('A4').value).toBe('合计')
+    // 合计行：各家总额 + 最优（表内全英文 → Total）
+    expect(ws.getCell('A4').value).toBe('Total')
     expect(ws.getCell('H4').value).toBe(1067)
     expect(ws.getCell('I4').value).toBe(450)
     expect(ws.getCell('J4').value).toBe(950)
@@ -208,6 +208,6 @@ describe('negoToTsv 剪贴板表格', () => {
     expect(lines[0]).toBe("P/N\tRev\tDescription\tQ'ty\tHC Unit\tSKW Unit\tMin\tHC Total\tSKW Total\tOptimal")
     expect(lines[1]).toBe('A-1\t\t\t10\t56.7\t45\t45\t567\t450\t450')
     expect(lines[2]).toBe('A-2\t\t\t5\t100\t\t100\t500\t\t500')
-    expect(lines[3]).toBe('合计\t\t\t\t\t\t\t1067\t450\t950')
+    expect(lines[3]).toBe('Total\t\t\t\t\t\t\t1067\t450\t950')
   })
 })

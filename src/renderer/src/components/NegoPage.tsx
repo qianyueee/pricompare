@@ -80,7 +80,7 @@ export default function NegoPage() {
     setExportingNego(true)
     try {
       const buffer = await buildNegoWorkbook(summary)
-      const saved = await api.saveXlsx({ defaultFileName: `NEGO比价${todayBatch()}.xlsx`, data: buffer })
+      const saved = await api.saveXlsx({ defaultFileName: `NEGO_${todayBatch()}.xlsx`, data: buffer })
       if (saved.saved) showToast({ message: '比价表已导出', path: saved.path })
     } catch (err) {
       showToast({ message: `导出失败：${err instanceof Error ? err.message : String(err)}` })
