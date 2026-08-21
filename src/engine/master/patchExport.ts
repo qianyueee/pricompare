@@ -146,19 +146,29 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
 
   let xml = dec.decode(files[sheetPath])
 
-  // 新单元格的列样式参考：最后一个数据行的各列 s 属性
+  // 新单元格的列样式参考：自底向上扫描数据行、逐列补齐（最多 50 行）。
+  // 不能只取最后一行——手工加过的行可能残缺（只有零星几格带样式），
+  // 会让新增行大面积落回默认字体（实测：等线 11 vs 模板 Arial 14）
   const colStyle = new Map<number, string>()
-  for (let i = origRows.length - 1; i >= 0; i--) {
+  let styleRowAttrs = '' // 追加全新行时沿用的行属性（ht/customHeight）
+  let scanned = 0
+  for (let i = origRows.length - 1; i >= 0 && scanned < 50 && colStyle.size < KK_COL_COUNT; i--) {
     if (!isDataRow(origRows[i]!)) continue
+    scanned++
     const m = xml.match(new RegExp(`<row r="${i + 2}"[^>]*(?:/>|>[\\s\\S]*?</row>)`))
-    if (m) {
-      for (const [col, cellXml] of parseRowCells(m[0])) {
-        const openTag = cellXml.slice(0, cellXml.indexOf('>') + 1)
-        const s = attrOf(openTag, 's')
-        if (s && !colStyle.has(col)) colStyle.set(col, s)
-      }
+    if (!m) continue
+    const before = colStyle.size
+    for (const [col, cellXml] of parseRowCells(m[0])) {
+      const openTag = cellXml.slice(0, cellXml.indexOf('>') + 1)
+      const s = attrOf(openTag, 's')
+      if (s && !colStyle.has(col)) colStyle.set(col, s)
     }
-    break
+    if (!styleRowAttrs && colStyle.size - before >= 8) {
+      const open = m[0].match(/^<row\b[^>]*?\/?>/)![0]
+      const ht = open.match(/\sht="[^"]*"/)?.[0] ?? ''
+      const ch = open.match(/\scustomHeight="[^"]*"/)?.[0] ?? ''
+      styleRowAttrs = `${ht}${ch}`
+    }
   }
 
   let formulaCellsReplaced = 0
@@ -191,7 +201,7 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
         .sort((x, y) => x[0] - y[0])
         .map(([col, val]) => buildCellXml(`${colLetter(col)}${excelRow}`, colStyle.get(col) ?? null, val))
         .join('')
-      appendRows.push(`<row r="${excelRow}">${body}</row>`)
+      appendRows.push(`<row r="${excelRow}"${styleRowAttrs}>${body}</row>`)
     }
   }
   if (appendRows.length > 0) {
