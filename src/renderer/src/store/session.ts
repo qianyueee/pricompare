@@ -1,9 +1,14 @@
 import { create } from 'zustand'
 import {
+  AMOUNT_COLS,
   SEED_VENDORS,
   analyzeSheet,
   applyMerge,
   buildMasterWorkbook,
+  cleanAmountString,
+  cleanMasterAmounts,
+  clearMasterCells,
+  deleteMasterRows,
   guessBatchLabel,
   isMasterWorkbook,
   parseMasterWorkbook,
@@ -47,11 +52,30 @@ export interface PendingMaster {
   master: MasterData
   b64: string
   dataRows: number
+  /** 导入时自动修正的文本金额单元格数 */
+  cleanedCount: number
 }
 
 export interface ToastMsg {
   message: string
   path?: string
+}
+
+/* ---- NEGO 比价页行辅助（自由输入 pn/qty，末尾恒保一空行供继续输入） ---- */
+let negoSeq = 1
+const emptyNegoLine = () => ({ id: negoSeq++, pn: '', qty: null as number | null })
+const isEmptyNegoLine = (l: { pn: string; qty: number | null }) => l.pn.trim() === '' && l.qty === null
+function withTrailingEmptyNego<T extends { pn: string; qty: number | null }>(lines: T[]): T[] {
+  const last = lines[lines.length - 1]
+  if (last && isEmptyNegoLine(last)) return lines
+  return [...lines, emptyNegoLine() as unknown as T]
+}
+const negoKey = (pn: string, qty: number | null) => `${pn.trim().toUpperCase()}|${qty ?? '?'}`
+/** 单元格/粘贴文本 → 数量：数字直取，文本走金额清洗（'12'、'￥12' → 12），其余 null */
+function negoQtyFrom(v: string | number | null): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (v === null) return null
+  return cleanAmountString(String(v))
 }
 
 interface SessionState {
@@ -68,6 +92,11 @@ interface SessionState {
   importing: boolean
   exporting: boolean
   toast: ToastMsg | null
+  /** 最近一次破坏性编辑（单格改/删行/清空）前的 master——单槽撤销；不可变更新下存旧引用零成本 */
+  undoSnapshot: { master: MasterData; label: string } | null
+  negoOpen: boolean
+  /** NEGO 比价页行：自由输入的编号 + 下单数量（档位在渲染时按总表解析） */
+  negoLines: { id: number; pn: string; qty: number | null }[]
 
   init(): Promise<void>
   addFiles(files: File[]): Promise<void>
@@ -87,8 +116,21 @@ interface SessionState {
   confirmMasterImport(): void
   cancelMasterImport(): void
   editMasterCell(rowIndex: number, col: number, rawInput: string): void
+  /** 删除整行（A 列重排）；可 Ctrl+Z 撤销一步 */
+  deleteRows(rowIdxs: number[]): void
+  /** 清空所选格内容（Excel Delete 语义，A 列不清）；可 Ctrl+Z 撤销一步 */
+  clearCells(targets: { rowIndex: number; cols: number[] }[]): void
+  undoMasterEdit(): void
   exportMaster(): Promise<void>
   showToast(toast: ToastMsg | null): void
+  openNego(rowIdxs: number[]): void
+  closeNego(): void
+  clearNego(): void
+  setNegoPn(index: number, pn: string): void
+  setNegoQty(index: number, qty: number | null): void
+  removeNegoLine(index: number): void
+  /** 类 Excel 粘贴：从 startIndex 行、col 列起铺开剪贴板网格（pn 列可带第二列数量） */
+  pasteNego(startIndex: number, col: 'pn' | 'qty', grid: string[][]): void
 }
 
 let seq = 1
@@ -148,6 +190,9 @@ export const useSession = create<SessionState>((set, get) => ({
   importing: false,
   exporting: false,
   toast: null,
+  undoSnapshot: null,
+  negoOpen: false,
+  negoLines: [emptyNegoLine()],
 
   async init() {
     try {
@@ -157,12 +202,26 @@ export const useSession = create<SessionState>((set, get) => ({
         api.storeGet('master'),
         api.storeGet('masterFile'),
       ])
+      let loadedMaster = (master as MasterData | null) ?? null
+      let cleanedOnInit = 0
+      if (loadedMaster) {
+        const cleaned = cleanMasterAmounts(loadedMaster)
+        loadedMaster = cleaned.master
+        cleanedOnInit = cleaned.changed
+        if (cleanedOnInit > 0) void api.storeSet('master', loadedMaster)
+      }
       set({
         ready: true,
         registry: Array.isArray(registry) && registry.length > 0 ? (registry as Vendor[]) : SEED_VENDORS,
         templates: (templates as Record<string, MappingTemplate> | null) ?? {},
-        master: (master as MasterData | null) ?? null,
+        master: loadedMaster,
         masterOriginalB64: (masterFile as { b64?: string } | null)?.b64 ?? null,
+        ...(cleanedOnInit > 0
+          ? {
+              masterDirty: true,
+              toast: { message: `已自动规范 ${cleanedOnInit} 个文本格式金额（如 ￥1,133.40 → 1133.4）` },
+            }
+          : {}),
       })
     } catch {
       set({ ready: true })
@@ -180,14 +239,16 @@ export const useSession = create<SessionState>((set, get) => ({
         const pw = readWorkbook(buf)
         // 汇总表拖入 → 走"更新汇总"确认流程，而不是报价映射
         if (isMasterWorkbook(pw)) {
-          const master = parseMasterWorkbook(pw, f.name)
-          if (master) {
+          const parsed = parseMasterWorkbook(pw, f.name)
+          if (parsed) {
+            const { master, changed } = cleanMasterAmounts(parsed)
             set({
               pendingMaster: {
                 fileName: f.name,
                 master,
                 b64: bufToB64(buf),
                 dataRows: master.rows.filter((r) => r.cells.some((c, i) => i > 0 && c !== null)).length,
+                cleanedCount: changed,
               },
               importing: false,
             })
@@ -351,6 +412,7 @@ export const useSession = create<SessionState>((set, get) => ({
         templates,
         master,
         masterDirty: true,
+        undoSnapshot: null, // 并入后旧快照作废（撤销只针对手工编辑/删行/清空）
         activeMappingFileId: next?.id ?? null,
         toast: {
           message: `已并入汇总：更新 ${plan.fillCount} 行，新增 ${plan.appendCount} 行（批次 ${batch}）`,
@@ -369,7 +431,12 @@ export const useSession = create<SessionState>((set, get) => ({
       masterOriginalB64: pending.b64,
       masterDirty: false,
       pendingMaster: null,
-      toast: { message: `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` },
+      undoSnapshot: null,
+      toast: {
+        message:
+          `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` +
+          (pending.cleanedCount > 0 ? `，已规范 ${pending.cleanedCount} 个文本金额` : ''),
+      },
     })
   },
 
@@ -385,7 +452,9 @@ export const useSession = create<SessionState>((set, get) => ({
     const trimmed = rawInput.trim()
     let value: string | number | null
     if (trimmed === '') value = null
-    else {
+    else if (AMOUNT_COLS.includes(col)) {
+      value = cleanAmountString(trimmed) ?? rawInput
+    } else {
       const num = Number(trimmed.replace(/[,，]/g, ''))
       value = Number.isFinite(num) && /^[-+]?[\d.,，]+$/.test(trimmed) ? num : rawInput
     }
@@ -395,9 +464,49 @@ export const useSession = create<SessionState>((set, get) => ({
     cells[col] = value
     rows[rowIndex] = { cells }
     const next = { ...master, rows }
-    set({ master: next, masterDirty: true })
+    set({ master: next, masterDirty: true, undoSnapshot: { master, label: '单元格编辑' } })
     // 编辑即持久化（防抖会在刷新/关闭时丢数据；777 行序列化只有几毫秒）
     void api.storeSet('master', next)
+  },
+
+  deleteRows(rowIdxs: number[]) {
+    const master = get().master
+    if (!master || rowIdxs.length === 0) return
+    const next = deleteMasterRows(master, rowIdxs)
+    set({
+      master: next,
+      masterDirty: true,
+      undoSnapshot: { master, label: `删除 ${rowIdxs.length} 行` },
+      toast: { message: `已删除 ${rowIdxs.length} 行（A 列序号已重排，Ctrl+Z 可撤销）` },
+    })
+    void api.storeSet('master', next)
+  },
+
+  clearCells(targets: { rowIndex: number; cols: number[] }[]) {
+    const master = get().master
+    if (!master) return
+    const next = clearMasterCells(master, targets)
+    if (next === master) return
+    const count = targets.reduce((s, t) => s + t.cols.filter((c) => c > 0).length, 0)
+    set({
+      master: next,
+      masterDirty: true,
+      undoSnapshot: { master, label: '清空内容' },
+      toast: { message: `已清空 ${count} 个单元格（Ctrl+Z 可撤销）` },
+    })
+    void api.storeSet('master', next)
+  },
+
+  undoMasterEdit() {
+    const snap = get().undoSnapshot
+    if (!snap) return
+    set({
+      master: snap.master,
+      masterDirty: true,
+      undoSnapshot: null,
+      toast: { message: `已撤销：${snap.label}` },
+    })
+    void api.storeSet('master', snap.master)
   },
 
   async exportMaster() {
@@ -405,13 +514,23 @@ export const useSession = create<SessionState>((set, get) => ({
     if (!master) return
     set({ exporting: true })
     try {
-      const buffer = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
+      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
       const saved = await api.saveXlsx({
-        defaultFileName: `KK询价汇总表${todayBatch()}.xlsx`,
-        data: buffer,
+        // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
+        defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,
+        data: out.buffer,
       })
       if (saved.saved) {
-        set({ masterDirty: false, toast: { message: '汇总表已导出', path: saved.path } })
+        set({
+          masterDirty: false,
+          toast: {
+            message:
+              out.mode === 'rewrite'
+                ? '汇总表已导出（注意：保真补丁失败，本次为降级导出，公式/样式可能有损，请反馈）'
+                : '汇总表已导出',
+            path: saved.path,
+          },
+        })
       }
     } catch (err) {
       set({ toast: { message: `导出失败：${err instanceof Error ? err.message : String(err)}` } })
@@ -422,6 +541,72 @@ export const useSession = create<SessionState>((set, get) => ({
 
   showToast(toast: ToastMsg | null) {
     set({ toast })
+  },
+
+  openNego(rowIdxs: number[]) {
+    set((s) => {
+      const master = s.master
+      const kept = s.negoLines.filter((l) => !isEmptyNegoLine(l))
+      const seen = new Set(kept.map((l) => negoKey(l.pn, l.qty)))
+      if (master) {
+        for (const i of [...new Set(rowIdxs)].sort((a, b) => a - b)) {
+          const cells = master.rows[i]?.cells
+          if (!cells) continue
+          const pn = String(cells[3] ?? '').trim()
+          if (!pn) continue
+          const qty = negoQtyFrom(cells[6] ?? null)
+          const key = negoKey(pn, qty)
+          if (seen.has(key)) continue
+          seen.add(key)
+          kept.push({ id: negoSeq++, pn, qty })
+        }
+      }
+      return { negoOpen: true, negoLines: withTrailingEmptyNego(kept) }
+    })
+  },
+
+  closeNego() {
+    set({ negoOpen: false }) // 保留已填内容，下次进入接着用
+  },
+
+  clearNego() {
+    set({ negoLines: [emptyNegoLine()] })
+  },
+
+  setNegoPn(index: number, pn: string) {
+    set((s) => ({
+      negoLines: withTrailingEmptyNego(s.negoLines.map((l, i) => (i === index ? { ...l, pn } : l))),
+    }))
+  },
+
+  setNegoQty(index: number, qty: number | null) {
+    set((s) => ({
+      negoLines: withTrailingEmptyNego(s.negoLines.map((l, i) => (i === index ? { ...l, qty } : l))),
+    }))
+  },
+
+  removeNegoLine(index: number) {
+    set((s) => ({ negoLines: withTrailingEmptyNego(s.negoLines.filter((_, i) => i !== index)) }))
+  },
+
+  pasteNego(startIndex: number, col: 'pn' | 'qty', grid: string[][]) {
+    set((s) => {
+      const lines = [...s.negoLines]
+      for (let i = 0; i < grid.length; i++) {
+        const idx = startIndex + i
+        while (lines.length <= idx) lines.push(emptyNegoLine())
+        const cells = grid[i]!
+        const line = { ...lines[idx]! }
+        if (col === 'pn') {
+          if (cells[0] !== undefined) line.pn = cells[0].trim()
+          if (cells.length > 1) line.qty = negoQtyFrom(cells[1]!.trim())
+        } else if (cells[0] !== undefined) {
+          line.qty = negoQtyFrom(cells[0].trim())
+        }
+        lines[idx] = line
+      }
+      return { negoLines: withTrailingEmptyNego(lines) }
+    })
   },
 }))
 

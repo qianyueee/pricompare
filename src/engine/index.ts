@@ -38,4 +38,29 @@ export {
   type MergeChange,
   type MergePlan,
 } from './master/merge'
-export { buildMasterWorkbook } from './master/exportMaster'
+export {
+  suggestBatchFromMaster,
+  partSetOverlap,
+  resolveBatchSuggestion,
+  type BatchSuggestion,
+  type BatchSibling,
+} from './master/batchMatch'
+export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
+export { buildNegoWorkbook } from './export/exportNego'
+export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
+export { deleteMasterRows, clearMasterCells } from './master/edit'
+export {
+  pnTiers,
+  buildNegoLine,
+  buildNegoSummary,
+  negoToTsv,
+  resolveNegoInput,
+  type PnTier,
+  type PnResolution,
+  type NegoLine,
+  type NegoVendor,
+  type NegoSummary,
+  type NegoSummaryLine,
+} from './master/nego'
+export { KK_VENDOR_SLOT_HEADERS } from './export/kkLayout'
+export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult } from './master/patchExport'

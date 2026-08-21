@@ -42,6 +42,7 @@ export function extractRows(
   let junk = 0
   let errorCells = 0
   let consecutiveRejects = 0
+  let inheritedRows = 0
   const end = Math.min(grid.length, mapping.headerRow + 1 + MAX_DATA_ROWS)
 
   for (let r = mapping.headerRow + 1; r < end; r++) {
@@ -64,21 +65,29 @@ export function extractRows(
       continue
     }
     const pnRaw = cellStr(grid, r, colOf.pn)
-    // 没有可用 P/N 的行无法参与比价，一律不要（同时干掉落在 P/N 列的说明文字）
-    if (pnRaw === '' || /\s/.test(pnRaw)) {
-      junk++
-      consecutiveRejects++
-      continue
-    }
     const price =
       priceCol !== undefined
         ? parsePrice(grid[r]?.[priceCol], priceHeader, mapping.priceCurrency)
         : parsePrice(undefined, '', mapping.priceCurrency)
     const qtyRaw = cellStr(grid, r, colOf.qty)
     const qtyNum = qtyRaw !== '' && Number.isFinite(Number(qtyRaw)) ? Number(qtyRaw) : null
+    // 阶梯报价省略行（HC 家写法）：第二数量档不写 P/N（"同上"）——
+    // P/N 空 + 有数量 + 有效价 才算续行，继承上一条接受行；说明文字/合计行不满足仍拒收
+    const prev = rows.length > 0 ? rows[rows.length - 1]! : null
+    const isContinuation =
+      pnRaw === '' &&
+      prev !== null &&
+      qtyNum !== null &&
+      (price.status === 'ok' || price.status === 'pending')
+    // 没有可用 P/N 的行无法参与比价，一律不要（同时干掉落在 P/N 列的说明文字）
+    if (!isContinuation && (pnRaw === '' || /\s/.test(pnRaw))) {
+      junk++
+      consecutiveRejects++
+      continue
+    }
     const noRaw = cellStr(grid, r, colOf.no)
     const signals = [
-      true, // pn 已通过硬校验
+      true, // pn 已通过硬校验（或续行继承）
       noRaw !== '' && Number.isFinite(Number(noRaw)),
       qtyNum !== null,
       price.status === 'ok' || price.status === 'pending',
@@ -89,27 +98,32 @@ export function extractRows(
       continue
     }
     consecutiveRejects = 0
+    const inh = isContinuation ? prev : null
+    const own = (field: FieldKey): string => cellStr(grid, r, colOf[field])
+    if (isContinuation) inheritedRows++
     rows.push({
-      pn: pnRaw,
-      rev: cellStr(grid, r, colOf.rev).toUpperCase(),
+      pn: inh ? inh.pn : pnRaw,
+      rev: own('rev').toUpperCase() || (inh?.rev ?? ''),
       qty: qtyNum,
       price,
       leadTime: parseLeadTime(colOf.leadTime !== undefined ? grid[r]?.[colOf.leadTime] : undefined),
-      item: cellStr(grid, r, colOf.item),
-      quoteEa: cellStr(grid, r, colOf.quoteEa),
-      description: cellStr(grid, r, colOf.description),
-      material: cellStr(grid, r, colOf.material),
-      surfaceFinish: cellStr(grid, r, colOf.surfaceFinish),
-      cleaningSpec: cellStr(grid, r, colOf.cleaningSpec),
-      process: cellStr(grid, r, colOf.process),
-      size: cellStr(grid, r, colOf.size),
-      quoteNo: cellStr(grid, r, colOf.quoteNo),
-      remark: cellStr(grid, r, colOf.remark),
-      basePn: cellStr(grid, r, colOf.basePn),
-      partType: cellStr(grid, r, colOf.partType),
+      item: own('item'),
+      quoteEa: own('quoteEa'),
+      description: own('description') || (inh?.description ?? ''),
+      material: own('material') || (inh?.material ?? ''),
+      surfaceFinish: own('surfaceFinish') || (inh?.surfaceFinish ?? ''),
+      cleaningSpec: own('cleaningSpec') || (inh?.cleaningSpec ?? ''),
+      process: own('process') || (inh?.process ?? ''),
+      size: own('size') || (inh?.size ?? ''),
+      quoteNo: own('quoteNo'),
+      remark: own('remark'),
+      basePn: own('basePn') || (inh?.basePn ?? ''),
+      partType: own('partType') || (inh?.partType ?? ''),
       sourceRow: r + 1,
     })
   }
+  if (inheritedRows > 0)
+    warnings.push(`${inheritedRows} 行省略零件号，已按上一行继承（阶梯报价常见写法）`)
   if (junk > 0) warnings.push(`已跳过 ${junk} 行非数据内容`)
   if (errorCells > 0)
     warnings.push(`发现 ${errorCells} 个公式错误单元格（如 #REF!），相应值按无效处理`)

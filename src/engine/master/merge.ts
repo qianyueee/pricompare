@@ -1,4 +1,5 @@
 import { formatLeadTime } from '../normalize/leadtime'
+import { cleanAmountString } from './clean'
 import { KK_COL } from '../export/kkLayout'
 import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
 import type { QuoteRow } from '../types'
@@ -79,6 +80,22 @@ function isEmptyCell(v: MasterCell | undefined): boolean {
   return v === null || v === undefined || String(v).trim() === ''
 }
 
+/** 待定占位（用户在总表手工填的 TDB/TBD/待定）视同可填充：真报价到了就替换 */
+function isFillableCell(v: MasterCell | undefined): boolean {
+  return isEmptyCell(v) || /^(tdb|tbd|待定)$/i.test(String(v).trim())
+}
+
+/** 材料等价（跨中英/空格/连字符）：'殷钢 36'≠'invar-36'，但 'SS 416'≈'SS-416'、'6061'≈'AL 6061'子串不算 —— 仅归一化后全等 */
+const normMaterial = (v: MasterCell | string | undefined): string =>
+  String(v ?? '')
+    .toLowerCase()
+    .replace(/[\s\-_,，()（）]/g, '')
+const materialEq = (a: MasterCell | undefined, b: string): boolean => {
+  const na = normMaterial(a)
+  const nb = normMaterial(b)
+  return na !== '' && nb !== '' && na === nb
+}
+
 /** 报价值 → 汇总单元格：ok 存数字，TDB/待定存 "TDB"，其余不写 */
 function priceCellValue(q: QuoteRow): MasterCell | undefined {
   if (q.price.status === 'ok' && q.price.amount !== undefined) return q.price.amount
@@ -87,8 +104,8 @@ function priceCellValue(q: QuoteRow): MasterCell | undefined {
 }
 
 function numericOr(v: string): MasterCell {
-  const n = Number(v.replace(/[,，\s]/g, ''))
-  return Number.isFinite(n) && v.trim() !== '' ? n : v
+  const n = cleanAmountString(v)
+  return n !== null ? n : v
 }
 
 export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOptions): MergePlan {
@@ -138,10 +155,10 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     if (isEmptyCell(cells[KK_COL.rev]) && q.rev) set(KK_COL.rev, q.rev)
     if (isEmptyCell(cells[KK_COL.description]) && q.description) set(KK_COL.description, q.description)
     if (isEmptyCell(cells[KK_COL.qty]) && q.qty !== null) set(KK_COL.qty, q.qty)
-    // H 选定价 / U 对客报价：只有报价文件带 Quote(EA)（KV 家）才带入，且只填空
+    // H 选定价 / U 对客报价：只有报价文件带 Quote(EA)（KV 家）才带入，且只填空（TDB 占位视同空）
     if (q.quoteEa) {
-      if (isEmptyCell(cells[KK_COL.quoteEach]) && price !== undefined) set(KK_COL.quoteEach, price)
-      if (isEmptyCell(cells[KK_COL.quoteEa])) set(KK_COL.quoteEa, numericOr(q.quoteEa))
+      if (isFillableCell(cells[KK_COL.quoteEach]) && price !== undefined) set(KK_COL.quoteEach, price)
+      if (isFillableCell(cells[KK_COL.quoteEa])) set(KK_COL.quoteEa, numericOr(q.quoteEa))
     }
     // V 真报价单号
     if (q.quoteNo && isRealQuoteNo(q.quoteNo)) {
@@ -176,18 +193,39 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     return changes
   }
 
-  for (const q of quotes) {
-    // 自底向上找可填充的既有行
-    let target = -1
+  // 候选行：同 P/N + 同数量 + 该家槽位可填（空或 TDB 占位），自底向上
+  const candidatesOf = (q: QuoteRow): number[] => {
+    const out: number[] = []
     for (let i = rows.length - 1; i >= 0; i--) {
       if (claimed.has(i)) continue
       const row = rows[i]!
       if (isPlaceholderRow(row)) continue
       if (normPn(row.cells[KK_COL.pn]) !== normPn(q.pn)) continue
       if (!numEq(row.cells[KK_COL.qty] ?? null, q.qty)) continue
-      if (!isEmptyCell(row.cells[opts.vendorSlot])) continue
-      target = i
-      break
+      if (!isFillableCell(row.cells[opts.vendorSlot])) continue
+      out.push(i)
+    }
+    return out
+  }
+
+  // 第一遍：材料能对上的先配对——同零件同数量多行只差材料（如 Invar/SS-416/SS-303 各一行）时，
+  // 报价必须按材料落行，不能只按自底向上抢占
+  const fillTarget = new Map<number, number>()
+  quotes.forEach((q, qi) => {
+    if (!q.material) return
+    const cands = candidatesOf(q)
+    const m = cands.find((i) => materialEq(rows[i]!.cells[KK_COL.material], q.material))
+    if (m !== undefined) {
+      fillTarget.set(qi, m)
+      claimed.add(m)
+    }
+  })
+
+  quotes.forEach((q, qi) => {
+    let target = fillTarget.get(qi) ?? -1
+    if (target < 0) {
+      const cands = candidatesOf(q)
+      if (cands.length > 0) target = cands[0]!
     }
     if (target >= 0) {
       claimed.add(target)
@@ -215,7 +253,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       }
       actions.push({ kind: 'append', rowIndex, excelRow: rowIndex + 2, quote: q, changes })
     }
-  }
+  })
 
   const fillCount = actions.filter((a) => a.kind === 'fill').length
   return { actions, fillCount, appendCount: actions.length - fillCount, warnings }

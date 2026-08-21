@@ -3,9 +3,9 @@ import {
   ALL_FIELDS,
   FIELD_LABELS,
   colLetter,
-  guessBatchLabel,
   letterToIdx,
   planMerge,
+  resolveBatchSuggestion,
   type Cell,
   type ColumnMapping,
   type FieldKey,
@@ -44,13 +44,25 @@ function Inner({ file }: { file: LoadedFile }) {
   const setHeaderRow = useSession((s) => s.setHeaderRow)
   const registry = useSession((s) => s.registry)
   const master = useSession((s) => s.master)
+  const files = useSession((s) => s.files)
 
   const [draftMap, setDraftMap] = useState<Record<number, FieldKey>>(() => ({ ...analysis.mapping.map }))
   const [priceCol, setPriceCol] = useState(analysis.mapping.priceCol)
   const [currency, setCurrency] = useState(analysis.mapping.priceCurrency)
   const [vendor, setVendor] = useState(file.vendorDisplay)
   const [saveTemplate, setSaveTemplate] = useState(true)
-  const [batch, setBatch] = useState(() => guessBatchLabel(analysis.rows, file.fileName) || todayBatch())
+  // 批次建议链（挂载时算一次）：自带「询价」标签 > 总表 (P/N,数量) 匹配 > 同批文件借标签
+  const [suggestion] = useState(() =>
+    resolveBatchSuggestion(
+      analysis.rows,
+      file.fileName,
+      master,
+      files
+        .filter((f) => f.id !== file.id && f.status === 'ok' && f.analysis)
+        .map((f) => ({ fileName: f.fileName, rows: f.analysis!.rows })),
+    ),
+  )
+  const [batch, setBatch] = useState(() => suggestion.batch || todayBatch())
   const [manualSlot, setManualSlot] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -168,6 +180,13 @@ function Inner({ file }: { file: LoadedFile }) {
               placeholder="如：20260814 Natalie A"
               className="w-52 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
             />
+            {(suggestion.source === 'master' || suggestion.source === 'sibling') && (
+              <span data-testid="batch-suggestion" className="max-w-52 text-[11px] leading-snug text-blue-600">
+                {suggestion.source === 'master'
+                  ? `已识别为同一批：与已并入批次「${suggestion.batch}」零件·数量 ${suggestion.matched}/${suggestion.total} 行吻合`
+                  : `已识别为同一批：与同时导入的 ${suggestion.siblingFile}（批次 ${suggestion.batch}）零件相同`}
+              </span>
+            )}
           </label>
           <label className="flex flex-col gap-1 text-xs text-slate-600">
             价格落入汇总列
