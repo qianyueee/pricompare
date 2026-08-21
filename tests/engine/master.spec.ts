@@ -111,6 +111,45 @@ describe('合并规则', () => {
     expect(row.cells[KK_COL.quoteEach]).toBeNull() // 无 quoteEa 不填 H
   })
 
+  it('TDB 占位可回填 + 同零件同数量多行按材料对齐（中文/空格归一化）', () => {
+    const mk = (vals: Record<number, string | number>): { cells: (string | number | null)[] } => {
+      const cells = Array.from({ length: 33 }, () => null as string | number | null)
+      for (const [k, v] of Object.entries(vals)) cells[Number(k)] = v
+      return { cells }
+    }
+    const master: MasterData = {
+      rows: [
+        mk({ 0: 1, 1: 'B', 3: 'X-1', 6: 1, 7: 'TDB', 9: 100, 10: 'TDB', 23: 'Invar-36' }),
+        mk({ 0: 2, 1: 'B', 3: 'X-1', 6: 1, 7: 'TDB', 9: 60, 10: 'TDB', 23: 'SS-416' }),
+        mk({ 0: 3, 1: 'B', 3: 'X-1', 6: 1, 7: 'TDB', 9: 55, 10: 'TDB', 23: 'SS-303' }),
+      ],
+      sheetName: 'KK询价汇总',
+      passthrough: [],
+      sourceFileName: null,
+      importedAt: null,
+    }
+    // KV 回单顺序与材料写法都不同：殷钢(中文,不匹配→兜底) / SS 416 / SS 303（空格 vs 连字符）
+    const quotes = [
+      makeQuote('X-1', { qty: 1, amount: 15000, material: '殷钢 36', quoteEa: '9242', quoteNo: 'KV202608201' }),
+      makeQuote('X-1', { qty: 1, amount: 6500, material: 'SS 416', quoteEa: '4012', quoteNo: 'KV202608201' }),
+      makeQuote('X-1', { qty: 1, amount: 6500, material: 'SS 303', quoteEa: '4012', quoteNo: 'KV202608201' }),
+    ]
+    const plan = planMerge(master, quotes, {
+      batch: '20260818 Coen',
+      vendorSlot: 10,
+      vendorId: 'skw',
+      vendorDisplay: 'SKW',
+    })
+    expect(plan.fillCount).toBe(3) // K=TDB 占位可回填，不再另起新行
+    expect(plan.appendCount).toBe(0)
+    const merged = applyMerge(master, plan)
+    expect(merged.rows[1]!.cells[10]).toBe(6500) // SS 416 → SS-416 行
+    expect(merged.rows[2]!.cells[10]).toBe(6500) // SS 303 → SS-303 行
+    expect(merged.rows[0]!.cells[10]).toBe(15000) // 殷钢材料名对不上 → 兜底落剩余 Invar 行
+    expect(merged.rows[0]!.cells[7]).toBe(15000) // H 的 TDB 也被替换
+    expect(merged.rows[1]!.cells[20]).toBe(4012) // U 对客价带入
+  })
+
   it('找不到可填行 → 依次占用预编号空行（保留 A 序号），用完后续号新增', async () => {
     const master = await loadMaster()
     const quotes = [
