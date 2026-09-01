@@ -184,6 +184,162 @@ describe('合并规则', () => {
   })
 })
 
+describe('并入智能化（0823/0826/0828 实证规则）', () => {
+  const mk = (vals: Record<number, string | number>): { cells: (string | number | null)[] } => {
+    const cells = Array.from({ length: 33 }, () => null as string | number | null)
+    for (const [k, v] of Object.entries(vals)) cells[Number(k)] = v
+    return { cells }
+  }
+  const base = (rows: { cells: (string | number | null)[] }[]): MasterData => ({
+    rows,
+    sheetName: 'KK询价汇总',
+    passthrough: [],
+    sourceFileName: null,
+    importedAt: null,
+  })
+  const HC = { vendorSlot: 9, vendorId: 'hc', vendorDisplay: 'HC' }
+
+  it('重复拖入已并入的回单 → 全部 skip，不产生任何改动', () => {
+    const master = base([
+      mk({ 0: 1, 1: '20260819 Bo', 3: 'D-1', 6: 2, 9: 1356, 10: 1235, 22: '7Days/3 weeks+cleaning' }),
+    ])
+    const plan = planMerge(master, [makeQuote('D-1', { qty: 2, amount: 1235, lead: '3 weeks+cleaning' })], {
+      batch: '20260819 Bo',
+      vendorSlot: 10,
+      vendorId: 'skw',
+      vendorDisplay: 'SKW',
+    })
+    expect(plan.skipCount).toBe(1)
+    expect(plan.fillCount).toBe(0)
+    expect(plan.appendCount).toBe(0)
+    expect(plan.actions[0]!.changes).toHaveLength(0)
+    expect(applyMerge(master, plan).rows).toHaveLength(1)
+    // K 列是 '￥1,235.00' 文本时同样识别为一致
+    const master2 = base([mk({ 0: 1, 1: '20260819 Bo', 3: 'D-1', 6: 2, 10: '￥1,235.00' })])
+    expect(
+      planMerge(master2, [makeQuote('D-1', { qty: 2, amount: 1235 })], {
+        batch: '20260819 Bo',
+        vendorSlot: 10,
+        vendorId: 'skw',
+        vendorDisplay: 'SKW',
+      }).skipCount,
+    ).toBe(1)
+  })
+
+  it('同批次修订：价格变 → revise 原位更新，不追加', () => {
+    const master = base([mk({ 0: 1, 1: 'K', 3: 'R-1', 6: 5, 9: 170, 22: '90Days' })])
+    const plan = planMerge(master, [makeQuote('R-1', { qty: 5, amount: 200, lead: '90' })], {
+      batch: 'K',
+      ...HC,
+    })
+    expect(plan.reviseCount).toBe(1)
+    expect(plan.appendCount).toBe(0)
+    const row = applyMerge(master, plan).rows[0]!
+    expect(row.cells[9]).toBe(200)
+    expect(row.cells[6]).toBe(5)
+    expect(plan.warnings.some((w) => w.includes('修订'))).toBe(true)
+  })
+
+  it('整单重发（Kit 0826 场景）：一致行 skip、数量+价格变的行 revise 改档', () => {
+    const master = base([
+      mk({ 0: 1, 1: 'Kit X', 3: 'K-1', 6: 44, 9: 3700, 22: '90Days' }),
+      mk({ 0: 2, 1: 'Kit X', 3: 'K-2', 6: 88, 9: 170, 22: '90Days' }),
+    ])
+    const plan = planMerge(
+      master,
+      [
+        makeQuote('K-1', { qty: 44, amount: 3700, lead: '90' }),
+        makeQuote('K-2', { qty: 44, amount: 200, lead: '90' }),
+      ],
+      { batch: 'Kit X', ...HC },
+    )
+    expect(plan.skipCount).toBe(1)
+    expect(plan.reviseCount).toBe(1)
+    expect(plan.appendCount).toBe(0)
+    const rows = applyMerge(master, plan).rows
+    expect(rows).toHaveLength(2)
+    expect(rows[1]!.cells[6]).toBe(44) // 88 → 44
+    expect(rows[1]!.cells[9]).toBe(200) // 170 → 200
+  })
+
+  it('单发一行数量不同（无整单重发上下文）→ 视为新数量档追加，不改原行', () => {
+    const master = base([mk({ 0: 1, 1: 'V', 3: 'T-1', 6: 2, 9: 1200 })])
+    const plan = planMerge(master, [makeQuote('T-1', { qty: 4, amount: 650 })], { batch: 'V', ...HC })
+    expect(plan.reviseCount).toBe(0)
+    expect(plan.appendCount).toBe(1)
+    const rows = applyMerge(master, plan).rows
+    expect(rows[0]!.cells[6]).toBe(2)
+    expect(rows[0]!.cells[9]).toBe(1200)
+  })
+
+  it('数量修订遇到其他家已报价 → 不动原行，按新行并入并提醒', () => {
+    const master = base([
+      mk({ 0: 1, 1: 'B2', 3: 'M-1', 6: 88, 9: 170, 10: 500 }), // K 列凯阔已报
+      mk({ 0: 2, 1: 'B2', 3: 'M-2', 6: 3, 9: 100 }),
+    ])
+    const plan = planMerge(
+      master,
+      [
+        makeQuote('M-2', { qty: 3, amount: 100 }), // 一致 → skip（提供整单上下文）
+        makeQuote('M-1', { qty: 44, amount: 200 }),
+      ],
+      { batch: 'B2', ...HC },
+    )
+    expect(plan.skipCount).toBe(1)
+    expect(plan.reviseCount).toBe(0)
+    expect(plan.appendCount).toBe(1)
+    expect(plan.warnings.some((w) => w.includes('其他家报价'))).toBe(true)
+    expect(applyMerge(master, plan).rows[0]!.cells[6]).toBe(88)
+  })
+
+  it('KV 修订：H/U 来自同家（H=修订前槽位值）时跟随更新', () => {
+    const master = base([mk({ 0: 1, 1: 'KV1', 3: 'E-1', 6: 2, 7: 1235, 10: 1235, 20: 772 })])
+    const plan = planMerge(
+      master,
+      [makeQuote('E-1', { qty: 2, amount: 1300, quoteEa: '810', quoteNo: 'KV202609011' })],
+      { batch: 'KV1', vendorSlot: 10, vendorId: 'skw', vendorDisplay: 'SKW' },
+    )
+    expect(plan.reviseCount).toBe(1)
+    const row = applyMerge(master, plan).rows[0]!
+    expect(row.cells[10]).toBe(1300)
+    expect(row.cells[7]).toBe(1300) // H 跟随
+    expect(row.cells[20]).toBe(810) // U 跟随
+    expect(row.cells[KK_COL.quoteNo]).toBe('KV202609011')
+  })
+
+  it('修订交期变化：W 不自动改，出提醒', () => {
+    const master = base([mk({ 0: 1, 1: 'W1', 3: 'L-1', 6: 5, 9: 100, 22: '25Days/3 weeks' })])
+    const plan = planMerge(master, [makeQuote('L-1', { qty: 5, amount: 120, lead: '30' })], {
+      batch: 'W1',
+      ...HC,
+    })
+    expect(plan.reviseCount).toBe(1)
+    expect(applyMerge(master, plan).rows[0]!.cells[22]).toBe('25Days/3 weeks')
+    expect(plan.warnings.some((w) => w.includes('修订交期'))).toBe(true)
+  })
+
+  it('跨批次重询（0828 Valeryan 场景）：按新行并入 + 点名历史批次', () => {
+    const master = base([mk({ 0: 1, 1: '20260726 Valeryan', 3: 'Q-1', 6: 10, 9: 453, 10: 500 })])
+    const plan = planMerge(master, [makeQuote('Q-1', { qty: 10, amount: 339 })], {
+      batch: '20260827 Valeryan',
+      ...HC,
+    })
+    expect(plan.appendCount).toBe(1)
+    expect(plan.reviseCount).toBe(0)
+    expect(plan.warnings.some((w) => w.includes('重询') && w.includes('20260726 Valeryan'))).toBe(true)
+  })
+
+  it('整行未识别到价格（0823 Bhupen 场景）→ 警告提醒', () => {
+    const master = base([])
+    const plan = planMerge(master, [makeQuote('N-1', { qty: 8 }), makeQuote('N-2', { qty: 8 })], {
+      batch: '20260822 Bhupen',
+      ...HC,
+    })
+    expect(plan.appendCount).toBe(2)
+    expect(plan.warnings.some((w) => w.includes('未识别到价格') && w.includes('N-1'))).toBe(true)
+  })
+})
+
 describe('汇总导出', () => {
   it('无原文件：从零重建（表头逐字节 + 数据 + NEGO 透传）', async () => {
     const master = await loadMaster()

@@ -288,3 +288,42 @@ test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一
   await expect(page.getByTestId('master-row')).toHaveCount(2)
   await expect(page.locator('[data-cell="0:3"]')).toHaveText(FIXTURE_PNS[0]!)
 })
+
+test('并入智能化：重复拖入跳过、修订版原位更新', async ({ page }) => {
+  const REVISED_PATH = join(TMP, 'HCQuote20260816_TestE_rev.xlsx')
+  writeFileSync(REVISED_PATH, Buffer.from(await makeFileB({ quoteNo: '询价 20260816 Test E', priceFactor: 2 })))
+
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.setInputFiles('[data-testid=file-input]', [MASTER_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+
+  // 第一次并入：批次取自带标签；底表 PNS[0]×10 的 J 已被老批次占用 → 9 行全新增（含跨批次重询提醒）
+  await page.setInputFiles('[data-testid=file-input]', [HC_LABELED_PATH])
+  await expect(page.getByTestId('batch-input')).toHaveValue('20260816 Test E')
+  await expect(page.getByTestId('merge-warnings')).toContainText('重询')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+
+  // 重复拖入同一份 → 预览全部「跳过（已在表内）」→ 确认后行数不变
+  await page.setInputFiles('[data-testid=file-input]', [HC_LABELED_PATH])
+  await expect(page.getByTestId('merge-preview')).toContainText('跳过 9 行（已在表内）')
+  await expect(page.getByTestId('merge-preview')).toContainText('更新 0 行 · 新增 0 行')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('toast')).toContainText('跳过 9 行')
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+
+  // 拖入修订版（同批次、价格×2）→ 预览「修订 9 行」+ 修订提醒 → 原位更新，不加行
+  await page.setInputFiles('[data-testid=file-input]', [REVISED_PATH])
+  await expect(page.getByTestId('merge-preview')).toContainText('修订 9 行')
+  await expect(page.getByTestId('merge-warnings')).toContainText('识别为同批次修订报价')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('toast')).toContainText('修订 9 行')
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+  // Test E 批次的 FIXTURE_PNS[0]×10 占了首个预编号空行（文件行下标 2）：J 价 56.7 → 113.4；
+  // 老批次同件行（文件行下标 0）不受影响
+  await expect(page.locator('[data-cell="2:9"]')).toHaveText('113.4')
+  await expect(page.locator('[data-cell="0:9"]')).toHaveText('56.7')
+})

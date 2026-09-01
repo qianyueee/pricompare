@@ -44,7 +44,7 @@ export interface LoadedFile {
   confirmed: boolean
   autoMapped: boolean
   /** 已并入汇总的结果摘要 */
-  merged?: { fill: number; append: number; batch: string }
+  merged?: { fill: number; append: number; revise?: number; skip?: number; batch: string }
 }
 
 export interface PendingMaster {
@@ -401,7 +401,13 @@ export const useSession = create<SessionState>((set, get) => ({
               vendorId,
               vendorDisplay: display,
               confirmed: true,
-              merged: { fill: plan.fillCount, append: plan.appendCount, batch },
+              merged: {
+                fill: plan.fillCount,
+                append: plan.appendCount,
+                revise: plan.reviseCount,
+                skip: plan.skipCount,
+                batch,
+              },
             }
           : f,
       )
@@ -415,7 +421,7 @@ export const useSession = create<SessionState>((set, get) => ({
         undoSnapshot: null, // 并入后旧快照作废（撤销只针对手工编辑/删行/清空）
         activeMappingFileId: next?.id ?? null,
         toast: {
-          message: `已并入汇总：更新 ${plan.fillCount} 行，新增 ${plan.appendCount} 行（批次 ${batch}）`,
+          message: `已并入汇总：更新 ${plan.fillCount} 行，新增 ${plan.appendCount} 行${plan.reviseCount > 0 ? `，修订 ${plan.reviseCount} 行` : ''}${plan.skipCount > 0 ? `，跳过 ${plan.skipCount} 行（已在表内）` : ''}（批次 ${batch}）`,
         },
       }
     })
