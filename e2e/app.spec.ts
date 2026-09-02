@@ -161,6 +161,45 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.keyboard.press('Control+b')
   await expect(nego).toBeVisible()
   await expect(page.getByTestId('nego-line')).toHaveCount(6)
+
+  // 同零件号自动合并：粘贴一列里含已存在的 PNS[2] → 重复丢弃，只新增 PNS[4]
+  await page.getByTestId('nego-pn').nth(5).focus()
+  await page.evaluate(
+    ([dup, fresh]) => {
+      const el = document.querySelector('[data-ni="5:pn"]')!
+      const dt = new DataTransfer()
+      dt.setData('text/plain', `${dup}\n${fresh}`)
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    },
+    [FIXTURE_PNS[2]!, FIXTURE_PNS[4]!],
+  )
+  await expect(page.getByTestId('nego-line')).toHaveCount(7) // 6 行数据 + 1 空行
+  await expect(page.getByTestId('nego-pn').nth(5)).toHaveValue(FIXTURE_PNS[4]!)
+
+  // 数量 Tab 继承：第 5 行数量 10 → Tab → 第 6 行（PNS[4] 有 10 档）自动填 10 并聚焦
+  await page.getByTestId('nego-qty').nth(4).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('nego-qty').nth(5)).toHaveValue('10')
+  await expect(page.getByTestId('nego-qty').nth(5)).toBeFocused()
+  // 没有该档则留空：第 6 行改成 7 → Tab 到末尾空行的编号格 → 输入 PNS[5]（只有 10 档）
+  await page.getByTestId('nego-qty').nth(5).fill('7')
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('nego-pn').nth(6)).toBeFocused()
+  await page.getByTestId('nego-pn').nth(6).fill(FIXTURE_PNS[5]!)
+  await expect(page.getByTestId('nego-line')).toHaveCount(8)
+  await page.getByTestId('nego-qty').nth(5).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('nego-qty').nth(6)).toBeFocused()
+  await expect(page.getByTestId('nego-qty').nth(6)).toHaveValue('') // 7 不在档上 → 不填
+  await page.keyboard.press('Tab') // 再 Tab 继续处理下一行（末尾空行 → 编号格）
+  await expect(page.getByTestId('nego-pn').nth(7)).toBeFocused()
+
+  // 手输重复零件号：末尾空行输入已存在的 PNS[4] 回车 → 合并提示、行数不变
+  await page.getByTestId('nego-pn').nth(7).fill(FIXTURE_PNS[4]!)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('toast')).toContainText('已合并为一行')
+  await expect(page.getByTestId('nego-line')).toHaveCount(8)
+
   await page.getByTestId('nego-back-btn').click()
   await expect(nego).toBeHidden()
 })

@@ -105,6 +105,36 @@ export function resolveNegoInput(master: MasterData, pn: string, qty: number | n
   return { tiers, usedTier: used, line: buildNegoLine(master, used.rowIndex, qty) }
 }
 
+/**
+ * 比价页行按零件号合并：同一零件号（忽略大小写/首尾空白）只保留先出现的一行（含其数量），
+ * 后面的重复丢弃；零件号为空的行（末尾空行 / 正在输入）原样保留。
+ * 粘贴一列、Ctrl+B 选行、手输提交三条入口共用。
+ */
+export function dedupeNegoLinesByPn<T extends { pn: string; qty: number | null }>(lines: T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const l of lines) {
+    const key = normPn(l.pn)
+    if (key === '') {
+      out.push(l)
+      continue
+    }
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(l)
+  }
+  return out
+}
+
+/**
+ * 数量 Tab 继承：上一行输入数量后按 Tab，下一行该零件在总表里**恰有**这个数量档才继承，
+ * 否则返回 null（留空让用户手填）。
+ */
+export function carryQtyFor(master: MasterData, pn: string, carry: number | null): number | null {
+  if (carry === null) return null
+  return pnTiers(master, pn).some((t) => t.qty === carry) ? carry : null
+}
+
 export interface NegoVendor {
   slot: number
   label: string

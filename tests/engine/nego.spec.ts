@@ -5,6 +5,8 @@ import {
   buildNegoLine,
   buildNegoSummary,
   buildNegoWorkbook,
+  carryQtyFor,
+  dedupeNegoLinesByPn,
   negoToTsv,
   pnTiers,
   resolveNegoInput,
@@ -209,5 +211,37 @@ describe('negoToTsv 剪贴板表格', () => {
     expect(lines[1]).toBe('A-1\t\t\t10\t56.7\t45\t45\t567\t450\t450')
     expect(lines[2]).toBe('A-2\t\t\t5\t100\t\t100\t500\t\t500')
     expect(lines[3]).toBe('Total\t\t\t\t\t\t\t1067\t450\t950')
+  })
+})
+
+describe('比价页：同零件号合并与数量 Tab 继承', () => {
+  it('dedupeNegoLinesByPn：同零件号只留先出现的一行（忽略大小写/空白），空行保留', () => {
+    const out = dedupeNegoLinesByPn([
+      { pn: 'A-1', qty: 3 },
+      { pn: 'B-2', qty: null },
+      { pn: ' a-1 ', qty: 9 },
+      { pn: '', qty: null },
+      { pn: 'B-2', qty: 5 },
+      { pn: '', qty: null },
+    ])
+    expect(out).toEqual([
+      { pn: 'A-1', qty: 3 },
+      { pn: 'B-2', qty: null },
+      { pn: '', qty: null },
+      { pn: '', qty: null },
+    ])
+  })
+
+  it('carryQtyFor：下一件在总表里恰有该数量档才继承，否则 null', () => {
+    const master = mkMaster([
+      row({ 3: 'L-1', 6: 1, 9: 10 }),
+      row({ 3: 'L-1', 6: 6, 9: 8 }),
+      row({ 3: 'M-1', 6: 3, 9: 5 }),
+    ])
+    expect(carryQtyFor(master, 'L-1', 6)).toBe(6)
+    expect(carryQtyFor(master, 'L-1', 3)).toBeNull() // 无 3 档 → 留空手填
+    expect(carryQtyFor(master, 'M-1', 3)).toBe(3)
+    expect(carryQtyFor(master, 'NOPE', 3)).toBeNull()
+    expect(carryQtyFor(master, 'L-1', null)).toBeNull()
   })
 })

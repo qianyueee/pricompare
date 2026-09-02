@@ -19,6 +19,7 @@ import {
   type MasterData,
   type ParsedWorkbook,
   type Vendor,
+  dedupeNegoLinesByPn,
 } from '@engine/index'
 import { api } from '../api'
 
@@ -70,7 +71,7 @@ function withTrailingEmptyNego<T extends { pn: string; qty: number | null }>(lin
   if (last && isEmptyNegoLine(last)) return lines
   return [...lines, emptyNegoLine() as unknown as T]
 }
-const negoKey = (pn: string, qty: number | null) => `${pn.trim().toUpperCase()}|${qty ?? '?'}`
+const negoKey = (pn: string) => pn.trim().toUpperCase()
 /** 单元格/粘贴文本 → 数量：数字直取，文本走金额清洗（'12'、'￥12' → 12），其余 null */
 function negoQtyFrom(v: string | number | null): number | null {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
@@ -127,6 +128,8 @@ interface SessionState {
   closeNego(): void
   clearNego(): void
   setNegoPn(index: number, pn: string): void
+  /** 零件号输入提交：按零件号合并（先出现的行为准）；返回该零件号最终所在行与是否发生了合并 */
+  commitNegoPn(index: number): { index: number; merged: boolean }
   setNegoQty(index: number, qty: number | null): void
   removeNegoLine(index: number): void
   /** 类 Excel 粘贴：从 startIndex 行、col 列起铺开剪贴板网格（pn 列可带第二列数量） */
@@ -553,18 +556,18 @@ export const useSession = create<SessionState>((set, get) => ({
     set((s) => {
       const master = s.master
       const kept = s.negoLines.filter((l) => !isEmptyNegoLine(l))
-      const seen = new Set(kept.map((l) => negoKey(l.pn, l.qty)))
+      // 同零件号只保留一行（先出现的为准，含已在页内的）：选了同一件的多个数量档也只带入一行
+      const seen = new Set(kept.map((l) => negoKey(l.pn)))
       if (master) {
         for (const i of [...new Set(rowIdxs)].sort((a, b) => a - b)) {
           const cells = master.rows[i]?.cells
           if (!cells) continue
           const pn = String(cells[3] ?? '').trim()
           if (!pn) continue
-          const qty = negoQtyFrom(cells[6] ?? null)
-          const key = negoKey(pn, qty)
+          const key = negoKey(pn)
           if (seen.has(key)) continue
           seen.add(key)
-          kept.push({ id: negoSeq++, pn, qty })
+          kept.push({ id: negoSeq++, pn, qty: negoQtyFrom(cells[6] ?? null) })
         }
       }
       return { negoOpen: true, negoLines: withTrailingEmptyNego(kept) }
@@ -583,6 +586,18 @@ export const useSession = create<SessionState>((set, get) => ({
     set((s) => ({
       negoLines: withTrailingEmptyNego(s.negoLines.map((l, i) => (i === index ? { ...l, pn } : l))),
     }))
+  },
+
+  commitNegoPn(index: number) {
+    const s = get()
+    const target = s.negoLines[index]
+    if (!target || target.pn.trim() === '') return { index, merged: false }
+    const deduped = dedupeNegoLinesByPn(s.negoLines)
+    const key = negoKey(target.pn)
+    const kept = deduped.findIndex((l) => negoKey(l.pn) === key)
+    const merged = deduped.length !== s.negoLines.length
+    if (merged) set({ negoLines: withTrailingEmptyNego(deduped) })
+    return { index: kept < 0 ? index : kept, merged }
   },
 
   setNegoQty(index: number, qty: number | null) {
@@ -611,7 +626,8 @@ export const useSession = create<SessionState>((set, get) => ({
         }
         lines[idx] = line
       }
-      return { negoLines: withTrailingEmptyNego(lines) }
+      // 粘贴的一列里有重复零件号 → 只保留先出现的一行
+      return { negoLines: withTrailingEmptyNego(dedupeNegoLinesByPn(lines)) }
     })
   },
 }))
