@@ -111,8 +111,14 @@ export async function makeFileA(): Promise<ArrayBuffer> {
  * 文件 B：HC 风格。第 1 行公司抬头，表头第 3 行；价格在 J "Quote Each RMB"；
  * A4 是 #REF! 错误单元格；K–R 是 " 2"…" 9" 垃圾列；交期 W 为纯数字天数。
  */
-export async function makeFileB(opts?: { quoteNo?: string; ladder?: boolean }): Promise<ArrayBuffer> {
+export async function makeFileB(opts?: {
+  quoteNo?: string
+  ladder?: boolean
+  /** 修订报价固件：所有单价乘以该系数（同批次重发、价格有变的场景） */
+  priceFactor?: number
+}): Promise<ArrayBuffer> {
   const quoteNo = opts?.quoteNo ?? 'KT20260711B'
+  const factor = opts?.priceFactor ?? 1
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet('报价单')
   ws.getCell('B1').value = 'HC Tech LLC Quoting Template (UPDATED 20260711)'
@@ -159,7 +165,7 @@ export async function makeFileB(opts?: { quoteNo?: string; ladder?: boolean }): 
     r.getCell(5).value = FIXTURE_REVS[i]
     r.getCell(6).value = FIXTURE_DESCS[i]
     r.getCell(7).value = 10
-    r.getCell(10).value = FILE_B_PRICES[i]
+    r.getCell(10).value = FILE_B_PRICES[i]! * factor
     r.getCell(23).value = 22
     r.getCell(24).value = i % 2 === 0 ? '304 SS' : 'ALUMINUM 6061-T6'
     if (opts?.ladder) {
@@ -168,7 +174,7 @@ export async function makeFileB(opts?: { quoteNo?: string; ladder?: boolean }): 
       r2.getCell(2).value = quoteNo
       r2.getCell(3).value = i * step + 2
       r2.getCell(7).value = 20
-      r2.getCell(10).value = FILE_B_PRICES[i]! * 0.75
+      r2.getCell(10).value = FILE_B_PRICES[i]! * 0.75 * factor
       r2.getCell(23).value = 30
       r2.getCell(27).value = 'CNC'
     }

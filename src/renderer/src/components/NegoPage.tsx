@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { buildNegoSummary, buildNegoWorkbook, negoToTsv, resolveNegoInput } from '@engine/index'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { buildNegoSummary, buildNegoWorkbook, carryQtyFor, negoToTsv, resolveNegoInput } from '@engine/index'
 import type { NegoSummaryLine, PnResolution } from '@engine/index'
 import { api } from '../api'
 import { todayBatch, useSession } from '../store/session'
@@ -24,11 +24,44 @@ export default function NegoPage() {
   const closeNego = useSession((s) => s.closeNego)
   const clearNego = useSession((s) => s.clearNego)
   const setNegoPn = useSession((s) => s.setNegoPn)
+  const commitNegoPn = useSession((s) => s.commitNegoPn)
   const setNegoQty = useSession((s) => s.setNegoQty)
   const removeNegoLine = useSession((s) => s.removeNegoLine)
   const pasteNego = useSession((s) => s.pasteNego)
   const showToast = useSession((s) => s.showToast)
   const [exportingNego, setExportingNego] = useState(false)
+  /** 数量 Tab 继承：最近一次明确输入/继承的数量，跳过没有该档的行后仍沿用 */
+  const carryRef = useRef<number | null>(null)
+
+  // 零件号输入提交（失焦/回车）：同零件号只保留先出现的一行
+  const commitPn = (i: number): number => {
+    const line = negoLines[i]
+    if (!line || line.pn.trim() === '') return i
+    const r = commitNegoPn(i)
+    if (r.merged) showToast({ message: `零件号 ${line.pn.trim()} 已在第 ${r.index + 1} 行，已合并为一行` })
+    return r.index
+  }
+
+  // 数量格 Tab：跳到下一行数量格；下一行该件恰有此数量档则自动填入，否则留空手填
+  const tabFromQty = (i: number, shift: boolean): boolean => {
+    if (shift) {
+      if (i === 0) return false
+      focusCell(i - 1, 'qty')
+      return true
+    }
+    const next = negoLines[i + 1]
+    if (!next) return false
+    const cur = negoLines[i]?.qty ?? null
+    const carry = cur ?? carryRef.current
+    carryRef.current = carry
+    if (next.pn.trim() === '') {
+      focusCell(i + 1, 'pn')
+      return true
+    }
+    if (next.qty === null && master && carryQtyFor(master, next.pn, carry) !== null) setNegoQty(i + 1, carry)
+    requestAnimationFrame(() => focusCell(i + 1, 'qty'))
+    return true
+  }
 
   useEffect(() => {
     if (!open) return
@@ -199,8 +232,12 @@ export default function NegoPage() {
                       value={l.pn}
                       onChange={(e) => setNegoPn(i, e.target.value)}
                       onPaste={(e) => onPaste(e, i, 'pn')}
+                      onBlur={() => commitPn(i)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') focusCell(i, 'qty')
+                        if (e.key === 'Enter') {
+                          const kept = commitPn(i)
+                          requestAnimationFrame(() => focusCell(kept, 'qty'))
+                        }
                       }}
                       placeholder="输入或粘贴零件编号…"
                       className={`w-full rounded border px-1.5 py-1 font-mono ${
@@ -233,6 +270,7 @@ export default function NegoPage() {
                         onPaste={(e) => onPaste(e, i, 'qty')}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') focusCell(i + 1, 'pn')
+                          else if (e.key === 'Tab' && tabFromQty(i, e.shiftKey)) e.preventDefault()
                         }}
                         placeholder={tierHint || undefined}
                         title={tierHint ? `总表里的有效数量档：${tierHint}（输入其一或任意数量）` : undefined}

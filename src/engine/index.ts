@@ -55,6 +55,8 @@ export {
   buildNegoSummary,
   negoToTsv,
   resolveNegoInput,
+  dedupeNegoLinesByPn,
+  carryQtyFor,
   type PnTier,
   type PnResolution,
   type NegoLine,

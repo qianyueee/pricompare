@@ -161,6 +161,45 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.keyboard.press('Control+b')
   await expect(nego).toBeVisible()
   await expect(page.getByTestId('nego-line')).toHaveCount(6)
+
+  // 同零件号自动合并：粘贴一列里含已存在的 PNS[2] → 重复丢弃，只新增 PNS[4]
+  await page.getByTestId('nego-pn').nth(5).focus()
+  await page.evaluate(
+    ([dup, fresh]) => {
+      const el = document.querySelector('[data-ni="5:pn"]')!
+      const dt = new DataTransfer()
+      dt.setData('text/plain', `${dup}\n${fresh}`)
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    },
+    [FIXTURE_PNS[2]!, FIXTURE_PNS[4]!],
+  )
+  await expect(page.getByTestId('nego-line')).toHaveCount(7) // 6 行数据 + 1 空行
+  await expect(page.getByTestId('nego-pn').nth(5)).toHaveValue(FIXTURE_PNS[4]!)
+
+  // 数量 Tab 继承：第 5 行数量 10 → Tab → 第 6 行（PNS[4] 有 10 档）自动填 10 并聚焦
+  await page.getByTestId('nego-qty').nth(4).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('nego-qty').nth(5)).toHaveValue('10')
+  await expect(page.getByTestId('nego-qty').nth(5)).toBeFocused()
+  // 没有该档则留空：第 6 行改成 7 → Tab 到末尾空行的编号格 → 输入 PNS[5]（只有 10 档）
+  await page.getByTestId('nego-qty').nth(5).fill('7')
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('nego-pn').nth(6)).toBeFocused()
+  await page.getByTestId('nego-pn').nth(6).fill(FIXTURE_PNS[5]!)
+  await expect(page.getByTestId('nego-line')).toHaveCount(8)
+  await page.getByTestId('nego-qty').nth(5).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByTestId('nego-qty').nth(6)).toBeFocused()
+  await expect(page.getByTestId('nego-qty').nth(6)).toHaveValue('') // 7 不在档上 → 不填
+  await page.keyboard.press('Tab') // 再 Tab 继续处理下一行（末尾空行 → 编号格）
+  await expect(page.getByTestId('nego-pn').nth(7)).toBeFocused()
+
+  // 手输重复零件号：末尾空行输入已存在的 PNS[4] 回车 → 合并提示、行数不变
+  await page.getByTestId('nego-pn').nth(7).fill(FIXTURE_PNS[4]!)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('toast')).toContainText('已合并为一行')
+  await expect(page.getByTestId('nego-line')).toHaveCount(8)
+
   await page.getByTestId('nego-back-btn').click()
   await expect(nego).toBeHidden()
 })
@@ -287,4 +326,43 @@ test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一
   await page.keyboard.press('Control+z')
   await expect(page.getByTestId('master-row')).toHaveCount(2)
   await expect(page.locator('[data-cell="0:3"]')).toHaveText(FIXTURE_PNS[0]!)
+})
+
+test('并入智能化：重复拖入跳过、修订版原位更新', async ({ page }) => {
+  const REVISED_PATH = join(TMP, 'HCQuote20260816_TestE_rev.xlsx')
+  writeFileSync(REVISED_PATH, Buffer.from(await makeFileB({ quoteNo: '询价 20260816 Test E', priceFactor: 2 })))
+
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.setInputFiles('[data-testid=file-input]', [MASTER_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+
+  // 第一次并入：批次取自带标签；底表 PNS[0]×10 的 J 已被老批次占用 → 9 行全新增（含跨批次重询提醒）
+  await page.setInputFiles('[data-testid=file-input]', [HC_LABELED_PATH])
+  await expect(page.getByTestId('batch-input')).toHaveValue('20260816 Test E')
+  await expect(page.getByTestId('merge-warnings')).toContainText('重询')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+
+  // 重复拖入同一份 → 预览全部「跳过（已在表内）」→ 确认后行数不变
+  await page.setInputFiles('[data-testid=file-input]', [HC_LABELED_PATH])
+  await expect(page.getByTestId('merge-preview')).toContainText('跳过 9 行（已在表内）')
+  await expect(page.getByTestId('merge-preview')).toContainText('更新 0 行 · 新增 0 行')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('toast')).toContainText('跳过 9 行')
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+
+  // 拖入修订版（同批次、价格×2）→ 预览「修订 9 行」+ 修订提醒 → 原位更新，不加行
+  await page.setInputFiles('[data-testid=file-input]', [REVISED_PATH])
+  await expect(page.getByTestId('merge-preview')).toContainText('修订 9 行')
+  await expect(page.getByTestId('merge-warnings')).toContainText('识别为同批次修订报价')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('toast')).toContainText('修订 9 行')
+  await expect(page.getByTestId('master-row')).toHaveCount(11)
+  // Test E 批次的 FIXTURE_PNS[0]×10 占了首个预编号空行（文件行下标 2）：J 价 56.7 → 113.4；
+  // 老批次同件行（文件行下标 0）不受影响
+  await expect(page.locator('[data-cell="2:9"]')).toHaveText('113.4')
+  await expect(page.locator('[data-cell="0:9"]')).toHaveText('56.7')
 })

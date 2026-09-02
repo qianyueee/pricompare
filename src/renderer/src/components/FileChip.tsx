@@ -46,6 +46,8 @@ export default function FileChip({ file }: { file: LoadedFile }) {
         {file.merged && (
           <span data-testid="badge-merged" className="text-green-600" title={`批次 ${file.merged.batch}`}>
             已并入 +{file.merged.append}/改{file.merged.fill}
+            {(file.merged.revise ?? 0) > 0 && `/订${file.merged.revise}`}
+            {(file.merged.skip ?? 0) > 0 && `/跳${file.merged.skip}`}
           </span>
         )}
         {!file.confirmed && file.autoMapped && (

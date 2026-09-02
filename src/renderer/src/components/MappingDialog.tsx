@@ -231,18 +231,35 @@ function Inner({ file }: { file: LoadedFile }) {
           >
             <span className="font-medium text-green-700">
               并入预览：更新 {preview.fillCount} 行 · 新增 {preview.appendCount} 行
+              {preview.reviseCount > 0 && ` · 修订 ${preview.reviseCount} 行`}
+              {preview.skipCount > 0 && ` · 跳过 ${preview.skipCount} 行（已在表内）`}
             </span>
             <span className="text-green-700/70">
               {preview.actions
                 .slice(0, 5)
-                .map(
-                  (a) =>
-                    `${a.quote.pn}×${a.quote.qty ?? '—'}${a.kind === 'fill' ? `→第${a.excelRow}行` : '→新增'}`,
-                )
+                .map((a) => {
+                  const dest =
+                    a.kind === 'fill'
+                      ? `→第${a.excelRow}行`
+                      : a.kind === 'revise'
+                        ? `→修订第${a.excelRow}行`
+                        : a.kind === 'skip'
+                          ? '→已在表内'
+                          : '→新增'
+                  return `${a.quote.pn}×${a.quote.qty ?? '—'}${dest}`
+                })
                 .join('　')}
               {preview.actions.length > 5 && ` …共 ${preview.actions.length} 条`}
             </span>
             {!master && <span className="text-amber-600">当前没有汇总表，将新建一份</span>}
+          </div>
+        )}
+
+        {preview && preview.warnings.length > 0 && (
+          <div data-testid="merge-warnings" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            {preview.warnings.map((w, i) => (
+              <div key={i}>{w}</div>
+            ))}
           </div>
         )}
 
