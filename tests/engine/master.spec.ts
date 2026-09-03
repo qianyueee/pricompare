@@ -12,6 +12,7 @@ import {
   isMasterWorkbook,
   isPlaceholderRow,
   isRealQuoteNo,
+  negoSummaryFromInputs,
   parseMasterWorkbook,
   planMerge,
   readWorkbook,
@@ -383,5 +384,78 @@ describe('汇总导出', () => {
     expect(ws.getCell('J2').value).toBe(999.5)
     expect(ws.getCell('H3').value).toBe(90) // 未动的行保持
     expect(wb.getWorksheet('NEGO')!.getCell('A2').value).toBe('marker')
+  })
+
+  it('导出时把比价内容写进 NEGO sheet（补丁路径）；再次导出按表头行定位并收缩旧明细', async () => {
+    const original = await makeMasterFile()
+    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
+    const nego = negoSummaryFromInputs(master, [
+      { pn: FIXTURE_PNS[0]!, qty: 10 },
+      { pn: '0900001-000', qty: 5 },
+      { pn: 'NOPE-1', qty: 3 }, // 总表里没有 → 不计入
+    ])
+    expect(nego.lines).toHaveLength(2)
+    const out = await buildMasterWorkbook(master, original, { nego })
+    expect(out.mode).toBe('patch')
+    expect(out.negoRowsWritten).toBe(2)
+    expect(out.negoSheetName).toBe('NEGO')
+    const re = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!
+    expect(re.rows[0]!.cells[9]).toBe(56.7) // 汇总 sheet 未动
+    const g = re.passthrough.find((s) => s.name === 'NEGO')!.grid
+    expect(g[0]![1]).toBe('Basis For Negotiation') // 标题保留
+    expect(g[1]![0]).toBe('marker')
+    expect(g[2]!.slice(0, 4)).toEqual(['P/N', 'Rev', 'Description', "Q'ty"]) // 无表头 → 第 3 行起
+    expect(g[3]![0]).toBe(FIXTURE_PNS[0])
+    expect(g[3]![3]).toBe(10)
+    expect(g[4]![0]).toBe('0900001-000')
+    expect(g[5]![0]).toBe('Total')
+    // 再导出：以上次输出为底，比价只剩 1 行 → 识别到表头行、多出的旧行清空
+    const master2 = parseMasterWorkbook(readWorkbook(out.buffer), 'm2.xlsx')!
+    const nego2 = negoSummaryFromInputs(master2, [{ pn: FIXTURE_PNS[0]!, qty: 10 }])
+    const out2 = await buildMasterWorkbook(master2, out.buffer, { nego: nego2 })
+    expect(out2.mode).toBe('patch')
+    const g2 = parseMasterWorkbook(readWorkbook(out2.buffer), 'o2.xlsx')!.passthrough[0]!.grid
+    expect(g2[2]![0]).toBe('P/N')
+    expect(g2[3]![0]).toBe(FIXTURE_PNS[0])
+    expect(g2[4]![0]).toBe('Total')
+    expect((g2[5] ?? []).every((v) => v === null || String(v).trim() === '')).toBe(true) // 旧 Total 行整体清空
+    expect(g2[3]![4]).toBe(56.7) // 只剩 HC 一家：仍按表头对齐落在 HC Unit 列
+    expect(g2[3]![5]).toBeNull() // SKW Unit 列清空
+    // 比价页为空 → NEGO sheet 原样不动
+    const out3 = await buildMasterWorkbook(master2, out.buffer, { nego: negoSummaryFromInputs(master2, []) })
+    expect(out3.negoRowsWritten).toBe(0)
+  })
+
+  it('NEGO sheet 表头在第 3 行、第 20 行有页脚：明细插在中间且 XML 行号保持升序、页脚不动', async () => {
+    const base = new ExcelJS.Workbook()
+    await base.xlsx.load(await makeMasterFile())
+    const nws = base.getWorksheet('NEGO')!
+    nws.getRow(3).values = ['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal']
+    nws.getCell('A20').value = 'footer'
+    const original = (await base.xlsx.writeBuffer()) as ArrayBuffer
+    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
+    const nego = negoSummaryFromInputs(master, [
+      { pn: FIXTURE_PNS[0]!, qty: 10 },
+      { pn: '0900001-000', qty: 5 },
+    ])
+    const out = await buildMasterWorkbook(master, original, { nego })
+    expect(out.mode).toBe('patch')
+    const g = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!.passthrough[0]!.grid
+    expect(g[2]![0]).toBe('P/N') // 用户表头原样
+    expect(g[3]![0]).toBe(FIXTURE_PNS[0])
+    expect(g[4]![0]).toBe('0900001-000')
+    expect(g[5]![0]).toBe('Total')
+    expect(g[19]![0]).toBe('footer')
+    // sheetData 内 <row r> 必须升序（否则 Excel 报修复）
+    const { unzipSync } = await import('fflate')
+    const files = unzipSync(new Uint8Array(out.buffer))
+    // 我们写入的格是内联字符串，按 Total 定位 NEGO sheet 的 XML（ExcelJS 写的原有文字走共享字符串表）
+    const negoPath = Object.keys(files).find(
+      (k) => /xl\/worksheets\/sheet\d+\.xml$/.test(k) && new TextDecoder().decode(files[k]!).includes('>Total</t>'),
+    )!
+    const rowNos = [...new TextDecoder().decode(files[negoPath]!).matchAll(/<row r="(\d+)"/g)].map((m) => Number(m[1]))
+    expect(rowNos).toEqual([...rowNos].sort((a, b) => a - b))
+    expect(rowNos).toContain(4)
+    expect(rowNos).toContain(20)
   })
 })

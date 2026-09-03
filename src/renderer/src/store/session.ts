@@ -20,6 +20,7 @@ import {
   type ParsedWorkbook,
   type Vendor,
   dedupeNegoLinesByPn,
+  negoSummaryFromInputs,
 } from '@engine/index'
 import { api } from '../api'
 
@@ -519,11 +520,15 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async exportMaster() {
-    const { master, masterOriginalB64 } = get()
+    const { master, masterOriginalB64, negoLines } = get()
     if (!master) return
     set({ exporting: true })
     try {
-      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
+      // 比价页当前内容（有明细时）一并写进 NEGO sheet
+      const nego = negoSummaryFromInputs(master, negoLines)
+      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null, {
+        nego: nego.lines.length > 0 ? nego : null,
+      })
       const saved = await api.saveXlsx({
         // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
         defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,
@@ -534,9 +539,10 @@ export const useSession = create<SessionState>((set, get) => ({
           masterDirty: false,
           toast: {
             message:
-              out.mode === 'rewrite'
+              (out.mode === 'rewrite'
                 ? '汇总表已导出（注意：保真补丁失败，本次为降级导出，公式/样式可能有损，请反馈）'
-                : '汇总表已导出',
+                : '汇总表已导出') +
+              (out.negoRowsWritten > 0 ? `（比价 ${out.negoRowsWritten} 行已写入 ${out.negoSheetName} sheet）` : ''),
             path: saved.path,
           },
         })

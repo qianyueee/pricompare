@@ -45,7 +45,7 @@ export {
   type BatchSuggestion,
   type BatchSibling,
 } from './master/batchMatch'
-export { buildMasterWorkbook, type MasterExportOutput } from './master/exportMaster'
+export { buildMasterWorkbook, type MasterExportOutput, type MasterExportOptions } from './master/exportMaster'
 export { buildNegoWorkbook } from './export/exportNego'
 export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
 export { deleteMasterRows, clearMasterCells } from './master/edit'
@@ -57,6 +57,10 @@ export {
   resolveNegoInput,
   dedupeNegoLinesByPn,
   carryQtyFor,
+  negoTable,
+  negoSummaryFromInputs,
+  planNegoSheetWrite,
+  type NegoSheetPlan,
   type PnTier,
   type PnResolution,
   type NegoLine,
@@ -65,4 +69,4 @@ export {
   type NegoSummaryLine,
 } from './master/nego'
 export { KK_VENDOR_SLOT_HEADERS } from './export/kkLayout'
-export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult } from './master/patchExport'
+export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult, type ExtraSheetPatch } from './master/patchExport'

@@ -8,6 +8,7 @@ import {
   carryQtyFor,
   dedupeNegoLinesByPn,
   negoToTsv,
+  planNegoSheetWrite,
   pnTiers,
   resolveNegoInput,
 } from '@engine/index'
@@ -243,5 +244,96 @@ describe('比价页：同零件号合并与数量 Tab 继承', () => {
     expect(carryQtyFor(master, 'M-1', 3)).toBe(3)
     expect(carryQtyFor(master, 'NOPE', 3)).toBeNull()
     expect(carryQtyFor(master, 'L-1', null)).toBeNull()
+  })
+})
+
+describe('导出时写入 NEGO sheet：planNegoSheetWrite', () => {
+  const summaryOf = () => {
+    const master = mkMaster([
+      row({ 3: 'A-1', 6: 10, 9: 56.7, 10: 45 }),
+      row({ 3: 'A-2', 6: 5, 9: 100 }),
+    ])
+    return buildNegoSummary([buildNegoLine(master, 0), buildNegoLine(master, 1)])
+  }
+  const HEAD: MasterCell[] = [null, 'P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal']
+
+  it('找到用户表头行 → 明细从下一行起、对齐起始列；表头与一致的格不动；多出的旧行清空', () => {
+    const grid: MasterCell[][] = [
+      [null, 'Basis For Negotiation'],
+      [],
+      HEAD,
+      [null, 'OLD-1', 'AA', 'old', 1, 10, 20, 10, 10, 20, 10],
+      [null, 'OLD-2', 'AA', 'old', 2, 5, null, 5, 10, null, 10],
+      [null, 'OLD-3', 'AA', 'old', 3, 5, null, 5, 15, null, 15],
+      [null, 'Total', null, null, null, null, null, null, 35, 20, 35],
+    ]
+    const plan = planNegoSheetWrite(grid, summaryOf())
+    expect(plan.headerFound).toBe(true)
+    expect(plan.startRow).toBe(2)
+    expect(plan.startCol).toBe(1)
+    expect(plan.lineCount).toBe(2)
+    expect(plan.writes.has(2)).toBe(false) // 用户自己的表头行不改
+    expect(plan.writes.get(3)!.get(1)).toBe('A-1')
+    expect(plan.writes.get(3)!.get(4)).toBe(10)
+    expect(plan.writes.get(3)!.get(5)).toBe(56.7)
+    expect(plan.writes.get(4)!.get(1)).toBe('A-2')
+    // 第 3 条明细位置改成 Total 行：'Total' 与合计写入，空列清空
+    expect(plan.writes.get(5)!.get(1)).toBe('Total')
+    expect(plan.writes.get(5)!.get(8)).toBe(1067)
+    expect(plan.writes.get(5)!.get(9)).toBe(450)
+    expect(plan.writes.get(5)!.get(10)).toBe(950)
+    expect(plan.writes.get(5)!.get(2)).toBeNull() // 旧 'AA' 清空
+    // 原 Total 行（第 6 行）整体清空
+    expect(plan.writes.get(6)!.get(1)).toBeNull()
+    expect(plan.writes.get(6)!.get(8)).toBeNull()
+  })
+
+  it('没有表头行（如只有标题）→ 从标题下方第 3 行起连表头一起写', () => {
+    const grid: MasterCell[][] = [[null, 'Basis For Negotiation'], ['marker']]
+    const plan = planNegoSheetWrite(grid, summaryOf())
+    expect(plan.headerFound).toBe(false)
+    expect(plan.startRow).toBe(2)
+    expect(plan.startCol).toBe(0)
+    expect(plan.writes.get(2)!.get(0)).toBe('P/N')
+    expect(plan.writes.get(2)!.get(3)).toBe("Q'ty")
+    expect(plan.writes.get(3)!.get(0)).toBe('A-1')
+    expect(plan.writes.get(5)!.get(0)).toBe('Total')
+    expect(plan.writes.has(0)).toBe(false) // 标题区不动
+  })
+
+  it('按表头文字对齐列：只剩 HC 一家时数据仍落在 HC 列、SKW 列清空；表头没有的列追加并补表头', () => {
+    const master = mkMaster([row({ 3: 'A-1', 6: 10, 9: 56.7 })])
+    const hcOnly = buildNegoSummary([buildNegoLine(master, 0)]) // vendors = [HC]
+    const grid: MasterCell[][] = [
+      [null, 'Basis For Negotiation'],
+      [],
+      [null, 'P/N', 'Rev', 'Description', 'Qty', 'HC Unit (RMB)', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal'],
+      [null, 'OLD-1', 'AA', 'old', 1, 10, 20, 10, 10, 20, 10],
+      [null, 'Total', null, null, null, null, null, null, 10, 20, 10],
+    ]
+    const plan = planNegoSheetWrite(grid, hcOnly)
+    expect(plan.headerFound).toBe(true)
+    const r3 = plan.writes.get(3)!
+    expect(r3.get(1)).toBe('A-1')
+    expect(r3.get(4)).toBe(10) // Qty ≈ Q'ty
+    expect(r3.get(5)).toBe(56.7) // HC Unit (RMB) ≈ HC Unit
+    expect(r3.get(6)).toBeNull() // SKW Unit 清空
+    expect(r3.get(7)).toBe(56.7) // Min
+    expect(r3.get(8)).toBe(567) // HC Total
+    expect(r3.get(9)).toBeNull() // SKW Total 清空
+    expect(r3.get(10)).toBe(567) // Optimal
+    expect(plan.writes.get(4)!.get(8)).toBe(567) // Total 行 HC 合计
+    expect(plan.writes.has(2)).toBe(false) // 表头行未改
+    // 表头里没有 SKW 列时：追加在末尾并写表头文字
+    const master2 = mkMaster([row({ 3: 'B-1', 6: 2, 9: 10, 10: 8 })])
+    const both = buildNegoSummary([buildNegoLine(master2, 0)])
+    const grid2: MasterCell[][] = [[null, 'P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'Min', 'HC Total', 'Optimal']]
+    const plan2 = planNegoSheetWrite(grid2, both)
+    expect(plan2.writes.get(0)!.get(9)).toBe('SKW Unit')
+    expect(plan2.writes.get(0)!.get(10)).toBe('SKW Total')
+    expect(plan2.writes.get(1)!.get(9)).toBe(8)
+    expect(plan2.writes.get(1)!.get(5)).toBe(10)
+    expect(plan2.writes.get(1)!.get(6)).toBe(8) // Min
+    expect(plan2.writes.get(1)!.get(10)).toBe(16) // SKW Total 2×8
   })
 })

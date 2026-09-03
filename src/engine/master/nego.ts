@@ -185,9 +185,9 @@ export function buildNegoSummary(lines: NegoLine[]): NegoSummary {
   return { vendors, lines: summaryLines, perVendor, optimalSum }
 }
 
-/** NEGO sheet 同构布局的 TSV（可直接粘贴进 Excel） */
-export function negoToTsv(summary: NegoSummary): string {
-  const head = [
+/** NEGO sheet 同构表格（表头 / 明细 / Total 合计行）：「复制为表格」与导出时写入 NEGO sheet 共用 */
+export function negoTable(summary: NegoSummary): MasterCell[][] {
+  const head: MasterCell[] = [
     'P/N',
     'Rev',
     'Description',
@@ -197,25 +197,169 @@ export function negoToTsv(summary: NegoSummary): string {
     ...summary.vendors.map((v) => `${v.label} Total`),
     'Optimal',
   ]
-  const rows = summary.lines.map((l) => [
+  const rows: MasterCell[][] = summary.lines.map((l) => [
     l.pn,
     l.rev,
     l.description,
-    l.qty ?? '',
-    ...summary.vendors.map((v) => l.unit[v.slot] ?? ''),
-    l.minUnit ?? '',
-    ...summary.vendors.map((v) => l.totals[v.slot] ?? ''),
-    l.optimalTotal ?? '',
+    l.qty,
+    ...summary.vendors.map((v) => l.unit[v.slot] ?? null),
+    l.minUnit,
+    ...summary.vendors.map((v) => l.totals[v.slot] ?? null),
+    l.optimalTotal,
   ])
-  const totalRow = [
+  const totalRow: MasterCell[] = [
     'Total', // 粘贴目标 NEGO sheet 为英文表，合计行不用中文
-    '',
-    '',
-    '',
-    ...summary.vendors.map(() => ''),
-    '',
+    null,
+    null,
+    null,
+    ...summary.vendors.map(() => null),
+    null,
     ...summary.perVendor.map((v) => v.sum),
     summary.optimalSum,
   ]
-  return [head, ...rows, totalRow].map((r) => r.join('\t')).join('\n')
+  return [head, ...rows, totalRow]
+}
+
+/** NEGO sheet 同构布局的 TSV（可直接粘贴进 Excel） */
+export function negoToTsv(summary: NegoSummary): string {
+  return negoTable(summary)
+    .map((r) => r.map((v) => (v === null || v === undefined ? '' : String(v))).join('\t'))
+    .join('\n')
+}
+
+/** 比价页输入（编号 + 下单数量）→ 汇总；未找到编号或数量未填的行不计入 */
+export function negoSummaryFromInputs(master: MasterData, inputs: { pn: string; qty: number | null }[]): NegoSummary {
+  const lines: NegoLine[] = []
+  for (const it of inputs) {
+    if (it.pn.trim() === '') continue
+    const res = resolveNegoInput(master, it.pn, it.qty)
+    if (res.line) lines.push(res.line)
+  }
+  return buildNegoSummary(lines)
+}
+
+export interface NegoSheetPlan {
+  /** 是否找到了用户 NEGO sheet 自己的表头行（含 P/N 与 Q'ty 的行） */
+  headerFound: boolean
+  /** 0 基：找到表头时为表头行（明细从下一行起）；否则为我们写入表头的行 */
+  startRow: number
+  startCol: number
+  /** 0 基 (行 → 列 → 值)，null = 清空旧内容 */
+  writes: Map<number, Map<number, MasterCell>>
+  lineCount: number
+}
+
+const isBlank = (v: MasterCell | undefined): boolean => v === null || v === undefined || String(v).trim() === ''
+
+/** 表头文字归一化：去括号内容/空格/标点、小写，并归并常见同义写法（Q'ty≈Qty≈Quantity、P/N≈PN） */
+function canonHeader(v: MasterCell | undefined): string {
+  let k = String(v ?? '')
+    .toLowerCase()
+    .replace(/[（(][^)）]*[)）]/g, '')
+    .replace(/[\s'’"`.,_\-/\\:：]/g, '')
+  if (k === 'quantity' || k === 'qty' || k === 'quan') k = 'qty'
+  if (k === 'partnumber' || k === 'partno' || k === 'pn' || k === '零件号' || k === '编号') k = 'pn'
+  if (k === 'desc') k = 'description'
+  if (k === 'minimum' || k === 'lowest') k = 'min'
+  if (k === 'best') k = 'optimal'
+  return k
+}
+
+/**
+ * 导出总表时把比价内容写进 NEGO sheet：
+ * - 找到 sheet 里含 P/N 与 Q'ty 的表头行 → 明细从其下一行起，**按表头文字对齐列**
+ *   （HC Unit / SKW Total 等各归各列；表头里没有的列追加在末尾并补上表头文字），不动用户已有的表头；
+ * - 找不到 → 从最后一个非空行之后（至少第 3 行，保留标题区）起连表头一起写；
+ * - 旧明细（表头下 P/N 列连续非空块，含 Total 行）在表头宽度内整体清空后重写，表格下方的备注/页脚不动；\n *   与现值一致的格不动（用户自己写的公式若结果一致也保留）。
+ */
+export function planNegoSheetWrite(grid: MasterCell[][], summary: NegoSummary): NegoSheetPlan {
+  const table = negoTable(summary)
+  const head = table[0]!
+  let headerRow = -1
+  for (let r = 0; r < grid.length; r++) {
+    const row = grid[r] ?? []
+    if (!row.some((v) => canonHeader(v) === 'pn')) continue
+    if (!row.some((v) => canonHeader(v) === 'qty')) continue
+    headerRow = r
+    break
+  }
+  let dataStart: number
+  let body: MasterCell[][]
+  /** 我们表格第 i 列 → sheet 列 */
+  let colFor: number[]
+  let spanStart: number
+  let spanEnd: number
+  const writes = new Map<number, Map<number, MasterCell>>()
+  const set = (r: number, c: number, v: MasterCell) => {
+    let m = writes.get(r)
+    if (!m) {
+      m = new Map()
+      writes.set(r, m)
+    }
+    m.set(c, v)
+  }
+  if (headerRow >= 0) {
+    const hdr = grid[headerRow] ?? []
+    const sheetCols = new Map<string, number>()
+    let lastHeaderCol = -1
+    hdr.forEach((v, c) => {
+      if (isBlank(v)) return
+      lastHeaderCol = c
+      const key = canonHeader(v)
+      if (!sheetCols.has(key)) sheetCols.set(key, c)
+    })
+    colFor = head.map((label) => {
+      const key = canonHeader(label)
+      const c = sheetCols.get(key)
+      if (c !== undefined) return c
+      lastHeaderCol += 1
+      sheetCols.set(key, lastHeaderCol)
+      set(headerRow, lastHeaderCol, label) // 表头里没有的列：追加并补表头文字
+      return lastHeaderCol
+    })
+    spanStart = Math.min(...colFor, sheetCols.get('pn')!)
+    spanEnd = lastHeaderCol
+    dataStart = headerRow + 1
+    body = table.slice(1)
+  } else {
+    let last = -1
+    grid.forEach((row, r) => {
+      if (row.some((v) => !isBlank(v))) last = r
+    })
+    dataStart = Math.max(2, last + 1)
+    body = table
+    colFor = head.map((_, i) => i)
+    spanStart = 0
+    spanEnd = head.length - 1
+  }
+  // 旧明细范围：表头下 P/N 列连续非空的块（含结尾的 Total 行）；再往下的备注/页脚不动
+  let oldEnd = dataStart - 1
+  for (let r = dataStart; r < grid.length; r++) {
+    const pnCell = grid[r]?.[colFor[0]!]
+    if (isBlank(pnCell)) break
+    oldEnd = r
+    if (canonHeader(pnCell) === 'total') break
+  }
+  const newEnd = dataStart + body.length - 1
+  for (let r = dataStart; r <= Math.max(newEnd, oldEnd); r++) {
+    const src = body[r - dataStart]
+    const target = new Map<number, MasterCell>()
+    for (let c = spanStart; c <= spanEnd; c++) target.set(c, null)
+    if (src) colFor.forEach((c, i) => target.set(c, src[i] ?? null))
+    for (const [c, v] of target) {
+      const oldRaw = grid[r]?.[c]
+      const old: MasterCell = isBlank(oldRaw) ? null : (oldRaw as MasterCell)
+      if (old === v) continue
+      if (typeof old === 'number' && typeof v === 'number' && Math.abs(old - v) < 1e-9) continue
+      if (old !== null && v !== null && String(old) === String(v)) continue
+      set(r, c, v)
+    }
+  }
+  return {
+    headerFound: headerRow >= 0,
+    startRow: headerRow >= 0 ? headerRow : dataStart,
+    startCol: spanStart,
+    writes,
+    lineCount: summary.lines.length,
+  }
 }
