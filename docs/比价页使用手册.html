@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>比价页使用手册</title>
+<style>
+  :root {
+    --paper: #fafbfd;
+    --card: #ffffff;
+    --ink: #1e2635;
+    --muted: #5c6a80;
+    --line: #dfe5ee;
+    --accent: #2c5cc5;
+    --accent-ink: #24479c;
+    --accent-soft: #e9effc;
+    --ok: #1d7a44;
+    --ok-bg: #ddf2e4;
+    --warn: #96660f;
+    --warn-bg: #faeed3;
+    --code-bg: #eef1f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0f141d;
+      --card: #161d29;
+      --ink: #e4e9f3;
+      --muted: #93a0b4;
+      --line: #2a3444;
+      --accent: #85a8f2;
+      --accent-ink: #a7c0f7;
+      --accent-soft: #1c2941;
+      --ok: #5fc98a;
+      --ok-bg: #14301f;
+      --warn: #d9a84e;
+      --warn-bg: #33270f;
+      --code-bg: #1e2735;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0f141d;
+    --card: #161d29;
+    --ink: #e4e9f3;
+    --muted: #93a0b4;
+    --line: #2a3444;
+    --accent: #85a8f2;
+    --accent-ink: #a7c0f7;
+    --accent-soft: #1c2941;
+    --ok: #5fc98a;
+    --ok-bg: #14301f;
+    --warn: #d9a84e;
+    --warn-bg: #33270f;
+    --code-bg: #1e2735;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.85;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono, kbd, code, .col {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px 80px; }
+
+  /* ---- header ---- */
+  header { padding: 52px 0 30px; border-bottom: 1px solid var(--line); }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .eyebrow b { color: var(--accent); font-weight: 600; }
+  h1 {
+    margin: 0 0 12px; font-size: 34px; line-height: 1.25; font-weight: 700;
+    letter-spacing: .01em; text-wrap: balance;
+  }
+  .lede { margin: 0; max-width: 46rem; color: var(--muted); }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 22px; }
+  .flow a {
+    display: inline-block; padding: 5px 14px; border: 1px solid var(--line);
+    border-radius: 999px; background: var(--card); color: var(--ink);
+    text-decoration: none; font-size: 13px; font-weight: 500;
+  }
+  .flow a:hover, .flow a:focus-visible { border-color: var(--accent); color: var(--accent-ink); }
+  .flow .arr { color: var(--muted); font-size: 12px; }
+
+  /* ---- layout ---- */
+  .grid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 44px; padding-top: 34px; }
+  nav.toc { position: sticky; top: 24px; align-self: start; font-size: 13px; }
+  nav.toc .toc-title {
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  nav.toc a {
+    display: block; padding: 4px 10px; border-left: 2px solid var(--line);
+    color: var(--muted); text-decoration: none; line-height: 1.5;
+  }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent-ink); border-left-color: var(--accent); }
+  main { max-width: 46rem; min-width: 0; }
+  @media (max-width: 940px) {
+    .grid { grid-template-columns: 1fr; gap: 28px; }
+    nav.toc { position: static; }
+    nav.toc ol { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+    nav.toc a { border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; }
+  }
+
+  /* ---- sections ---- */
+  section { padding: 34px 0 6px; }
+  section + section { border-top: 1px solid var(--line); }
+  h2 { margin: 0 0 16px; font-size: 21px; line-height: 1.35; font-weight: 700; text-wrap: balance; }
+  h2 .idx { color: var(--accent); font-weight: 700; margin-right: 10px; font-variant-numeric: tabular-nums; }
+  h3 { margin: 26px 0 10px; font-size: 16px; font-weight: 700; }
+  p { margin: 0 0 14px; }
+  ul, ol.list { margin: 0 0 14px; padding-left: 1.4em; }
+  li { margin: 4px 0; }
+  a { color: var(--accent-ink); }
+  strong { font-weight: 650; }
+
+  .note {
+    margin: 16px 0; padding: 12px 16px; border-left: 3px solid var(--accent);
+    background: var(--accent-soft); border-radius: 0 8px 8px 0; font-size: 14px;
+  }
+  .note p { margin: 0; }
+
+  kbd {
+    display: inline-block; padding: 1px 7px; font-size: 12.5px;
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px;
+    background: var(--card); line-height: 1.6; white-space: nowrap;
+  }
+  code {
+    background: var(--code-bg); padding: 1px 6px; border-radius: 5px;
+    font-size: 13px; white-space: nowrap;
+  }
+  .col {
+    display: inline-block; min-width: 20px; padding: 0 4px; text-align: center;
+    font-size: 12px; font-weight: 600; line-height: 1.55;
+    border: 1px solid var(--line); border-radius: 3px;
+    background: var(--card); color: var(--muted);
+  }
+  .sw { display: inline-block; padding: 1px 9px; border-radius: 4px; font-size: 13px; white-space: nowrap; }
+  .sw.ok { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+  .sw.warn { background: var(--warn-bg); color: var(--warn); }
+
+  /* ---- tables ---- */
+  .tw { overflow-x: auto; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; line-height: 1.6; }
+  th, td { padding: 8px 14px; text-align: left; vertical-align: top; border-top: 1px solid var(--line); }
+  thead th {
+    border-top: none; font-size: 12px; letter-spacing: .05em; color: var(--muted);
+    font-weight: 600; background: color-mix(in srgb, var(--card) 60%, var(--paper));
+    white-space: nowrap;
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td .sw { font-size: 12.5px; }
+  .demo td.min { background: var(--ok-bg); color: var(--ok); font-weight: 650; }
+  .demo tfoot td { font-weight: 650; background: color-mix(in srgb, var(--card) 60%, var(--paper)); }
+  .demo caption {
+    caption-side: bottom; text-align: left; padding: 8px 14px 10px;
+    color: var(--muted); font-size: 12.5px;
+  }
+
+  /* ---- FAQ ---- */
+  .faq dt { font-weight: 650; margin: 18px 0 4px; }
+  .faq dd { margin: 0 0 4px; color: var(--muted); }
+  .faq dd strong { color: var(--ink); }
+
+  footer {
+    margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--muted);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow"><b>PriCompare</b> · v0.11.0 · 比价页</p>
+    <h1>比价页使用手册（简明版）</h1>
+    <p class="lede">参照汇总表里的 NEGO sheet：把几个零件的各家单价并排，按下单数量算「全给一家 vs 最优拆分」的总额。五步看完就能用。</p>
+    <div class="flow">
+      <a href="#s1">进入</a><span class="arr">→</span>
+      <a href="#s2">填编号</a><span class="arr">→</span>
+      <a href="#s3">填数量</a><span class="arr">→</span>
+      <a href="#s4">看结果</a><span class="arr">→</span>
+      <a href="#s5">拿走结果</a>
+    </div>
+  </header>
+
+  <div class="grid">
+    <nav class="toc" aria-label="目录">
+      <p class="toc-title">目录</p>
+      <ol>
+        <li><a href="#s1">1 进入 / 退出</a></li>
+        <li><a href="#s2">2 填编号</a></li>
+        <li><a href="#s3">3 填数量</a></li>
+        <li><a href="#s4">4 看结果</a></li>
+        <li><a href="#s5">5 把结果拿走</a></li>
+        <li><a href="#s6">一分钟上手</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section id="s1">
+        <h2><span class="idx">1</span>进入 / 退出</h2>
+        <ul>
+          <li>汇总页点 <span class="col">A</span> 列选中要比的行 → 按 <kbd>Ctrl+B</kbd>（或点「比价」按钮），所选行自动带入；</li>
+          <li>不选行也能直接进，进去后自己输编号；</li>
+          <li>「← 返回汇总」或 <kbd>Esc</kbd> 回汇总页。<strong>页内内容会保留</strong>，下次进来接着用；想重来点「清空」。</li>
+        </ul>
+      </section>
+
+      <section id="s2">
+        <h2><span class="idx">2</span>填编号</h2>
+        <ul>
+          <li>编号格直接打字；或在 Excel 里复制<strong>一列编号</strong>（或<strong>编号 + 数量两列</strong>）→ 点进编号格 <kbd>Ctrl+V</kbd>，自动一行行铺开；</li>
+          <li><strong>同一个零件号只保留一行</strong>（先出现的为准），重复的自动丢掉，手输重复会提示已合并到第几行；</li>
+          <li>编号在总表里找不到会标红「总表中未找到该编号」；</li>
+          <li>行尾 ✕ 删掉这一行；末尾永远留一空行可以继续加。</li>
+        </ul>
+      </section>
+
+      <section id="s3">
+        <h2><span class="idx">3</span>填数量</h2>
+        <ul>
+          <li>编号填好后，数量格里灰字显示总表里这个件<strong>有哪些数量档</strong>，如 <code>1/3/6</code>；</li>
+          <li>输入数量后按 <kbd>Tab</kbd>：光标跳到下一行的数量格——下一件如果<strong>有同样的数量档</strong>就自动填上（文字是选中状态，要改直接打字），没有就留空等你手填；再按 <kbd>Tab</kbd> 用同一个数量继续往下（<kbd>Shift+Tab</kbd> 回上一行）；</li>
+          <li>数量不在档上时按阶梯取 <strong>≤数量的最大档</strong>单价，行内显示「取 X 档」；</li>
+          <li>这里改的数量<strong>只用于比价，不会回写汇总表</strong>。</li>
+        </ul>
+        <h3><kbd>Tab</kbd> 一路往下填数量，具体是怎么走的</h3>
+        <p>举个例子，比价页里有 4 个件，总表里各自有的数量档是：</p>
+        <div class="tw"><table>
+          <thead><tr><th>行</th><th>零件</th><th>总表里的数量档</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>A</td><td>1 / 3 / 6</td></tr>
+            <tr><td>2</td><td>B</td><td>3 / 6</td></tr>
+            <tr><td>3</td><td>C</td><td>10</td></tr>
+            <tr><td>4</td><td>D</td><td>3</td></tr>
+          </tbody>
+        </table></div>
+        <ol class="list">
+          <li>点第 1 行数量格，输入 <strong>3</strong>，按 <kbd>Tab</kbd> → 光标跳到第 2 行；B 件有 3 这个档 → <strong>自动填 3</strong>（数字是选中状态，不满意直接打字替换）；</li>
+          <li>再按 <kbd>Tab</kbd> → 第 3 行 C 件<strong>没有 3 档</strong> → 留空，光标停在这里等你决定：要么手填（比如 10），要么什么都不填直接再按 <kbd>Tab</kbd> 跳过；</li>
+          <li>如果你跳过了第 3 行，再按 <kbd>Tab</kbd> 到第 4 行时，<strong>往下传的数量还是 3</strong>（沿用最近一次有值的格）→ D 件有 3 档 → 自动填 3；如果你在第 3 行手填了 10，往下传的就变成 10 → D 件没有 10 档 → 留空。</li>
+        </ol>
+        <p>几条规则：</p>
+        <ul>
+          <li>每次按 <kbd>Tab</kbd>，往下传的数量 = <strong>当前格的数量</strong>；当前格是空的（刚跳过没填）就沿用上一次的数量；</li>
+          <li>下一行<strong>恰好有这个数量档</strong>才自动填，没有就留空——总表里的单价是按数量档报的，硬填一个没报过的数量会让单价按阶梯回落（显示「取 X 档」），容易看错；</li>
+          <li>下一行已经有数量的<strong>不会被覆盖</strong>，只是光标跳过去（数字选中，想改就打字）；</li>
+          <li>下一行还没填编号 → <kbd>Tab</kbd> 跳到它的编号格；</li>
+          <li><kbd>Shift+Tab</kbd> 回上一行数量格，不改任何值。</li>
+        </ul>
+      </section>
+
+      <section id="s4">
+        <h2><span class="idx">4</span>看结果</h2>
+        <div class="tw"><table>
+          <thead><tr><th>列</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td>各家单价(¥)</td><td>出现过报价的供应商各一列，<span class="sw ok">绿色 = 本行最低</span></td></tr>
+            <tr><td>最低单价(¥)</td><td>本行各家里最低的</td></tr>
+            <tr><td>各家总价(¥)</td><td>该家单价 × 数量</td></tr>
+            <tr><td>最优总价(¥)</td><td>本行最低单价 × 数量</td></tr>
+          </tbody>
+        </table></div>
+        <p>底部合计行：各家总额（某家有没报的行会标「缺 N 行」，只合计已报的）与<strong>最优拆分总额</strong>（绿色）——两者的差就是谈判空间。</p>
+      </section>
+
+      <section id="s5">
+        <h2><span class="idx">5</span>把结果拿走</h2>
+        <ul>
+          <li><strong>复制为表格</strong>：放进剪贴板，回 Excel <kbd>Ctrl+V</kbd> 即可（NEGO 布局，含 Total 行）；</li>
+          <li><strong>导出表格</strong>：生成独立的 <code>NEGO_日期.xlsx</code>（全英文，最低价绿色高亮），可直接对外转发；</li>
+          <li><strong>导出汇总表</strong>时，比价页当前内容会<strong>自动写进总表的 NEGO sheet</strong>（按表头文字对齐各列，旧明细替换、表格下方备注不动；比价页空着则 NEGO sheet 原样不动）。</li>
+        </ul>
+      </section>
+
+      <section id="s6">
+        <h2><span class="idx">✓</span>一分钟上手</h2>
+        <ol class="list">
+          <li>Excel 里复制要比的一列零件号 → 比价页编号格 <kbd>Ctrl+V</kbd>；</li>
+          <li>第一行数量格输入下单数量 → 一路按 <kbd>Tab</kbd>：下一件有同样数量档的自动填上，没有的留空等你手填（填完或直接再按 <kbd>Tab</kbd> 继续，往下传的是最近一次有值的数量）；</li>
+          <li>看绿色最低价和底部「最优」合计；</li>
+          <li>「复制为表格」贴回 NEGO sheet，或直接「导出汇总表」一并写入。</li>
+        </ol>
+      </section>
+
+      <footer>
+        询价比价系统 v0.11.0 · 完整功能手册见仓库 <span class="mono">docs/功能文档.md</span> · 本页同步存于 <span class="mono">docs/比价页使用手册.md</span>
+      </footer>
+    </main>
+  </div>
+</div>
+</body>
+</html>
