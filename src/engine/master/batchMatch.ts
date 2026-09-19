@@ -1,4 +1,3 @@
-import { KK_COL } from '../export/kkLayout'
 import { guessBatchLabel } from './merge'
 import { isDataRow, type MasterCell, type MasterData } from './model'
 import type { QuoteRow } from '../types'
@@ -50,10 +49,10 @@ export function suggestBatchFromMaster(
     for (let i = master.rows.length - 1; i >= 0; i--) {
       const row = master.rows[i]!
       if (!isDataRow(row)) continue
-      if (normPn(row.cells[KK_COL.pn]) !== normPn(q.pn)) continue
-      if (!numEq(row.cells[KK_COL.qty] ?? null, q.qty)) continue
+      if (normPn(row.cells[master.layout.pn]) !== normPn(q.pn)) continue
+      if (!numEq(row.cells[master.layout.qty] ?? null, q.qty)) continue
       matchedRows++
-      const label = String(row.cells[KK_COL.name] ?? '').trim()
+      const label = String(row.cells[master.layout.name] ?? '').trim()
       if (label) {
         const e = byLabel.get(label)
         if (e) {

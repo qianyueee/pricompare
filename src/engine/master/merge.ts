@@ -1,7 +1,6 @@
 import { formatLeadTime } from '../normalize/leadtime'
 import { cleanAmountString } from './clean'
-import { KK_COL } from '../export/kkLayout'
-import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
+import { isPlaceholderRow, type MasterCell, type MasterData, type MasterLayout, type MasterRow } from './model'
 import type { QuoteRow } from '../types'
 
 /**
@@ -24,7 +23,7 @@ import type { QuoteRow } from '../types'
 export interface MergeOptions {
   /** 汇总 B 列批次名（如 "20260814 Natalie A"） */
   batch: string
-  /** 该供应商在汇总里的列（0 基，I–N 为 8–13） */
+  /** 该供应商在汇总里的价格列（0 基物理列，取自 layout.vendorSlots） */
   vendorSlot: number
   vendorId: string
   vendorDisplay: string
@@ -138,6 +137,11 @@ function numericOr(v: string): MasterCell {
 
 export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOptions): MergePlan {
   const rows = master.rows
+  const KK_COL: MasterLayout = master.layout
+  const KK_COL_COUNT = KK_COL.colCount
+  const vendorCols = KK_COL.vendorSlots.map((v) => v.col)
+  /** 本家在供应商列里的次序（Mao=0、HC=1…）：W 交期拼接时靠左的家放前面 */
+  const vendorPos = vendorCols.indexOf(opts.vendorSlot)
   const claimed = new Set<number>()
   const actions: MergeAction[] = []
   const warnings: string[] = []
@@ -170,7 +174,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     const cells = row?.cells ?? Array.from({ length: KK_COL_COUNT }, () => null as MasterCell)
     const changes: MergeChange[] = []
     const set = (col: number, to: MasterCell) => {
-      if (cells[col] === to) return
+      if (col < 0 || cells[col] === to) return
       changes.push({ col, from: cells[col] ?? null, to })
     }
     // 供应商价格列
@@ -202,7 +206,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       else if (!existing.split('/').includes(fmt)) {
         set(
           KK_COL.leadTime,
-          opts.vendorSlot <= KK_COL.vendorSlotStart + 1 ? `${fmt}/${existing}` : `${existing}/${fmt}`,
+          vendorPos >= 0 && vendorPos <= 1 ? `${fmt}/${existing}` : `${existing}/${fmt}`,
         )
       }
     }
@@ -249,7 +253,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     const cells = row.cells
     const changes: MergeChange[] = []
     const set = (col: number, to: MasterCell) => {
-      if (cells[col] === to) return
+      if (col < 0 || cells[col] === to) return
       changes.push({ col, from: cells[col] ?? null, to })
     }
     const oldSlot = cellAmount(cells[opts.vendorSlot])
@@ -308,9 +312,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
         (r, ri) => !claimed.has(ri) && !isPlaceholderRow(r) && rowBatchEq(r) && normPn(r.cells[KK_COL.pn]) === normPn(q.pn),
       )
       if (sameBatchSamePn.length !== 1) continue
-      const otherSlotsBusy = [8, 9, 10, 11, 12, 13].some(
-        (s) => s !== opts.vendorSlot && !isFillableCell(row.cells[s]),
-      )
+      const otherSlotsBusy = vendorCols.some((s) => s !== opts.vendorSlot && !isFillableCell(row.cells[s]))
       if (otherSlotsBusy) {
         warnings.push(`${q.pn}：数量 ${row.cells[KK_COL.qty]}→${q.qty} 的修订行已有其他家报价，改按新行并入，请人工核对`)
         continue
@@ -412,7 +414,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (isPlaceholderRow(row) || rowBatchEq(row)) continue
       if (normPn(row.cells[KK_COL.pn]) !== normPn(a.quote.pn)) continue
       if (!numEq(row.cells[KK_COL.qty] ?? null, a.quote.qty)) continue
-      if (![8, 9, 10, 11, 12, 13].some((s) => !isFillableCell(row.cells[s]))) continue
+      if (!vendorCols.some((s) => !isFillableCell(row.cells[s]))) continue
       reinquiries.push(`${a.quote.pn}×${a.quote.qty ?? ''}（历史批次「${String(row.cells[KK_COL.name] ?? '').trim()}」）`)
       break
     }
@@ -446,10 +448,11 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
 
 /** 应用合并计划，返回新的 MasterData（不修改原对象） */
 export function applyMerge(master: MasterData, plan: MergePlan): MasterData {
+  const colCount = master.layout.colCount
   const rows = master.rows.map((r) => ({ cells: [...r.cells] }))
   for (const action of plan.actions) {
     while (rows.length <= action.rowIndex) {
-      rows.push({ cells: Array.from({ length: KK_COL_COUNT }, () => null as MasterCell) })
+      rows.push({ cells: Array.from({ length: colCount }, () => null as MasterCell) })
     }
     const row = rows[action.rowIndex]!
     for (const ch of action.changes) row.cells[ch.col] = ch.to

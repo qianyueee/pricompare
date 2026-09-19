@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { makeFileA, makeMasterFile, FIXTURE_PNS } from '../fixtures/buildFixtures'
 import { makeQuote } from '../fixtures/rows'
 import {
+  CANONICAL_LAYOUT,
   KK_COL,
   KK_HEADERS,
   applyMerge,
@@ -125,6 +126,7 @@ describe('合并规则', () => {
         mk({ 0: 3, 1: 'B', 3: 'X-1', 6: 1, 7: 'TDB', 9: 55, 10: 'TDB', 23: 'SS-303' }),
       ],
       sheetName: 'KK询价汇总',
+      layout: CANONICAL_LAYOUT,
       passthrough: [],
       sourceFileName: null,
       importedAt: null,
@@ -194,6 +196,7 @@ describe('并入智能化（0823/0826/0828 实证规则）', () => {
   const base = (rows: { cells: (string | number | null)[] }[]): MasterData => ({
     rows,
     sheetName: 'KK询价汇总',
+    layout: CANONICAL_LAYOUT,
     passthrough: [],
     sourceFileName: null,
     importedAt: null,
@@ -457,5 +460,89 @@ describe('汇总导出', () => {
     expect(rowNos).toEqual([...rowNos].sort((a, b) => a - b))
     expect(rowNos).toContain(4)
     expect(rowNos).toContain(20)
+  })
+
+  it('NEGO sheet 是 Excel 表格（真实汇总写法）：表格体整体替换、合计行在表格下方、表格随明细收缩再扩展', async () => {
+    const base = new ExcelJS.Workbook()
+    await base.xlsx.load(await makeMasterFile())
+    const nws = base.getWorksheet('NEGO')!
+    nws.getCell('A3').value = 'Copy PN from PO'
+    nws.getCell('B2').value = { formula: 'SUM(Table1[[#All],[HC Total]])' }
+    const lookup = (r: number) => ({ formula: `XLOOKUP($A${r},KK询价汇总!$D:$D,KK询价汇总!E:E)` })
+    nws.addTable({
+      name: 'Table1',
+      ref: 'A4',
+      headerRow: true,
+      totalsRow: false,
+      style: { theme: 'TableStyleMedium2', showRowStripes: true },
+      columns: ['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit Price', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal2'].map(
+        (name) => ({ name, filterButton: true }),
+      ),
+      // 表格 A4:J9：第 5 行空着、零件号从第 6 行起贴，Rev 列是没有缓存值的 XLOOKUP 公式
+      rows: [
+        [null, null, null, null, null, null, null, null, null, null],
+        ['OLD-1', lookup(6), null, null, null, null, null, null, null, null],
+        ['OLD-2', lookup(7), null, null, null, null, null, null, null, null],
+        ['OLD-3', lookup(8), null, null, null, null, null, null, null, null],
+        ['OLD-4', lookup(9), null, null, null, null, null, null, null, null],
+      ],
+    })
+    const original = (await base.xlsx.writeBuffer()) as ArrayBuffer
+    const blank = (v: unknown) => v === null || v === undefined || String(v).trim() === ''
+    const { unzipSync } = await import('fflate')
+    const dec = new TextDecoder()
+    const inspect = (buffer: ArrayBuffer) => {
+      const files = unzipSync(new Uint8Array(buffer))
+      const tablePath = Object.keys(files).find((k) => /xl\/tables\/.*\.xml$/.test(k) && dec.decode(files[k]!).includes('HC Unit Price'))!
+      const negoPath = Object.keys(files).find(
+        (k) => /xl\/worksheets\/sheet\d+\.xml$/.test(k) && dec.decode(files[k]!).includes('>Total</t>'),
+      )!
+      return { refs: dec.decode(files[tablePath]!).match(/ref="([^"]+)"/g), negoXml: dec.decode(files[negoPath]!) }
+    }
+
+    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
+    const nego = negoSummaryFromInputs(master, [
+      { pn: FIXTURE_PNS[0]!, qty: 10 },
+      { pn: '0900001-000', qty: 5 },
+    ])
+    const out = await buildMasterWorkbook(master, original, { nego })
+    expect(out.mode).toBe('patch')
+    expect(out.negoRowsWritten).toBe(2)
+    const g = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!.passthrough[0]!.grid
+    expect(g[2]![0]).toBe('Copy PN from PO') // 说明行不动
+    expect(g[3]![0]).toBe('P/N') // 用户表头原样
+    expect(g[4]![0]).toBe(FIXTURE_PNS[0]) // 明细紧贴表头（表格首行原本空着）
+    expect(g[4]![4]).toBe(56.7) // 'HC Unit Price' 列
+    expect(g[5]![0]).toBe('0900001-000')
+    expect(g[6]![0]).toBe('Total') // 合计行在明细下一行
+    expect((g[7] ?? []).every(blank)).toBe(true) // 旧零件号 OLD-3/OLD-4 整体清空
+    expect((g[8] ?? []).every(blank)).toBe(true)
+    const one = inspect(out.buffer)
+    // 表格收缩到明细末行（合计行在表格外：表外 SUM(Table1[[#All],…]) 不会把合计再加一遍）
+    expect(one.refs).toEqual(['ref="A4:J6"', 'ref="A4:J6"'])
+    expect(one.negoXml).not.toContain('XLOOKUP') // 旧明细区里缓存值为空的公式格也清掉（否则零件号一清就成 #N/A）
+    expect(one.negoXml).toContain('SUM(Table1[[#All],[HC Total]])') // 表格上方用户自己的合计公式保留
+
+    // 再导出只剩 1 行 → 表格缩到 A4:J5、合计到第 6 行、旧合计行清空
+    const master2 = parseMasterWorkbook(readWorkbook(out.buffer), 'm2.xlsx')!
+    const out2 = await buildMasterWorkbook(master2, out.buffer, { nego: negoSummaryFromInputs(master2, [{ pn: FIXTURE_PNS[0]!, qty: 10 }]) })
+    const g2 = parseMasterWorkbook(readWorkbook(out2.buffer), 'o2.xlsx')!.passthrough[0]!.grid
+    expect(g2[4]![0]).toBe(FIXTURE_PNS[0])
+    expect(g2[5]![0]).toBe('Total')
+    expect((g2[6] ?? []).every(blank)).toBe(true)
+    expect(inspect(out2.buffer).refs).toEqual(['ref="A4:J5"', 'ref="A4:J5"'])
+
+    // 又变回 2 行 → 表格扩回 A4:J6
+    const master3 = parseMasterWorkbook(readWorkbook(out2.buffer), 'm3.xlsx')!
+    const out3 = await buildMasterWorkbook(master3, out2.buffer, {
+      nego: negoSummaryFromInputs(master3, [
+        { pn: FIXTURE_PNS[0]!, qty: 10 },
+        { pn: '0900001-000', qty: 5 },
+      ]),
+    })
+    const g3 = parseMasterWorkbook(readWorkbook(out3.buffer), 'o3.xlsx')!.passthrough[0]!.grid
+    expect(g3[5]![0]).toBe('0900001-000')
+    expect(g3[6]![0]).toBe('Total')
+    expect(inspect(out3.buffer).refs).toEqual(['ref="A4:J6"', 'ref="A4:J6"'])
   })
 })

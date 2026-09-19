@@ -1,10 +1,14 @@
 import { normalizeHeader } from './synonyms'
+import { letterToIdx } from './util'
 import type { VendorGuess } from './types'
+import type { MasterLayout } from './master/model'
 
 export interface Vendor {
   id: string
   display: string
-  /** KK 汇总模板里该供应商的传统列（I–N），导出时落回原位 */
+  /** KK 汇总模板里该供应商列的表头文字（按表头定位，模板插列后仍能对上） */
+  kkHeader?: string
+  /** 旧版：该供应商的传统列字母（I–N）；表头对不上时的兜底 */
   kkSlot?: string
   /** 识别别名：文件名 / 报价单号前缀 / 询价人列 / 模板列名 */
   aliases: string[]
@@ -12,13 +16,35 @@ export interface Vendor {
 
 /** 依据真实样本播种：凯阔的文件名是 KV*、单号 KV*、落 KK 的 SKW 列；HC 文件名 HCQuote*、单号 KT* */
 export const SEED_VENDORS: Vendor[] = [
-  { id: 'mao', display: 'Mao', kkSlot: 'I', aliases: ['mao'] },
-  { id: 'hc', display: 'HC', kkSlot: 'J', aliases: ['hc', 'hcquote', 'kt', 'kavis'] },
-  { id: 'skw', display: 'SKW', kkSlot: 'K', aliases: ['skw', 'kv', '凯阔'] },
-  { id: 'by', display: 'BY', kkSlot: 'L', aliases: ['by'] },
-  { id: 'yj', display: 'YJ', kkSlot: 'M', aliases: ['yj'] },
-  { id: 'jm', display: 'JM', kkSlot: 'N', aliases: ['jm'] },
+  { id: 'mao', display: 'Mao', kkHeader: 'Mao', kkSlot: 'I', aliases: ['mao'] },
+  { id: 'hc', display: 'HC', kkHeader: 'HC', kkSlot: 'J', aliases: ['hc', 'hcquote', 'kt', 'kavis'] },
+  { id: 'skw', display: 'SKW', kkHeader: 'SKW', kkSlot: 'K', aliases: ['skw', 'kv', '凯阔'] },
+  { id: 'by', display: 'BY', kkHeader: 'BY', kkSlot: 'L', aliases: ['by'] },
+  { id: 'yj', display: 'YJ', kkHeader: 'YJ', kkSlot: 'M', aliases: ['yj'] },
+  { id: 'jm', display: 'JM', kkHeader: 'JM', kkSlot: 'N', aliases: ['jm'] },
 ]
+
+/**
+ * 供应商 → 汇总表里的价格列（物理列号）：先按表头文字（kkHeader / 显示名 / 别名）在
+ * layout.vendorSlots 里找，找不到再用旧版列字母兜底（且该列必须仍是供应商列）；都没有 → null。
+ */
+export function resolveVendorSlot(
+  layout: MasterLayout,
+  vendor: { display: string; kkHeader?: string; kkSlot?: string; aliases?: string[] },
+): number | null {
+  const keys = [vendor.kkHeader, vendor.display, ...(vendor.aliases ?? [])]
+    .filter((k): k is string => typeof k === 'string' && k.trim() !== '')
+    .map((k) => normalizeHeader(k))
+  for (const key of keys) {
+    const hit = layout.vendorSlots.find((s) => normalizeHeader(s.label) === key)
+    if (hit) return hit.col
+  }
+  if (vendor.kkSlot) {
+    const col = letterToIdx(vendor.kkSlot)
+    if (layout.vendorSlots.some((s) => s.col === col)) return col
+  }
+  return null
+}
 
 export interface VendorGuessInput {
   fileName: string

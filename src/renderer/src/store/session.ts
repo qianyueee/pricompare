@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import {
-  AMOUNT_COLS,
+  CANONICAL_LAYOUT,
   SEED_VENDORS,
   analyzeSheet,
   applyMerge,
@@ -19,6 +19,7 @@ import {
   type MasterData,
   type ParsedWorkbook,
   type Vendor,
+  amountCols,
   dedupeNegoLinesByPn,
   negoSummaryFromInputs,
 } from '@engine/index'
@@ -175,6 +176,7 @@ function emptyMaster(): MasterData {
   return {
     rows: [],
     sheetName: 'KK询价汇总',
+    layout: CANONICAL_LAYOUT,
     passthrough: [],
     sourceFileName: null,
     importedAt: Date.now(),
@@ -209,6 +211,8 @@ export const useSession = create<SessionState>((set, get) => ({
       let loadedMaster = (master as MasterData | null) ?? null
       let cleanedOnInit = 0
       if (loadedMaster) {
+        // 旧版本持久化的底表没有列布局字段（当时固定 33 列模板）→ 按模板布局补上
+        if (!loadedMaster.layout) loadedMaster = { ...loadedMaster, layout: CANONICAL_LAYOUT }
         const cleaned = cleanMasterAmounts(loadedMaster)
         loadedMaster = cleaned.master
         cleanedOnInit = cleaned.changed
@@ -462,7 +466,7 @@ export const useSession = create<SessionState>((set, get) => ({
     const trimmed = rawInput.trim()
     let value: string | number | null
     if (trimmed === '') value = null
-    else if (AMOUNT_COLS.includes(col)) {
+    else if (amountCols(master.layout).includes(col)) {
       value = cleanAmountString(trimmed) ?? rawInput
     } else {
       const num = Number(trimmed.replace(/[,，]/g, ''))
@@ -568,12 +572,12 @@ export const useSession = create<SessionState>((set, get) => ({
         for (const i of [...new Set(rowIdxs)].sort((a, b) => a - b)) {
           const cells = master.rows[i]?.cells
           if (!cells) continue
-          const pn = String(cells[3] ?? '').trim()
+          const pn = String(cells[master.layout.pn] ?? '').trim()
           if (!pn) continue
           const key = negoKey(pn)
           if (seen.has(key)) continue
           seen.add(key)
-          kept.push({ id: negoSeq++, pn, qty: negoQtyFrom(cells[6] ?? null) })
+          kept.push({ id: negoSeq++, pn, qty: negoQtyFrom(cells[master.layout.qty] ?? null) })
         }
       }
       return { negoOpen: true, negoLines: withTrailingEmptyNego(kept) }

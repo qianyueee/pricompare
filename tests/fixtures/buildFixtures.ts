@@ -238,11 +238,18 @@ export async function makeFileC(): Promise<ArrayBuffer> {
  * KK 汇总固件：表头 33 列 + 2 行既有数据 + 3 行只有 A 列序号的预编号空行 + NEGO 透传 sheet。
  * R2 与文件 A 的第一个零件同 P/N 同数量、HC(J) 已报、SKW(K) 空 —— 供"填充既有行"用例。
  */
-export async function makeMasterFile(): Promise<ArrayBuffer> {
+export async function makeMasterFile(opts?: {
+  /** 在 SKW 后插入一个新供应商列（真实 0919 汇总表新增 CL 的写法）：K 之后所有列整体右移一格 */
+  extraVendor?: string
+}): Promise<ArrayBuffer> {
   const { KK_HEADERS } = await import('@engine/export/kkLayout')
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet('KK询价汇总')
-  ws.getRow(1).values = [...KK_HEADERS]
+  const headers = [...KK_HEADERS]
+  if (opts?.extraVendor) headers.splice(11, 0, opts.extraVendor)
+  ws.getRow(1).values = headers
+  /** 物理列（1 基）：插列后 L 及右侧 +1 */
+  const pc = (c: number): number => (opts?.extraVendor && c >= 12 ? c + 1 : c)
   const r2 = ws.getRow(2)
   r2.getCell(1).value = 1
   r2.getCell(2).value = '20260801 Old'
@@ -252,7 +259,7 @@ export async function makeMasterFile(): Promise<ArrayBuffer> {
   r2.getCell(6).value = FIXTURE_DESCS[0]
   r2.getCell(7).value = 10
   r2.getCell(10).value = 56.7 // J HC 已报
-  r2.getCell(23).value = '22Days'
+  r2.getCell(pc(23)).value = '22Days'
   const r3 = ws.getRow(3)
   r3.getCell(1).value = 2
   r3.getCell(2).value = '20260801 Old'
@@ -262,6 +269,7 @@ export async function makeMasterFile(): Promise<ArrayBuffer> {
   r3.getCell(8).value = 90
   r3.getCell(10).value = '￥100.00' // 历史遗留文本金额（导入时应被自动规范为 100）
   r3.getCell(11).value = 90
+  if (opts?.extraVendor) r3.getCell(12).value = 88 // 新供应商列已有一个价
   for (let i = 0; i < 3; i++) ws.getRow(4 + i).getCell(1).value = 3 + i // 预编号空行 A=3..5
   const nego = wb.addWorksheet('NEGO')
   nego.getCell('B1').value = 'Basis For Negotiation'

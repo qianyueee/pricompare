@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { isDataRow } from '@engine/index'
+import { CANONICAL_LAYOUT, isDataRow } from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable, { type CellRange } from '../components/MasterTable'
 import { useSession } from '../store/session'
 import { copyText } from '../utils/clipboard'
 
-const ALL_EDIT_COLS = Array.from({ length: 32 }, (_, i) => i + 1) // B..AG（A 列序号不参与清空）
 
 export default function MainPage() {
   const files = useSession((s) => s.files)
   const master = useSession((s) => s.master)
+  const layout = master?.layout ?? CANONICAL_LAYOUT
+  // 除 A 列序号外的全部列（按当前布局，模板插列后同样覆盖）
+  const allEditCols = useMemo(() => Array.from({ length: layout.colCount - 1 }, (_, i) => i + 1), [layout])
   const masterDirty = useSession((s) => s.masterDirty)
   const importing = useSession((s) => s.importing)
   const exporting = useSession((s) => s.exporting)
@@ -106,7 +108,7 @@ export default function MainPage() {
     const seen = new Set<string>()
     const out: string[] = []
     for (let i = rows.length - 1; i >= 0; i--) {
-      const b = String(rows[i]!.cells[1] ?? '').trim()
+      const b = String(rows[i]!.cells[layout.name] ?? '').trim()
       if (b && !seen.has(b)) {
         seen.add(b)
         out.push(b) // 最新批次在前
@@ -121,10 +123,10 @@ export default function MainPage() {
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => {
         if (!showEmpty && !isDataRow(row)) return false
-        if (batchFilter && String(row.cells[1] ?? '').trim() !== batchFilter) return false
+        if (batchFilter && String(row.cells[layout.name] ?? '').trim() !== batchFilter) return false
         if (q) {
           const hay =
-            `${row.cells[3] ?? ''} ${row.cells[5] ?? ''} ${row.cells[1] ?? ''} ${row.cells[21] ?? ''}`.toLowerCase()
+            `${row.cells[layout.pn] ?? ''} ${row.cells[layout.description] ?? ''} ${row.cells[layout.name] ?? ''} ${row.cells[layout.quoteNo] ?? ''}`.toLowerCase()
           if (!hay.includes(q)) return false
         }
         return true
@@ -134,7 +136,7 @@ export default function MainPage() {
     const empty = filtered.filter((it) => !isDataRow(it.row))
     const blocks: { key: string; items: typeof data }[] = []
     for (const it of data) {
-      const key = String(it.row.cells[1] ?? '').trim()
+      const key = String(it.row.cells[layout.name] ?? '').trim()
       const last = blocks[blocks.length - 1]
       if (last && last.key === key) last.items.push(it)
       else blocks.push({ key, items: [it] })
@@ -187,7 +189,7 @@ export default function MainPage() {
   const clearSelectionCells = useCallback(() => {
     const vis = visibleRef.current
     if (selected.size > 0) {
-      clearCellsAction([...selected].map((rowIndex) => ({ rowIndex, cols: ALL_EDIT_COLS })))
+      clearCellsAction([...selected].map((rowIndex) => ({ rowIndex, cols: allEditCols })))
     } else if (selCols.size > 0) {
       const cols = [...selCols]
       clearCellsAction(vis.map((it) => ({ rowIndex: it.index, cols })))

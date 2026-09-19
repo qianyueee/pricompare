@@ -10,12 +10,14 @@ const TMP = join(dirname(fileURLToPath(import.meta.url)), '.tmp')
 const KV_PATH = join(TMP, 'KV202608153_0815.xlsx')
 const MASTER_PATH = join(TMP, 'KKMaster.xlsx')
 const HC_LABELED_PATH = join(TMP, 'HCQuote20260816_TestE.xlsx')
+const CL_MASTER_PATH = join(TMP, 'KKMaster_CL.xlsx')
 
 test.beforeAll(async () => {
   mkdirSync(TMP, { recursive: true })
   writeFileSync(KV_PATH, Buffer.from(await makeFileA()))
   writeFileSync(MASTER_PATH, Buffer.from(await makeMasterFile()))
   writeFileSync(HC_LABELED_PATH, Buffer.from(await makeFileB({ quoteNo: '询价 20260816 Test E' })))
+  writeFileSync(CL_MASTER_PATH, Buffer.from(await makeMasterFile({ extraVendor: 'CL' })))
 })
 
 test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式导出 → 持久化', async ({ page }) => {
@@ -382,4 +384,45 @@ test('并入智能化：重复拖入跳过、修订版原位更新', async ({ pa
   // 老批次同件行（文件行下标 0）不受影响
   await expect(page.locator('[data-cell="2:9"]')).toHaveText('113.4')
   await expect(page.locator('[data-cell="0:9"]')).toHaveText('56.7')
+})
+
+test('汇总表插了新供应商列（CL）：仍识别为汇总表，并入/显示/导出按表头定位列', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  // 34 列的汇总表 → 走「更新汇总」流程而不是报价映射
+  await page.setInputFiles('[data-testid=file-input]', [CL_MASTER_PATH])
+  await expect(page.getByTestId('master-import-dialog')).toBeVisible()
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+  await expect(page.locator('th[data-colh="11"]')).toContainText('CL') // 插入的列显示其表头
+  await expect(page.locator('th[data-colh="23"]')).toContainText('交期') // 模板列右移后仍显示中文短标签
+  await expect(page.locator('[data-cell="1:11"]')).toHaveText('88')
+  await expect(page.locator('[data-cell="0:23"]')).toHaveText('22Days')
+
+  // 并入 KV：价格仍落 K（SKW 按表头定位），交期落到右移后的物理 23 列
+  await page.setInputFiles('[data-testid=file-input]', [KV_PATH])
+  await expect(page.getByTestId('vendor-input')).toHaveValue('SKW')
+  await expect(page.getByText('K · SKW')).toBeVisible()
+  await expect(page.getByTestId('merge-preview')).toContainText('更新 1 行 · 新增 8 行')
+  await page.getByTestId('confirm-mapping').click()
+  await expect(page.getByTestId('master-row')).toHaveCount(10)
+  await expect(page.locator('[data-cell="0:10"]')).toHaveText('45')
+  await expect(page.locator('[data-cell="0:23"]')).toHaveText('22Days/3 weeks+cleaning')
+  await expect(page.locator('[data-cell="0:21"]')).toHaveText('31') // 对客报价 U → 物理 21
+  await expect(page.locator('[data-cell="1:11"]')).toHaveText('88') // CL 原值不动
+
+  // 导出：34 列原样，CL 列保留，交期在 X 列
+  const dlp = page.waitForEvent('download')
+  await page.getByTestId('export-master-btn').click()
+  const dl = await dlp
+  const outPath = join(TMP, 'master-cl-out.xlsx')
+  await dl.saveAs(outPath)
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.load(readFileSync(outPath) as unknown as ArrayBuffer)
+  const ws = wb.getWorksheet('KK询价汇总')!
+  expect(ws.getCell('L1').value).toBe('CL')
+  expect(ws.getCell('L3').value).toBe(88)
+  expect(ws.getCell('K2').value).toBe(45)
+  expect(ws.getCell('X2').value).toBe('22Days/3 weeks+cleaning')
 })

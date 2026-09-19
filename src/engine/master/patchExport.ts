@@ -1,7 +1,7 @@
 import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
-import { KK_COL_COUNT, isDataRow, parseMasterWorkbook, type MasterCell, type MasterData } from './model'
+import { isDataRow, parseMasterWorkbook, type MasterCell, type MasterData } from './model'
 
 /**
  * zip 级"外科手术"导出：原工作簿每个字节原样保留，只把【确实改过的单元格】
@@ -100,6 +100,61 @@ export interface PatchResult {
 export interface ExtraSheetPatch {
   sheetName: string
   changes: Map<number, Map<number, MasterCell>>
+  /**
+   * 写入区表头行正好是该 sheet 上某个 Excel 表格（Table）的表头时（1 基 Excel 行号）：
+   * 把该表格 ref/autoFilter 底部收缩或扩展到 bodyEnd（明细末行；合计行在其下、不进表格）
+   */
+  table?: { top: number; bodyEnd: number }
+}
+
+/** sheet 关系文件里指向的所有表格（Table）part 路径 */
+function sheetTablePaths(files: Record<string, Uint8Array>, sheetPath: string): string[] {
+  const relsPath = sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')
+  const relsFile = files[relsPath]
+  if (!relsFile) return []
+  const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
+  const out: string[] = []
+  for (const m of dec.decode(relsFile).matchAll(/<Relationship\b[^>]*\/?>/g)) {
+    if (!/\/table"/.test(m[0])) continue
+    const target = attrOf(m[0], 'Target')
+    if (!target) continue
+    const tablePath = target.startsWith('/') ? target.slice(1) : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
+    if (files[tablePath]) out.push(tablePath)
+  }
+  return out
+}
+
+const TABLE_REF_RE = /(ref=")([A-Z]+)(\d+)(:[A-Z]+)(\d+)(")/g
+
+/**
+ * 读出某个 sheet 上 Excel 表格（Table）的行范围（0 基：top = 表头行，bottom = 末行）。
+ * 供 NEGO 写入规划识别"表头行就是表格表头"的 sheet；读不到（非 zip / 无表格）返回空数组。
+ */
+export function listSheetTables(buffer: ArrayBuffer, sheetName: string): { top: number; bottom: number }[] {
+  try {
+    const files = unzipSync(new Uint8Array(buffer))
+    const sheetPath = findSheetPath(files, sheetName)
+    if (!sheetPath) return []
+    const out: { top: number; bottom: number }[] = []
+    for (const tablePath of sheetTablePaths(files, sheetPath)) {
+      const m = dec.decode(files[tablePath]!).match(/<table\b[^>]*\sref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/)
+      if (m) out.push({ top: Number(m[2]) - 1, bottom: Number(m[4]) - 1 })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/** 表头在 top 行（1 基）的表格：ref/autoFilter 底部设为 newBottom（可缩可扩；至少保留一行表体） */
+function setTableBottom(files: Record<string, Uint8Array>, sheetPath: string, top: number, newBottom: number): void {
+  for (const tablePath of sheetTablePaths(files, sheetPath)) {
+    const xml = dec.decode(files[tablePath]!)
+    const patched = xml.replace(TABLE_REF_RE, (all, p1: string, c1: string, t: string, c2: string, _b: string, p6: string) =>
+      Number(t) === top ? `${p1}${c1}${t}${c2}${Math.max(newBottom, top + 1)}${p6}` : all,
+    )
+    if (patched !== xml) files[tablePath] = enc.encode(patched)
+  }
 }
 
 /**
@@ -120,6 +175,14 @@ export function isMacroEnabledWorkbook(buffer: ArrayBuffer): boolean {
  * 把 (Excel 行号 → 列 → 值) 变更集打进 sheet XML：已有行只替换/补入目标格（沿用原样式 s），
  * 不存在的行按行号顺序插入（sheetData 内行必须升序，NEGO 这类稀疏 sheet 尤其如此）。
  */
+/**
+ * 匹配整个 <row r="N"> 元素：自闭合 <row r="N" …/>（Excel 给只有行高/样式的空行就这么写）或 <row …>…</row>。
+ * 属性部分必须用非贪婪，否则 [^>]* 会把自闭合的 "/" 也吃掉、再拿 ">…</row>" 吞下一行的单元格
+ */
+function rowRegex(excelRow: number): RegExp {
+  return new RegExp(`<row r="${excelRow}"[^>]*?(?:/>|>[\\s\\S]*?</row>)`)
+}
+
 function applyRowChanges(
   xml: string,
   changes: Map<number, Map<number, MasterCell>>,
@@ -129,8 +192,7 @@ function applyRowChanges(
   let formulaCellsReplaced = 0
   const sortedRows = [...changes.entries()].sort((x, y) => x[0] - y[0])
   for (const [excelRow, rowMap] of sortedRows) {
-    const rowRe = new RegExp(`<row r="${excelRow}"[^>]*(?:/>|>[\\s\\S]*?</row>)`)
-    const m = xml.match(rowRe)
+    const m = xml.match(rowRegex(excelRow))
     if (m) {
       const rowXml = m[0]
       const selfClosing = /\/>$/.test(rowXml) && !rowXml.includes('</row>')
@@ -140,6 +202,7 @@ function applyRowChanges(
       for (const [col, val] of rowMap) {
         const ref = `${colLetter(col)}${excelRow}`
         const existing = cells.get(col)
+        if (!existing && val === null) continue // 清空一个本来就不存在的格：无事可做
         let s: string | null = colStyle.get(col) ?? null
         if (existing) {
           const cellOpen = existing.slice(0, existing.indexOf('>') + 1)
@@ -152,9 +215,11 @@ function applyRowChanges(
       xml = xml.replace(rowXml, `${openTag}${body}</row>`)
     } else {
       const body = [...rowMap.entries()]
+        .filter(([, val]) => val !== null) // 新行里的清空写入没有对象
         .sort((x, y) => x[0] - y[0])
         .map(([col, val]) => buildCellXml(`${colLetter(col)}${excelRow}`, colStyle.get(col) ?? null, val))
         .join('')
+      if (!body) continue
       const rowXmlNew = `<row r="${excelRow}"${styleRowAttrs}>${body}</row>`
       let inserted = false
       for (const rm of xml.matchAll(/<row r="(\d+)"/g)) {
@@ -171,6 +236,22 @@ function applyRowChanges(
     }
   }
   return { xml, formulaCellsReplaced }
+}
+
+/**
+ * 把 sheet 上 Excel 表格（Table）的 ref/autoFilter 底部行扩到 newBottom（只扩不缩；
+ * 仅扩表头行 ≤ topAtMost 的表格，避免碰到位于写入区下方的其他表格）。
+ * KK 模板的蓝白带状样式与筛选来自表格范围，不扩展则新增行没有斑马纹。
+ */
+function extendTablesBottom(files: Record<string, Uint8Array>, sheetPath: string, newBottom: number, topAtMost: number): void {
+  for (const tablePath of sheetTablePaths(files, sheetPath)) {
+    const patched = dec.decode(files[tablePath]!).replace(
+      TABLE_REF_RE,
+      (all, p1: string, c1: string, top: string, c2: string, bottom: string, p6: string) =>
+        Number(top) <= topAtMost && Number(bottom) < newBottom ? `${p1}${c1}${top}${c2}${newBottom}${p6}` : all,
+    )
+    files[tablePath] = enc.encode(patched)
+  }
 }
 
 /** dimension 底部同步到新底部（Excel 容忍旧值，但保持一致更干净） */
@@ -192,6 +273,7 @@ export function patchMasterWorkbook(
   const originalMaster = parseMasterWorkbook(readWorkbook(originalBuffer), master.sourceFileName ?? '')
   if (!originalMaster) return null
   const origRows = originalMaster.rows
+  const colCount = Math.max(master.layout.colCount, originalMaster.layout.colCount)
 
   // 变更集（与导入时同一条解析管线比对，未动的单元格绝不触碰）
   const norm = (v: MasterCell | undefined): MasterCell =>
@@ -202,7 +284,7 @@ export function patchMasterWorkbook(
   for (let i = 0; i < maxLen; i++) {
     const cur = master.rows[i]
     const orig = origRows[i]
-    for (let c = 0; c < KK_COL_COUNT; c++) {
+    for (let c = 0; c < colCount; c++) {
       const a = norm(orig?.cells[c])
       const b = norm(cur?.cells[c])
       if (a === b) continue
@@ -232,10 +314,10 @@ export function patchMasterWorkbook(
     const colStyle = new Map<number, string>()
     let styleRowAttrs = '' // 追加全新行时沿用的行属性（ht/customHeight）
     let scanned = 0
-    for (let i = origRows.length - 1; i >= 0 && scanned < 50 && colStyle.size < KK_COL_COUNT; i--) {
+    for (let i = origRows.length - 1; i >= 0 && scanned < 50 && colStyle.size < colCount; i--) {
       if (!isDataRow(origRows[i]!)) continue
       scanned++
-      const m = xml.match(new RegExp(`<row r="${i + 2}"[^>]*(?:/>|>[\\s\\S]*?</row>)`))
+      const m = xml.match(rowRegex(i + 2))
       if (!m) continue
       const before = colStyle.size
       for (const [col, cellXml] of parseRowCells(m[0])) {
@@ -259,27 +341,7 @@ export function patchMasterWorkbook(
     // KK 模板的蓝白带状样式（row stripes）与筛选来自表格范围，不扩展则新增行没有斑马纹
     const newBottom = master.rows.length + 1 // 1 基 Excel 行号（表头第 1 行）
     if (newBottom > origRows.length + 1) {
-      const relsPath = sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')
-      const relsFile = files[relsPath]
-      if (relsFile) {
-        const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
-        for (const m of dec.decode(relsFile).matchAll(/<Relationship\b[^>]*\/?>/g)) {
-          if (!/\/table"/.test(m[0])) continue
-          const target = attrOf(m[0], 'Target')
-          if (!target) continue
-          const tablePath = target.startsWith('/')
-            ? target.slice(1)
-            : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
-          const tf = files[tablePath]
-          if (!tf) continue
-          const patched = dec.decode(tf).replace(
-            /(ref=")([A-Z]+\d+:[A-Z]+)(\d+)(")/g,
-            (all, p1: string, cols: string, bottom: string, p4: string) =>
-              Number(bottom) < newBottom ? `${p1}${cols}${newBottom}${p4}` : all,
-          )
-          files[tablePath] = enc.encode(patched)
-        }
-      }
+      extendTablesBottom(files, sheetPath, newBottom, 1)
       xml = bumpDimension(xml, newBottom)
     }
     files[sheetPath] = enc.encode(xml)
@@ -292,7 +354,16 @@ export function patchMasterWorkbook(
     if (!path || !files[path]) continue
     const applied = applyRowChanges(dec.decode(files[path]), extra.changes, new Map(), '')
     formulaCellsReplaced += applied.formulaCellsReplaced
-    files[path] = enc.encode(bumpDimension(applied.xml, Math.max(...extra.changes.keys())))
+    const rowsWritten = [...extra.changes.keys()]
+    const bottom = Math.max(...rowsWritten)
+    files[path] = enc.encode(bumpDimension(applied.xml, bottom))
+    if (extra.table) {
+      // 表头行就是 Excel 表格表头：表格随明细收缩/扩展，合计行留在表格下方（表外的 SUM(Table[[#All],…]) 不重复计入）
+      setTableBottom(files, path, extra.table.top, extra.table.bodyEnd)
+    } else {
+      // NEGO 上的 Excel 表格（表头在写入区上方）随明细行数扩展底部，斑马纹/筛选跟着延伸
+      extendTablesBottom(files, path, bottom, Math.min(...rowsWritten))
+    }
     for (const m of extra.changes.values()) extraCells += m.size
   }
 

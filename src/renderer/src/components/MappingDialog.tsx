@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import {
   ALL_FIELDS,
+  CANONICAL_LAYOUT,
   FIELD_LABELS,
   colLetter,
-  letterToIdx,
   planMerge,
   resolveBatchSuggestion,
+  resolveVendorSlot,
   type Cell,
   type ColumnMapping,
   type FieldKey,
@@ -23,19 +24,12 @@ function cellText(cell: Cell | undefined): string {
 const EMPTY_MASTER: MasterData = {
   rows: [],
   sheetName: 'KK询价汇总',
+  layout: CANONICAL_LAYOUT,
   passthrough: [],
   sourceFileName: null,
   importedAt: null,
 }
 
-const SLOT_OPTIONS = [
-  { idx: 8, label: 'I · Mao' },
-  { idx: 9, label: 'J · HC' },
-  { idx: 10, label: 'K · SKW' },
-  { idx: 11, label: 'L · BY' },
-  { idx: 12, label: 'M · YJ' },
-  { idx: 13, label: 'N · JM' },
-]
 
 function Inner({ file }: { file: LoadedFile }) {
   const analysis = file.analysis!
@@ -70,8 +64,16 @@ function Inner({ file }: { file: LoadedFile }) {
 
   const vendorId = resolveVendorId(registry, vendor)
   const regVendor = registry.find((v) => v.id === vendorId)
-  const knownSlot = regVendor?.kkSlot ? letterToIdx(regVendor.kkSlot) : null
-  const vendorSlot = knownSlot ?? manualSlot ?? 8
+  // 价格落列按汇总表表头定位（模板插了新供应商列也能对上）：注册表里的家按 kkHeader/别名找，
+  // 没注册的家按输入的名字找同名列；都找不到才手选
+  const layout = (master ?? EMPTY_MASTER).layout
+  const knownSlot = regVendor
+    ? resolveVendorSlot(layout, regVendor)
+    : vendor.trim()
+      ? resolveVendorSlot(layout, { display: vendor.trim() })
+      : null
+  const slotOptions = layout.vendorSlots.map((s) => ({ idx: s.col, label: `${colLetter(s.col)} · ${s.label}` }))
+  const vendorSlot = knownSlot ?? manualSlot ?? layout.vendorSlots[0]?.col ?? 8
 
   // 合并预览（按当前解析行；确认时会以最终映射重新提取并重算）
   const preview = useMemo(() => {
@@ -192,7 +194,7 @@ function Inner({ file }: { file: LoadedFile }) {
             价格落入汇总列
             {knownSlot !== null ? (
               <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
-                {colLetter(knownSlot)} · {regVendor!.display}
+                {colLetter(knownSlot)} · {layout.vendorSlots.find((s) => s.col === knownSlot)?.label ?? regVendor?.display ?? vendor}
               </span>
             ) : (
               <select
@@ -200,7 +202,7 @@ function Inner({ file }: { file: LoadedFile }) {
                 onChange={(e) => setManualSlot(Number(e.target.value))}
                 className="w-32 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
               >
-                {SLOT_OPTIONS.map((o) => (
+                {slotOptions.map((o) => (
                   <option key={o.idx} value={o.idx}>
                     {o.label}
                   </option>

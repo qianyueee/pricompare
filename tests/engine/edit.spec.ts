@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { KK_COL_COUNT, clearMasterCells, deleteMasterRows } from '@engine/index'
+import {
+  CANONICAL_LAYOUT, KK_COL_COUNT, clearMasterCells, deleteMasterRows } from '@engine/index'
 import type { MasterCell, MasterData, MasterRow } from '@engine/index'
 
 function row(vals: Record<number, MasterCell>): MasterRow {
@@ -11,6 +12,7 @@ function row(vals: Record<number, MasterCell>): MasterRow {
 const mkMaster = (rows: MasterRow[]): MasterData => ({
   rows,
   sheetName: 'KK询价汇总',
+  layout: CANONICAL_LAYOUT,
   passthrough: [],
   sourceFileName: null,
   importedAt: null,

@@ -1,14 +1,11 @@
-import { KK_COL, KK_VENDOR_SLOT_HEADERS } from '../export/kkLayout'
 import { cleanAmountString } from './clean'
-import { isDataRow, type MasterCell, type MasterData } from './model'
+import { CANONICAL_LAYOUT, isDataRow, type MasterCell, type MasterData, type VendorSlot } from './model'
 
 /**
  * NEGO 谈判比价（参照用户汇总表的 NEGO sheet）：
  * 选定若干行（零件×数量档），并排各家单价、最低单价、按下单数量算各家总额与最优组合总额，
  * 用于谈"全给某家 vs 最优拆分"的差价。
  */
-
-const VENDOR_SLOTS = [8, 9, 10, 11, 12, 13] as const
 
 const normPn = (v: MasterCell | string): string => String(v ?? '').trim().toUpperCase()
 
@@ -39,14 +36,15 @@ export interface PnTier {
 export function pnTiers(master: MasterData, pn: string): PnTier[] {
   const target = normPn(pn)
   if (!target) return []
+  const L = master.layout
   const byQty = new Map<string, PnTier>()
   master.rows.forEach((row, rowIndex) => {
     if (!isDataRow(row)) return
-    if (normPn(row.cells[KK_COL.pn]) !== target) return
-    const qty = cellNum(row.cells[KK_COL.qty])
+    if (normPn(row.cells[L.pn]) !== target) return
+    const qty = cellNum(row.cells[L.qty])
     const key = qty === null ? '?' : String(qty)
     // 靠后的行覆盖靠前的（最近一次询价优先）
-    byQty.set(key, { qty, rowIndex, excelRow: rowIndex + 2, batch: cellStr(row.cells[KK_COL.name]) })
+    byQty.set(key, { qty, rowIndex, excelRow: rowIndex + 2, batch: cellStr(row.cells[L.name]) })
   })
   return [...byQty.values()].sort((a, b) => (a.qty ?? Infinity) - (b.qty ?? Infinity))
 }
@@ -58,21 +56,22 @@ export interface NegoLine {
   description: string
   /** 下单数量（可与来源档位不同，总价按它算） */
   qty: number | null
-  /** 各供应商槽位（8..13）的单价；TDB/文字/空 → null */
+  /** 各供应商价格列（物理列号 → 单价）；TDB/文字/空 → null */
   unit: Record<number, number | null>
 }
 
 export function buildNegoLine(master: MasterData, rowIndex: number, qtyOverride?: number | null): NegoLine {
+  const L = master.layout
   const row = master.rows[rowIndex]
   const cells = row?.cells ?? []
   const unit: Record<number, number | null> = {}
-  for (const slot of VENDOR_SLOTS) unit[slot] = cellNum(cells[slot])
+  for (const slot of L.vendorSlots) unit[slot.col] = cellNum(cells[slot.col])
   return {
     rowIndex,
-    pn: cellStr(cells[KK_COL.pn]),
-    rev: cellStr(cells[KK_COL.rev]),
-    description: cellStr(cells[KK_COL.description]),
-    qty: qtyOverride !== undefined ? qtyOverride : cellNum(cells[KK_COL.qty]),
+    pn: cellStr(cells[L.pn]),
+    rev: cellStr(cells[L.rev]),
+    description: cellStr(cells[L.description]),
+    qty: qtyOverride !== undefined ? qtyOverride : cellNum(cells[L.qty]),
     unit,
   }
 }
@@ -154,12 +153,12 @@ export interface NegoSummary {
   optimalSum: number
 }
 
-export function buildNegoSummary(lines: NegoLine[]): NegoSummary {
-  const usedSlots = VENDOR_SLOTS.filter((slot) => lines.some((l) => l.unit[slot] !== null))
-  const vendors: NegoVendor[] = usedSlots.map((slot) => ({
-    slot,
-    label: KK_VENDOR_SLOT_HEADERS[slot - 8]!,
-  }))
+/** @param slots 汇总表的供应商列（默认模板 I–N）；只保留出现过报价的家 */
+export function buildNegoSummary(lines: NegoLine[], slots: readonly VendorSlot[] = CANONICAL_LAYOUT.vendorSlots): NegoSummary {
+  const vendors: NegoVendor[] = slots
+    .filter((s) => lines.some((l) => l.unit[s.col] !== null && l.unit[s.col] !== undefined))
+    .map((s) => ({ slot: s.col, label: s.label }))
+  const usedSlots = vendors.map((v) => v.slot)
   const summaryLines: NegoSummaryLine[] = lines.map((l) => {
     const present = usedSlots.map((s) => l.unit[s]).filter((u): u is number => u !== null)
     const minUnit = present.length > 0 ? Math.min(...present) : null
@@ -235,7 +234,7 @@ export function negoSummaryFromInputs(master: MasterData, inputs: { pn: string; 
     const res = resolveNegoInput(master, it.pn, it.qty)
     if (res.line) lines.push(res.line)
   }
-  return buildNegoSummary(lines)
+  return buildNegoSummary(lines, master.layout.vendorSlots)
 }
 
 export interface NegoSheetPlan {
@@ -247,6 +246,16 @@ export interface NegoSheetPlan {
   /** 0 基 (行 → 列 → 值)，null = 清空旧内容 */
   writes: Map<number, Map<number, MasterCell>>
   lineCount: number
+  /**
+   * 表头行正好是 sheet 上某个 Excel 表格（Table）的表头时：该表格应收缩/扩展到的明细末行（0 基）。
+   * 合计行写在其下一行、不进表格——用户在表格外写的 SUM(Table[[#All],…]) 才不会把合计再加一遍
+   */
+  table?: { top: number; bodyEnd: number }
+}
+
+export interface NegoSheetWriteOptions {
+  /** sheet 上 Excel 表格（Table）的行范围（0 基，top = 表头行）；由导出器从原工作簿读出 */
+  tables?: { top: number; bottom: number }[]
 }
 
 const isBlank = (v: MasterCell | undefined): boolean => v === null || v === undefined || String(v).trim() === ''
@@ -257,6 +266,8 @@ function canonHeader(v: MasterCell | undefined): string {
     .toLowerCase()
     .replace(/[（(][^)）]*[)）]/g, '')
     .replace(/[\s'’"`.,_\-/\\:：]/g, '')
+  // 真实 NEGO sheet 见过的写法：'HC Unit Price'≈'HC Unit'、'Optimal2'（Excel 表格自动加的序号）≈'Optimal'
+  k = k.replace(/unitprice$/, 'unit').replace(/^(optimal|min|total)\d+$/, '$1')
   if (k === 'quantity' || k === 'qty' || k === 'quan') k = 'qty'
   if (k === 'partnumber' || k === 'partno' || k === 'pn' || k === '零件号' || k === '编号') k = 'pn'
   if (k === 'desc') k = 'description'
@@ -270,9 +281,17 @@ function canonHeader(v: MasterCell | undefined): string {
  * - 找到 sheet 里含 P/N 与 Q'ty 的表头行 → 明细从其下一行起，**按表头文字对齐列**
  *   （HC Unit / SKW Total 等各归各列；表头里没有的列追加在末尾并补上表头文字），不动用户已有的表头；
  * - 找不到 → 从最后一个非空行之后（至少第 3 行，保留标题区）起连表头一起写；
- * - 旧明细（表头下 P/N 列连续非空块，含 Total 行）在表头宽度内整体清空后重写，表格下方的备注/页脚不动；\n *   与现值一致的格不动（用户自己写的公式若结果一致也保留）。
+ * - 旧明细（表头下 P/N 列连续非空块，含 Total 行）在表头宽度内整体清空后重写，表格下方的备注/页脚不动；
+ *   与现值一致的格不动（用户自己写的公式若结果一致也保留）；
+ * - 表头行就是 Excel 表格（Table）的表头时（真实 NEGO sheet 的写法：表格体里贴零件号、各列 XLOOKUP 公式、
+ *   表格上方 SUM(Table[[#All],…]) 合计）：表格体整体视为旧明细清空（中间有空行也算），
+ *   合计行放在明细末行下一行、表格随明细收缩/扩展（见 NegoSheetPlan.table）。
  */
-export function planNegoSheetWrite(grid: MasterCell[][], summary: NegoSummary): NegoSheetPlan {
+export function planNegoSheetWrite(
+  grid: MasterCell[][],
+  summary: NegoSummary,
+  opts: NegoSheetWriteOptions = {},
+): NegoSheetPlan {
   const table = negoTable(summary)
   const head = table[0]!
   let headerRow = -1
@@ -340,16 +359,22 @@ export function planNegoSheetWrite(grid: MasterCell[][], summary: NegoSummary): 
     oldEnd = r
     if (canonHeader(pnCell) === 'total') break
   }
+  // 表头行命中 Excel 表格 → 表格体整体是旧明细（首行空着、零件号从第二行起贴的写法也整体清掉）
+  const hitTable = headerRow >= 0 ? (opts.tables ?? []).find((t) => t.top === headerRow) : undefined
+  if (hitTable) oldEnd = Math.max(oldEnd, hitTable.bottom)
   const newEnd = dataStart + body.length - 1
   for (let r = dataStart; r <= Math.max(newEnd, oldEnd); r++) {
     const src = body[r - dataStart]
     const target = new Map<number, MasterCell>()
     for (let c = spanStart; c <= spanEnd; c++) target.set(c, null)
     if (src) colFor.forEach((c, i) => target.set(c, src[i] ?? null))
+    // 旧明细区里的空白格也明确清一次：缓存值为空的公式格（真实 NEGO sheet 表格列的 XLOOKUP）在网格里看不出来，
+    // 不清的话零件号一清它们就算成 #N/A；导出器对本来就不存在的格会忽略这类空写入
+    const inOldBlock = r <= oldEnd
     for (const [c, v] of target) {
       const oldRaw = grid[r]?.[c]
       const old: MasterCell = isBlank(oldRaw) ? null : (oldRaw as MasterCell)
-      if (old === v) continue
+      if (old === v && !(inOldBlock && v === null)) continue
       if (typeof old === 'number' && typeof v === 'number' && Math.abs(old - v) < 1e-9) continue
       if (old !== null && v !== null && String(old) === String(v)) continue
       set(r, c, v)
@@ -361,5 +386,7 @@ export function planNegoSheetWrite(grid: MasterCell[][], summary: NegoSummary): 
     startCol: spanStart,
     writes,
     lineCount: summary.lines.length,
+    // 明细占 dataStart..dataStart+lines-1，Total 行在其后一行（不进表格）
+    ...(hitTable ? { table: { top: hitTable.top, bodyEnd: dataStart + summary.lines.length - 1 } } : {}),
   }
 }

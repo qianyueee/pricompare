@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs'
 import { describe, expect, it } from 'vitest'
 import {
+  CANONICAL_LAYOUT,
   KK_COL_COUNT,
   buildNegoLine,
   buildNegoSummary,
@@ -23,6 +24,7 @@ function row(vals: Record<number, MasterCell>): MasterRow {
 const mkMaster = (rows: MasterRow[]): MasterData => ({
   rows,
   sheetName: 'KK询价汇总',
+  layout: CANONICAL_LAYOUT,
   passthrough: [],
   sourceFileName: null,
   importedAt: null,
@@ -335,5 +337,57 @@ describe('导出时写入 NEGO sheet：planNegoSheetWrite', () => {
     expect(plan2.writes.get(1)!.get(5)).toBe(10)
     expect(plan2.writes.get(1)!.get(6)).toBe(8) // Min
     expect(plan2.writes.get(1)!.get(10)).toBe(16) // SKW Total 2×8
+  })
+})
+
+describe('NEGO sheet 是 Excel 表格时：planNegoSheetWrite 表格体整体替换', () => {
+  // 真实汇总 NEGO sheet 的写法：表格 A4:L9（表头第 4 行、第 5 行空着、零件号从第 6 行起贴），
+  // 各列是 XLOOKUP 公式（缓存值为空 → 网格里看不见），表格上方是 SUM(Table1[[#All],…]) 合计
+  const grid = (): MasterCell[][] => [
+    [null, 'Basis For Negotiation', null, null, null, null, null, null, 'HC', 'SKW', null, 'Optimal'],
+    [],
+    ['Copy PN from PO'],
+    ['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit Price', 'SKW Unit', 'Column1', 'Min', 'HC Total', 'SKW Total', 'Column2', 'Optimal2'],
+    [],
+    ['OLD-1'],
+    ['OLD-2'],
+    ['OLD-3'],
+    ['OLD-4'],
+  ]
+  const summary = () => {
+    const master = mkMaster([row({ 3: 'A-1', 6: 10, 9: 56.7, 10: 45 }), row({ 3: 'A-2', 6: 5, 9: 100 })])
+    return buildNegoSummary([buildNegoLine(master, 0), buildNegoLine(master, 1)])
+  }
+
+  it('表头行命中表格 → 表格体（首行空、零件号从第二行起）整体清空，明细紧贴表头、合计在明细下一行、表格收缩到明细末行', () => {
+    const plan = planNegoSheetWrite(grid(), summary(), { tables: [{ top: 3, bottom: 8 }] })
+    expect(plan.headerFound).toBe(true)
+    expect(plan.table).toEqual({ top: 3, bodyEnd: 5 })
+    expect(plan.writes.get(4)!.get(0)).toBe('A-1')
+    expect(plan.writes.get(4)!.get(4)).toBe(56.7) // 'HC Unit Price' ≈ 'HC Unit'
+    expect(plan.writes.get(4)!.get(11)).toBe(450) // 'Optimal2' ≈ 'Optimal'：10 × min(56.7, 45)
+    expect(plan.writes.get(5)!.get(0)).toBe('A-2')
+    expect(plan.writes.get(6)!.get(0)).toBe('Total')
+    expect(plan.writes.get(6)!.get(8)).toBe(1067)
+    // 旧零件号 OLD-3/OLD-4（第 8、9 行）整体清空；空白格也明确清一次（缓存值为空的公式格）
+    for (const r of [7, 8]) {
+      expect(plan.writes.get(r)!.get(0)).toBeNull()
+      expect(plan.writes.get(r)!.get(4)).toBeNull()
+    }
+    expect(plan.writes.has(9)).toBe(false) // 表格外不动
+    expect(plan.writes.has(2)).toBe(false) // 'Copy PN from PO' 说明行不动
+    expect(plan.writes.has(3)).toBe(false) // 用户表头不动
+  })
+
+  it('不知道表格范围（无原工作簿）→ 只按连续零件号块判断旧明细，不出 table', () => {
+    const plan = planNegoSheetWrite(grid(), summary())
+    expect(plan.table).toBeUndefined()
+    expect(plan.writes.get(6)!.get(0)).toBe('Total') // 两行明细后合计（覆盖 OLD-2）
+    expect(plan.writes.has(7)).toBe(false) // 表格首行空 → 连续块为空，OLD-3/OLD-4 不动
+  })
+
+  it('表格表头不是找到的表头行（sheet 上别的表格）→ 忽略', () => {
+    const plan = planNegoSheetWrite(grid(), summary(), { tables: [{ top: 10, bottom: 12 }] })
+    expect(plan.table).toBeUndefined()
   })
 })

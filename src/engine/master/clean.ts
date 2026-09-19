@@ -1,5 +1,4 @@
-import { KK_COL } from '../export/kkLayout'
-import type { MasterCell, MasterData } from './model'
+import { CANONICAL_LAYOUT, type MasterCell, type MasterData, type MasterLayout } from './model'
 
 /**
  * 金额/数量数据清洗：历史汇总里混有文本格式的数字（'9000'、'￥1,133.40'、
@@ -7,16 +6,21 @@ import type { MasterCell, MasterData } from './model'
  * 备注类文字（"没有图纸"、"做不了"、"无"、"/"）原样保留。
  */
 
-/** 参与清洗的列：G 数量 + H..U 全部金额列（A 序号、V 单号等绝不触碰） */
-export const AMOUNT_COLS: readonly number[] = [
-  KK_COL.qty, // G
-  KK_COL.quoteEach, // H
-  8, 9, 10, 11, 12, 13, // I..N 供应商
-  KK_COL.usVendor, // O
-  KK_COL.usd, // P
-  16, 17, 18, 19, // Q..T
-  KK_COL.quoteEa, // U
-]
+/** 参与清洗的列：数量 + 选定价 + 各供应商价 + US Vendor/USD + 成本分项 + 对客报价（序号、单号等绝不触碰） */
+export function amountCols(layout: MasterLayout): number[] {
+  return [
+    layout.qty,
+    layout.quoteEach,
+    ...layout.vendorSlots.map((s) => s.col),
+    layout.usVendor,
+    layout.usd,
+    ...layout.costCols,
+    layout.quoteEa,
+  ].filter((c) => c >= 0)
+}
+
+/** 模板原样布局下的清洗列（G + H..U） */
+export const AMOUNT_COLS: readonly number[] = amountCols(CANONICAL_LAYOUT)
 
 const STRIP_RE = /[\uffe5\u00a5$\u20ac,\uff0c\s\u00a0\u2000-\u200b\u3000]/g
 
@@ -38,9 +42,10 @@ export interface CleanResult {
 /** 全表清洗（不修改入参）：只动金额/数量列里能安全转数字的文本单元格 */
 export function cleanMasterAmounts(master: MasterData): CleanResult {
   let changed = 0
+  const cols = amountCols(master.layout)
   const rows = master.rows.map((row) => {
     let cells: MasterCell[] | null = null
-    for (const c of AMOUNT_COLS) {
+    for (const c of cols) {
       const v = row.cells[c]
       if (typeof v !== 'string') continue
       const n = cleanAmountString(v)

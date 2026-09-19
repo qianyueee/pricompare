@@ -1,26 +1,67 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { KK_COL, colLetter } from '@engine/index'
-import type { MasterRow } from '@engine/index'
+import { CANONICAL_LAYOUT, colLetter } from '@engine/index'
+import type { MasterLayout, MasterRow } from '@engine/index'
 import { useSession } from '../store/session'
 
-/** 33 列的紧凑中文表头（Excel 列字母另行小字显示） */
-const COL_LABELS = [
+/** 模板 33 个逻辑列的紧凑中文表头（Excel 列字母另行小字显示）；用户插入的列显示其自身表头 */
+const KK_LABELS = [
   'No.', '批次', 'Item', 'P/N', 'Rev', '描述', '数量', '选定价',
   'Mao', 'HC', 'SKW', 'BY', 'YJ', 'JM', 'US$', 'USD',
   'Cleaning', '材料费', '运费+税', 'Cost', '对客价', '报价单号', '交期',
   '材料', '表面处理', '清洗', '工艺', '尺寸', 'Type', '备注', '备注2', 'Base P/N', 'Base ID',
 ]
 
-const COL_WIDTHS = [
+const KK_WIDTHS = [
   44, 128, 44, 118, 46, 220, 52, 76, 72, 72, 72, 64, 64, 64, 72, 60,
   62, 66, 70, 60, 68, 108, 150, 110, 130, 82, 82, 92, 60, 170, 80, 92, 72,
 ]
 
-/** 冻结列（A–D）的累计左偏移 */
+/** 冻结列数（前四列 A–D：序号/批次/Item/P/N） */
 const STICKY_COUNT = 4
-const STICKY_LEFT = [0, 44, 172, 216]
 
-const VENDOR_SLOTS = [8, 9, 10, 11, 12, 13]
+interface ColMeta {
+  labels: string[]
+  widths: number[]
+  stickyLeft: number[]
+  vendorCols: Set<number>
+}
+
+/** 按当前布局生成每个物理列的显示标签/宽度：模板列用中文短标签，插入的列（如新供应商 CL）用其表头 */
+function buildColMeta(layout: MasterLayout): ColMeta {
+  const logicalOf = new Map<number, number>()
+  const pairs: [number, number][] = [
+    [layout.no, 0], [layout.name, 1], [layout.item, 2], [layout.pn, 3], [layout.rev, 4],
+    [layout.description, 5], [layout.qty, 6], [layout.quoteEach, 7], [layout.usVendor, 14], [layout.usd, 15],
+    [layout.quoteEa, 20], [layout.quoteNo, 21], [layout.leadTime, 22], [layout.material, 23],
+    [layout.surfaceFinish, 24], [layout.cleaningSpec, 25], [layout.process, 26], [layout.size, 27],
+    [layout.partType, 28], [layout.comment, 29], [layout.comment2, 30], [layout.basePn, 31], [layout.baseId, 32],
+  ]
+  for (const [phys, logical] of pairs) if (phys >= 0) logicalOf.set(phys, logical)
+  layout.costCols.forEach((phys, i) => logicalOf.set(phys, 16 + i))
+  const vendorCols = new Set(layout.vendorSlots.map((v) => v.col))
+  const labels: string[] = []
+  const widths: number[] = []
+  for (let c = 0; c < layout.colCount; c++) {
+    const logical = logicalOf.get(c)
+    if (logical !== undefined) {
+      labels.push(KK_LABELS[logical]!)
+      widths.push(KK_WIDTHS[logical]!)
+    } else if (vendorCols.has(c)) {
+      labels.push(layout.vendorSlots.find((v) => v.col === c)?.label ?? layout.headers[c] ?? '')
+      widths.push(72)
+    } else {
+      labels.push(layout.headers[c]?.trim() || colLetter(c))
+      widths.push(90)
+    }
+  }
+  const stickyLeft: number[] = []
+  let acc = 0
+  for (let c = 0; c < STICKY_COUNT; c++) {
+    stickyLeft.push(acc)
+    acc += widths[c] ?? 0
+  }
+  return { labels, widths, stickyLeft, vendorCols }
+}
 
 /** 选区蓝色叠加用 inset 阴影实现，避免和最低价绿底/TDB 琥珀底的 bg 类冲突 */
 const SEL_TINT = 'shadow-[inset_0_0_0_999px_rgba(59,130,246,0.16)]'
@@ -74,6 +115,8 @@ function CellEditor(props: { initial: string; onDone: (value: string | null) => 
 interface RowProps {
   row: MasterRow
   rowIndex: number
+  layout: MasterLayout
+  meta: ColMeta
   editingCol: number | null
   selected: boolean
   selectedCols: Set<number>
@@ -85,6 +128,8 @@ interface RowProps {
 const MasterRowView = memo(function MasterRowView({
   row,
   rowIndex,
+  layout,
+  meta,
   editingCol,
   selected,
   selectedCols,
@@ -92,7 +137,7 @@ const MasterRowView = memo(function MasterRowView({
   onFinishEdit,
 }: RowProps) {
   // 供应商列最低价高亮（≥2 家有数值才标）
-  const prices = VENDOR_SLOTS.map((c) => parsePriceNum(row.cells[c] ?? null))
+  const prices = layout.vendorSlots.map((s) => parsePriceNum(row.cells[s.col] ?? null))
   const valid = prices.filter((p): p is number => p !== null)
   const min = valid.length >= 2 ? Math.min(...valid) : null
 
@@ -103,7 +148,7 @@ const MasterRowView = memo(function MasterRowView({
     >
       {row.cells.map((v, c) => {
         const isSticky = c < STICKY_COUNT
-        const isVendor = c >= 8 && c <= 13
+        const isVendor = meta.vendorCols.has(c)
         const num = isVendor ? parsePriceNum(v) : null
         const isMin = min !== null && num !== null && num === min
         const isTdb = isVendor && typeof v === 'string' && /tdb|tbd|待定/i.test(v)
@@ -116,9 +161,9 @@ const MasterRowView = memo(function MasterRowView({
             data-cell={`${rowIndex}:${c}`}
             title={c === 0 ? '点击选中本行；按住拖动可多选（用于比价/复制/删除）' : cellText(v)}
             style={{
-              minWidth: COL_WIDTHS[c],
-              maxWidth: COL_WIDTHS[c]! * 1.6,
-              ...(isSticky ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 1 } : {}),
+              minWidth: meta.widths[c],
+              maxWidth: (meta.widths[c] ?? 90) * 1.6,
+              ...(isSticky ? { position: 'sticky' as const, left: meta.stickyLeft[c], zIndex: 1 } : {}),
             }}
             className={`overflow-hidden border-r border-b border-slate-100 px-1.5 py-0.5 text-xs text-ellipsis whitespace-nowrap ${
               c === 0
@@ -132,10 +177,10 @@ const MasterRowView = memo(function MasterRowView({
                   ? 'bg-blue-50'
                   : 'bg-white group-hover:bg-blue-50'
                 : ''
-            } ${c === KK_COL.pn ? 'font-mono font-medium' : ''} ${
+            } ${c === layout.pn ? 'font-mono font-medium' : ''} ${
               isMin ? 'bg-green-100 font-semibold text-green-700' : ''
             } ${isTdb ? 'bg-amber-50 text-amber-700' : ''} ${
-              c === KK_COL.quoteEach ? 'bg-blue-50/60 font-medium' : ''
+              c === layout.quoteEach ? 'bg-blue-50/60 font-medium' : ''
             } ${tinted ? SEL_TINT : ''} ${isEditing ? 'p-0' : ''}`}
           >
             {isEditing ? (
@@ -175,6 +220,8 @@ export default function MasterTable(props: {
   onClearSelection: () => void
 }) {
   const editMasterCell = useSession((s) => s.editMasterCell)
+  const layout = useSession((s) => s.master?.layout ?? CANONICAL_LAYOUT)
+  const meta = useMemo(() => buildColMeta(layout), [layout])
   const [editing, setEditing] = useState<{ rowIndex: number; col: number } | null>(null)
 
   const finishEdit = (rowIndex: number, col: number, value: string | null) => {
@@ -282,16 +329,16 @@ export default function MasterTable(props: {
       >
         <thead className="sticky top-0 z-10">
           <tr>
-            {COL_LABELS.map((label, c) => (
+            {meta.labels.map((label, c) => (
               <th
                 key={c}
                 onClick={c === 0 ? props.onClearSelection : undefined}
                 {...(c > 0 ? { 'data-colh': c } : {})}
                 title={c === 0 ? '点击清空全部选中' : '点击选中整列，按住拖动选多列（Delete 清空 / Ctrl+C 复制）'}
                 style={{
-                  minWidth: COL_WIDTHS[c],
+                  minWidth: meta.widths[c],
                   ...(c < STICKY_COUNT
-                    ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 11 }
+                    ? { position: 'sticky' as const, left: meta.stickyLeft[c], zIndex: 11 }
                     : {}),
                 }}
                 className={`cursor-pointer border-r border-b border-slate-200 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap select-none ${
@@ -312,6 +359,8 @@ export default function MasterTable(props: {
               key={index}
               row={row}
               rowIndex={index}
+              layout={layout}
+              meta={meta}
               editingCol={editing?.rowIndex === index ? editing.col : null}
               selected={props.selected.has(index)}
               selectedCols={props.selectedCols}
@@ -325,7 +374,7 @@ export default function MasterTable(props: {
           ))}
           {props.rows.length === 0 && (
             <tr>
-              <td colSpan={COL_LABELS.length} className="px-4 py-24 text-center">
+              <td colSpan={meta.labels.length} className="px-4 py-24 text-center">
                 <div className="text-4xl">📥</div>
                 <div className="mt-3 text-base font-medium text-slate-600">
                   {props.hasMaster

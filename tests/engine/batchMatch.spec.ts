@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { makeQuote } from '../fixtures/rows'
 import {
+  CANONICAL_LAYOUT,
   KK_COL_COUNT,
   partSetOverlap,
   resolveBatchSuggestion,
@@ -17,6 +18,7 @@ function row(vals: Record<number, MasterCell>): MasterRow {
 const mkMaster = (rows: MasterRow[]): MasterData => ({
   rows,
   sheetName: 'KK询价汇总',
+  layout: CANONICAL_LAYOUT,
   passthrough: [],
   sourceFileName: null,
   importedAt: null,

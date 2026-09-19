@@ -1,8 +1,8 @@
 import ExcelJS from 'exceljs'
 import { KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
-import { KK_COL_COUNT, type MasterCell, type MasterData, type PassthroughSheet } from './model'
+import { type MasterCell, type MasterData, type PassthroughSheet } from './model'
 import { negoTable, planNegoSheetWrite, type NegoSummary } from './nego'
-import { isMacroEnabledWorkbook, patchMasterWorkbook } from './patchExport'
+import { isMacroEnabledWorkbook, listSheetTables, patchMasterWorkbook } from './patchExport'
 
 export interface MasterExportOptions {
   /** 比价页当前内容：有明细时写入 NEGO sheet（与「复制为表格」同构布局，自动定位表头行） */
@@ -25,6 +25,8 @@ interface NegoWrite {
   sheetName: string
   writes: Map<number, Map<number, MasterCell>>
   lineCount: number
+  /** 0 基：表头行命中的 Excel 表格 + 明细末行（见 NegoSheetPlan.table） */
+  table?: { top: number; bodyEnd: number }
 }
 
 function findNegoSheet(master: MasterData): PassthroughSheet | null {
@@ -35,12 +37,14 @@ function findNegoSheet(master: MasterData): PassthroughSheet | null {
   )
 }
 
-function resolveNegoWrite(master: MasterData, nego: NegoSummary | null): NegoWrite | null {
+function resolveNegoWrite(master: MasterData, nego: NegoSummary | null, originalBuffer: ArrayBuffer | null): NegoWrite | null {
   if (!nego || nego.lines.length === 0) return null
   const sheet = findNegoSheet(master)
   if (!sheet) return null
-  const plan = planNegoSheetWrite(sheet.grid, nego)
-  return { sheetName: sheet.name, writes: plan.writes, lineCount: plan.lineCount }
+  // 原工作簿里 NEGO sheet 上的 Excel 表格范围：表头行命中表格时按表格体整体替换、合计行放表格下方
+  const tables = originalBuffer ? listSheetTables(originalBuffer, sheet.name) : []
+  const plan = planNegoSheetWrite(sheet.grid, nego, { tables })
+  return { sheetName: sheet.name, writes: plan.writes, lineCount: plan.lineCount, table: plan.table }
 }
 
 /**
@@ -56,7 +60,7 @@ export async function buildMasterWorkbook(
   opts: MasterExportOptions = {},
 ): Promise<MasterExportOutput> {
   const negoSummary = opts.nego ?? null
-  const nego = resolveNegoWrite(master, negoSummary)
+  const nego = resolveNegoWrite(master, negoSummary, originalBuffer)
   const negoOut = nego
     ? { negoRowsWritten: nego.lineCount, negoSheetName: nego.sheetName }
     : { negoRowsWritten: 0, negoSheetName: null }
@@ -65,7 +69,15 @@ export async function buildMasterWorkbook(
       const patched = patchMasterWorkbook(
         master,
         originalBuffer,
-        nego ? [{ sheetName: nego.sheetName, changes: new Map([...nego.writes].map(([r, m]) => [r + 1, m])) }] : [],
+        nego
+          ? [
+              {
+                sheetName: nego.sheetName,
+                changes: new Map([...nego.writes].map(([r, m]) => [r + 1, m])),
+                table: nego.table ? { top: nego.table.top + 1, bodyEnd: nego.table.bodyEnd + 1 } : undefined,
+              },
+            ]
+          : [],
       )
       if (patched) {
         return {
@@ -95,9 +107,10 @@ async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer, 
   const ws = wb.getWorksheet(master.sheetName) ?? wb.worksheets[0]
   if (!ws) throw new Error('原工作簿里找不到汇总 sheet')
   const oldRowCount = ws.actualRowCount
+  const colCount = master.layout.colCount
   master.rows.forEach((row, i) => {
     const r = ws.getRow(i + 2)
-    for (let c = 0; c < KK_COL_COUNT; c++) {
+    for (let c = 0; c < colCount; c++) {
       const cell = r.getCell(c + 1)
       const v = row.cells[c] ?? null
       // 保留原样式，仅更新值
@@ -107,7 +120,7 @@ async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer, 
   // 清掉比当前数据多出来的旧行值（例如删过行后）
   for (let r = master.rows.length + 2; r <= oldRowCount; r++) {
     const row = ws.getRow(r)
-    for (let c = 1; c <= KK_COL_COUNT; c++) {
+    for (let c = 1; c <= colCount; c++) {
       if (row.getCell(c).value !== null) row.getCell(c).value = null
     }
   }
@@ -136,7 +149,8 @@ async function buildFresh(
     right: { style: 'thin' as const, color: { argb: KK_STYLE.borderColor } },
   }
   const header = ws.getRow(1)
-  KK_HEADERS.forEach((h, i) => {
+  const headers = master.layout.headers.length > 0 ? master.layout.headers : [...KK_HEADERS]
+  headers.forEach((h, i) => {
     const cell = header.getCell(i + 1)
     cell.value = h
     cell.font = { bold: true }
@@ -145,8 +159,8 @@ async function buildFresh(
     cell.border = thin
   })
   header.height = 30
-  KK_COL_WIDTHS.forEach((w, i) => {
-    ws.getColumn(i + 1).width = w
+  headers.forEach((_, i) => {
+    ws.getColumn(i + 1).width = KK_COL_WIDTHS[i] ?? 11
   })
   master.rows.forEach((row, i) => {
     const r = ws.getRow(i + 2)

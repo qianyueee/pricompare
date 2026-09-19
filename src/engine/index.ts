@@ -8,7 +8,7 @@ export { rankPriceCandidates, probeDataRows } from './priceColumn'
 export { extractRows, type ExtractResult } from './extractRows'
 export { parsePrice, detectCurrencyFromText } from './normalize/price'
 export { parseLeadTime, formatLeadTime } from './normalize/leadtime'
-export { SEED_VENDORS, guessVendor, type Vendor, type VendorGuessInput } from './vendor'
+export { SEED_VENDORS, guessVendor, resolveVendorSlot, type Vendor, type VendorGuessInput } from './vendor'
 export { sheetFingerprint } from './fingerprint'
 export { analyzeSheet, pickBestSheet, type AnalyzeOptions } from './analyze'
 export { buildCompare } from './compare'
@@ -17,6 +17,9 @@ export { KK_HEADERS, KK_SHEET_NAME, KK_COL } from './export/kkLayout'
 export {
   KK_COL_COUNT,
   MASTER_MAX_ROWS,
+  MASTER_MAX_COLS,
+  CANONICAL_LAYOUT,
+  detectKKLayout,
   parseMasterWorkbook,
   findMasterSheet,
   isMasterWorkbook,
@@ -26,6 +29,9 @@ export {
   type MasterCell,
   type MasterRow,
   type MasterData,
+  type MasterLayout,
+  type VendorSlot,
+  type LayoutDetection,
   type PassthroughSheet,
 } from './master/model'
 export {
@@ -47,7 +53,7 @@ export {
 } from './master/batchMatch'
 export { buildMasterWorkbook, type MasterExportOutput, type MasterExportOptions } from './master/exportMaster'
 export { buildNegoWorkbook } from './export/exportNego'
-export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
+export { cleanMasterAmounts, cleanAmountString, amountCols, AMOUNT_COLS, type CleanResult } from './master/clean'
 export { deleteMasterRows, clearMasterCells } from './master/edit'
 export {
   pnTiers,
@@ -61,6 +67,7 @@ export {
   negoSummaryFromInputs,
   planNegoSheetWrite,
   type NegoSheetPlan,
+  type NegoSheetWriteOptions,
   type PnTier,
   type PnResolution,
   type NegoLine,
