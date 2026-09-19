@@ -205,22 +205,27 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.getByTestId('nego-back-btn').click()
   await expect(nego).toBeHidden()
 
-  // 导出总表：比价页当前内容（6 行有效明细）一并写进 NEGO sheet——标题保留、第 3 行起表头 + 明细 + Total
+  // 导出总表：比价页当前 7 行输入一并写进 NEGO sheet——重建为公式活表（第 4 行表头、第 5 行起预填、上方各家合计）
   const dl3p = page.waitForEvent('download')
   await page.getByTestId('export-master-btn').click()
   const dl3 = await dl3p
   const out3 = join(TMP, 'master-out-nego.xlsx')
   await dl3.saveAs(out3)
-  await expect(page.getByTestId('toast')).toContainText('比价 6 行已写入 NEGO sheet')
+  await expect(page.getByTestId('toast')).toContainText('比价 7 行已写入 NEGO sheet')
   const wb3 = new ExcelJS.Workbook()
   await wb3.xlsx.load(readFileSync(out3) as unknown as ArrayBuffer)
   const nws = wb3.getWorksheet('NEGO')!
   expect(nws.getCell('B1').value).toBe('Basis For Negotiation')
-  expect(nws.getCell('A3').value).toBe('P/N')
-  expect(nws.getCell('D3').value).toBe("Q'ty")
-  expect(nws.getCell('A4').value).toBe(FIXTURE_PNS[0])
-  expect(nws.getCell('D4').value).toBe(10)
-  expect(nws.getCell('A10').value).toBe('Total')
+  expect(nws.getCell('A4').value).toBe('P/N')
+  expect(nws.getCell('D4').value).toBe("Q'ty")
+  expect(nws.getCell('A5').value).toBe(FIXTURE_PNS[0])
+  expect(nws.getCell('D5').value).toBe(10)
+  const hcUnit = nws.getCell('E5').value as { formula?: string; result?: unknown }
+  expect(String(hcUnit.formula ?? '')).toContain('INDEX(') // HC Unit 是公式，带缓存值
+  expect(hcUnit.result).toBe(60)
+  expect(String((nws.getCell('H2').value as { formula?: string }).formula ?? '')).toContain('SUM(') // 上方各家合计
+  expect(nws.getCell('A11').value).toBe(FIXTURE_PNS[5]) // 第 7 行输入：数量未填
+  expect(JSON.stringify(nws.getCell('L11').value)).toContain('Qty missing')
 })
 
 test('同一批不同供应商报价：第二家自动识别批次并落到同一行', async ({ page }) => {

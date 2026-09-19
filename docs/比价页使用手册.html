@@ -281,7 +281,7 @@
         <ul>
           <li><strong>复制为表格</strong>：放进剪贴板，回 Excel <kbd>Ctrl+V</kbd> 即可（NEGO 布局，含 Total 行）；</li>
           <li><strong>导出表格</strong>：生成独立的 <code>NEGO_日期.xlsx</code>（全英文，最低价绿色高亮），可直接对外转发；</li>
-          <li><strong>导出汇总表</strong>时，比价页当前内容会<strong>自动写进总表的 NEGO sheet</strong>（按表头文字对齐各列，旧明细替换、表格下方备注不动；NEGO 是 Excel 表格时表格体整体替换、Total 行放表格下方；比价页空着则 NEGO sheet 原样不动）。</li>
+          <li><strong>导出汇总表</strong>时，比价页当前内容会<strong>自动写进总表的 NEGO sheet</strong>，并把它做成<strong>公式活表</strong>：之后在 Excel 里直接改零件号 / 数量也会自动重算（与比价页同一套阶梯取档逻辑，需要 Excel 365）；比价页空着则 NEGO sheet 原样不动。</li>
         </ul>
       </section>
 

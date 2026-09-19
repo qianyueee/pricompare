@@ -65,9 +65,6 @@ export {
   carryQtyFor,
   negoTable,
   negoSummaryFromInputs,
-  planNegoSheetWrite,
-  type NegoSheetPlan,
-  type NegoSheetWriteOptions,
   type PnTier,
   type PnResolution,
   type NegoLine,
@@ -76,4 +73,24 @@ export {
   type NegoSummaryLine,
 } from './master/nego'
 export { KK_VENDOR_SLOT_HEADERS } from './export/kkLayout'
-export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult, type ExtraSheetPatch } from './master/patchExport'
+export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult, type PatchOptions, type NegoPatch } from './master/patchExport'
+export {
+  buildNegoSheetSpec,
+  negoSheetVendors,
+  resolveNegoSheetRow,
+  negoSheetColumns,
+  negoFormulas,
+  negoTopFormulas,
+  negoDefinedNames,
+  negoTableXml,
+  negoSheetXml,
+  negoSheetDataXml,
+  sheetRef,
+  NEGO_HEADER_ROW,
+  NEGO_FIRST_ROW,
+  type NegoInput,
+  type NegoSheetSpec,
+  type NegoSheetRow,
+  type NegoSheetVendor,
+  type NegoSheetColumns,
+} from './master/negoSheet'

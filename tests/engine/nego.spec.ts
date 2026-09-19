@@ -9,7 +9,12 @@ import {
   carryQtyFor,
   dedupeNegoLinesByPn,
   negoToTsv,
-  planNegoSheetWrite,
+  buildNegoSheetSpec,
+  negoDefinedNames,
+  negoFormulas,
+  negoSheetColumns,
+  negoSheetDataXml,
+  negoTableXml,
   pnTiers,
   resolveNegoInput,
 } from '@engine/index'
@@ -249,145 +254,111 @@ describe('比价页：同零件号合并与数量 Tab 继承', () => {
   })
 })
 
-describe('导出时写入 NEGO sheet：planNegoSheetWrite', () => {
-  const summaryOf = () => {
-    const master = mkMaster([
+describe('导出 NEGO 活表：buildNegoSheetSpec（与比价页同逻辑的缓存值）', () => {
+  // A-1 有 10 档（HC 56.7 / SKW 45）与 50 档（HC 40 / SKW 42）；A-2 只有 5 档且只 HC 报价；A-3 HC 是文字 TDB；A-5 两家同价
+  const master = () =>
+    mkMaster([
       row({ 3: 'A-1', 6: 10, 9: 56.7, 10: 45 }),
+      row({ 3: 'A-1', 6: 50, 9: 40, 10: 42 }),
       row({ 3: 'A-2', 6: 5, 9: 100 }),
+      row({ 3: 'A-3', 6: 2, 9: 'TDB' }),
+      row({ 3: 'A-5', 6: 1, 9: 7, 10: 7 }),
     ])
-    return buildNegoSummary([buildNegoLine(master, 0), buildNegoLine(master, 1)])
-  }
-  const HEAD: MasterCell[] = [null, 'P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal']
 
-  it('找到用户表头行 → 明细从下一行起、对齐起始列；表头与一致的格不动；多出的旧行清空', () => {
-    const grid: MasterCell[][] = [
-      [null, 'Basis For Negotiation'],
-      [],
-      HEAD,
-      [null, 'OLD-1', 'AA', 'old', 1, 10, 20, 10, 10, 20, 10],
-      [null, 'OLD-2', 'AA', 'old', 2, 5, null, 5, 10, null, 10],
-      [null, 'OLD-3', 'AA', 'old', 3, 5, null, 5, 15, null, 15],
-      [null, 'Total', null, null, null, null, null, null, 35, 20, 35],
-    ]
-    const plan = planNegoSheetWrite(grid, summaryOf())
-    expect(plan.headerFound).toBe(true)
-    expect(plan.startRow).toBe(2)
-    expect(plan.startCol).toBe(1)
-    expect(plan.lineCount).toBe(2)
-    expect(plan.writes.has(2)).toBe(false) // 用户自己的表头行不改
-    expect(plan.writes.get(3)!.get(1)).toBe('A-1')
-    expect(plan.writes.get(3)!.get(4)).toBe(10)
-    expect(plan.writes.get(3)!.get(5)).toBe(56.7)
-    expect(plan.writes.get(4)!.get(1)).toBe('A-2')
-    // 第 3 条明细位置改成 Total 行：'Total' 与合计写入，空列清空
-    expect(plan.writes.get(5)!.get(1)).toBe('Total')
-    expect(plan.writes.get(5)!.get(8)).toBe(1067)
-    expect(plan.writes.get(5)!.get(9)).toBe(450)
-    expect(plan.writes.get(5)!.get(10)).toBe(950)
-    expect(plan.writes.get(5)!.get(2)).toBeNull() // 旧 'AA' 清空
-    // 原 Total 行（第 6 行）整体清空
-    expect(plan.writes.get(6)!.get(1)).toBeNull()
-    expect(plan.writes.get(6)!.get(8)).toBeNull()
+  it('供应商列 = 总表里出现过报价的列；输入去重去空；精确命中档 / 只一家 / 文字价 / 未找到', () => {
+    const spec = buildNegoSheetSpec(master(), [
+      { pn: 'A-1', qty: 10 },
+      { pn: ' a-1 ', qty: 99 }, // 同零件号 → 丢弃
+      { pn: 'A-2', qty: 5 },
+      { pn: 'A-3', qty: 2 },
+      { pn: 'NOPE', qty: 3 },
+      { pn: '', qty: 1 },
+      { pn: 'A-5', qty: 4 },
+    ])
+    expect(spec.masterSheet).toBe('KK询价汇总')
+    expect(spec.vendors).toEqual([
+      { col: 9, label: 'HC' },
+      { col: 10, label: 'SKW' },
+    ])
+    expect(spec.pn).toBe(3)
+    expect(spec.qty).toBe(6)
+    expect(spec.maxRow).toBe(5000)
+    expect(spec.rows.map((r) => r.pn)).toEqual(['A-1', 'A-2', 'A-3', 'NOPE', 'A-5'])
+    const [a1, a2, a3, nope, a5] = spec.rows
+    expect(a1).toMatchObject({ tier: 10, srcRow: 2, unit: [56.7, 45], min: 45, totals: [567, 450], optimal: 450, best: 'SKW', status: 'OK', quoted: '10 / 50', note: '' })
+    expect(a2).toMatchObject({ tier: 5, srcRow: 4, unit: [100, null], min: 100, totals: [500, null], optimal: 500, best: 'HC', status: '1/2 quoted', quoted: '5' })
+    expect(a3).toMatchObject({ tier: 2, srcRow: 5, unit: [null, null], min: null, totals: [null, null], optimal: null, best: '', status: 'No price (see Note)', note: 'HC: TDB' })
+    expect(nope).toMatchObject({ tier: null, srcRow: 0, unit: [null, null], status: 'P/N not found', quoted: '-', rev: '', description: '' })
+    expect(a5).toMatchObject({ tier: 1, unit: [7, 7], min: 7, best: 'TIE', status: 'OK', totals: [28, 28], optimal: 28 })
   })
 
-  it('没有表头行（如只有标题）→ 从标题下方第 3 行起连表头一起写', () => {
-    const grid: MasterCell[][] = [[null, 'Basis For Negotiation'], ['marker']]
-    const plan = planNegoSheetWrite(grid, summaryOf())
-    expect(plan.headerFound).toBe(false)
-    expect(plan.startRow).toBe(2)
-    expect(plan.startCol).toBe(0)
-    expect(plan.writes.get(2)!.get(0)).toBe('P/N')
-    expect(plan.writes.get(2)!.get(3)).toBe("Q'ty")
-    expect(plan.writes.get(3)!.get(0)).toBe('A-1')
-    expect(plan.writes.get(5)!.get(0)).toBe('Total')
-    expect(plan.writes.has(0)).toBe(false) // 标题区不动
+  it('阶梯取档：不在档上取 ≤数量 的最大档，比最小档还小取最小档，总价按输入数量；数量未填 → Qty missing 但仍列出数量档', () => {
+    const spec = buildNegoSheetSpec(master(), [
+      { pn: 'A-1', qty: 20 },
+      { pn: 'A-2', qty: 3 },
+    ])
+    expect(spec.rows[0]).toMatchObject({ tier: 10, unit: [56.7, 45], totals: [1134, 900], optimal: 900, status: 'OK' })
+    expect(spec.rows[1]).toMatchObject({ tier: 5, unit: [100, null], totals: [300, null], status: '1/2 quoted' })
+    const s60 = buildNegoSheetSpec(master(), [{ pn: 'A-1', qty: 60 }])
+    expect(s60.rows[0]).toMatchObject({ tier: 50, srcRow: 3, unit: [40, 42], totals: [2400, 2520], best: 'HC', optimal: 2400 })
+    const none = buildNegoSheetSpec(master(), [{ pn: 'A-1', qty: null }])
+    expect(none.rows[0]).toMatchObject({ tier: null, srcRow: 0, unit: [null, null], status: 'Qty missing', quoted: '10 / 50', optimal: null })
   })
 
-  it('按表头文字对齐列：只剩 HC 一家时数据仍落在 HC 列、SKW 列清空；表头没有的列追加并补表头', () => {
-    const master = mkMaster([row({ 3: 'A-1', 6: 10, 9: 56.7 })])
-    const hcOnly = buildNegoSummary([buildNegoLine(master, 0)]) // vendors = [HC]
-    const grid: MasterCell[][] = [
-      [null, 'Basis For Negotiation'],
-      [],
-      [null, 'P/N', 'Rev', 'Description', 'Qty', 'HC Unit (RMB)', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal'],
-      [null, 'OLD-1', 'AA', 'old', 1, 10, 20, 10, 10, 20, 10],
-      [null, 'Total', null, null, null, null, null, null, 10, 20, 10],
-    ]
-    const plan = planNegoSheetWrite(grid, hcOnly)
-    expect(plan.headerFound).toBe(true)
-    const r3 = plan.writes.get(3)!
-    expect(r3.get(1)).toBe('A-1')
-    expect(r3.get(4)).toBe(10) // Qty ≈ Q'ty
-    expect(r3.get(5)).toBe(56.7) // HC Unit (RMB) ≈ HC Unit
-    expect(r3.get(6)).toBeNull() // SKW Unit 清空
-    expect(r3.get(7)).toBe(56.7) // Min
-    expect(r3.get(8)).toBe(567) // HC Total
-    expect(r3.get(9)).toBeNull() // SKW Total 清空
-    expect(r3.get(10)).toBe(567) // Optimal
-    expect(plan.writes.get(4)!.get(8)).toBe(567) // Total 行 HC 合计
-    expect(plan.writes.has(2)).toBe(false) // 表头行未改
-    // 表头里没有 SKW 列时：追加在末尾并写表头文字
-    const master2 = mkMaster([row({ 3: 'B-1', 6: 2, 9: 10, 10: 8 })])
-    const both = buildNegoSummary([buildNegoLine(master2, 0)])
-    const grid2: MasterCell[][] = [[null, 'P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'Min', 'HC Total', 'Optimal']]
-    const plan2 = planNegoSheetWrite(grid2, both)
-    expect(plan2.writes.get(0)!.get(9)).toBe('SKW Unit')
-    expect(plan2.writes.get(0)!.get(10)).toBe('SKW Total')
-    expect(plan2.writes.get(1)!.get(9)).toBe(8)
-    expect(plan2.writes.get(1)!.get(5)).toBe(10)
-    expect(plan2.writes.get(1)!.get(6)).toBe(8) // Min
-    expect(plan2.writes.get(1)!.get(10)).toBe(16) // SKW Total 2×8
-  })
-})
-
-describe('NEGO sheet 是 Excel 表格时：planNegoSheetWrite 表格体整体替换', () => {
-  // 真实汇总 NEGO sheet 的写法：表格 A4:L9（表头第 4 行、第 5 行空着、零件号从第 6 行起贴），
-  // 各列是 XLOOKUP 公式（缓存值为空 → 网格里看不见），表格上方是 SUM(Table1[[#All],…]) 合计
-  const grid = (): MasterCell[][] => [
-    [null, 'Basis For Negotiation', null, null, null, null, null, null, 'HC', 'SKW', null, 'Optimal'],
-    [],
-    ['Copy PN from PO'],
-    ['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit Price', 'SKW Unit', 'Column1', 'Min', 'HC Total', 'SKW Total', 'Column2', 'Optimal2'],
-    [],
-    ['OLD-1'],
-    ['OLD-2'],
-    ['OLD-3'],
-    ['OLD-4'],
-  ]
-  const summary = () => {
-    const master = mkMaster([row({ 3: 'A-1', 6: 10, 9: 56.7, 10: 45 }), row({ 3: 'A-2', 6: 5, 9: 100 })])
-    return buildNegoSummary([buildNegoLine(master, 0), buildNegoLine(master, 1)])
-  }
-
-  it('表头行命中表格 → 表格体（首行空、零件号从第二行起）整体清空，明细紧贴表头、合计在明细下一行、表格收缩到明细末行', () => {
-    const plan = planNegoSheetWrite(grid(), summary(), { tables: [{ top: 3, bottom: 8 }] })
-    expect(plan.headerFound).toBe(true)
-    expect(plan.table).toEqual({ top: 3, bodyEnd: 5 })
-    expect(plan.writes.get(4)!.get(0)).toBe('A-1')
-    expect(plan.writes.get(4)!.get(4)).toBe(56.7) // 'HC Unit Price' ≈ 'HC Unit'
-    expect(plan.writes.get(4)!.get(11)).toBe(450) // 'Optimal2' ≈ 'Optimal'：10 × min(56.7, 45)
-    expect(plan.writes.get(5)!.get(0)).toBe('A-2')
-    expect(plan.writes.get(6)!.get(0)).toBe('Total')
-    expect(plan.writes.get(6)!.get(8)).toBe(1067)
-    // 旧零件号 OLD-3/OLD-4（第 8、9 行）整体清空；空白格也明确清一次（缓存值为空的公式格）
-    for (const r of [7, 8]) {
-      expect(plan.writes.get(r)!.get(0)).toBeNull()
-      expect(plan.writes.get(r)!.get(4)).toBeNull()
-    }
-    expect(plan.writes.has(9)).toBe(false) // 表格外不动
-    expect(plan.writes.has(2)).toBe(false) // 'Copy PN from PO' 说明行不动
-    expect(plan.writes.has(3)).toBe(false) // 用户表头不动
+  it('列布局、公式文本与工作簿名称：结构化引用、按物理列引用汇总表、数组公式标记', () => {
+    const spec = buildNegoSheetSpec(master(), [{ pn: 'A-1', qty: 10 }])
+    const C = negoSheetColumns(spec.vendors)
+    expect(C.names).toEqual(['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal', 'Best', 'Status', 'Qty Tier', "Quoted Q'ty", 'Note', 'Src Row'])
+    expect(C.count).toBe(16)
+    const fx = negoFormulas(spec, 'NegoTable')
+    expect(fx[C.pn]).toBeNull()
+    expect(fx[C.qty]).toBeNull()
+    expect(fx[C.rev]!.formula).toBe("IF(NegoTable[[#This Row],[Src Row]]=0,\"\",IF(INDEX('KK询价汇总'!$E:$E,NegoTable[[#This Row],[Src Row]])=\"\",\"\",INDEX('KK询价汇总'!$E:$E,NegoTable[[#This Row],[Src Row]])))")
+    expect(fx[C.unitStart]!.formula).toContain("ISNUMBER(INDEX('KK询价汇总'!$J:$J,NegoTable[[#This Row],[Src Row]]))")
+    expect(fx[C.unitStart + 1]!.formula).toContain("'KK询价汇总'!$K:$K")
+    expect(fx[C.totalStart]!.formula).toBe("IF(OR(NegoTable[[#This Row],[HC Unit]]=\"\",NegoTable[[#This Row],[Q''ty]]=\"\"),\"\",NegoTable[[#This Row],[Q''ty]]*NegoTable[[#This Row],[HC Unit]])") // 结构化引用里 ' 翻倍
+    expect(fx[C.min]!.formula).toBe('IF(COUNT(NegoTable[[#This Row],[HC Unit]:[SKW Unit]])=0,"",MIN(NegoTable[[#This Row],[HC Unit]:[SKW Unit]]))')
+    expect(fx[C.best]!.formula).toContain('INDEX({"HC","SKW"},MATCH(')
+    expect(fx[C.tier]).toMatchObject({ array: true })
+    expect(fx[C.tier]!.formula).toContain("MAX((MPN=TRIM(NegoTable[[#This Row],[P/N]]))*(MQTY<=IFERROR(NegoTable[[#This Row],[Q''ty]]*1,0))*MQTY)")
+    expect(fx[C.tier]!.formula).toContain('MIN(IF((MPN=TRIM(NegoTable[[#This Row],[P/N]]))*(MQTY>0),MQTY))')
+    expect(fx[C.srcRow]!.formula).toBe('IF(NegoTable[[#This Row],[Qty Tier]]="",0,MAX((MPN=TRIM(NegoTable[[#This Row],[P/N]]))*(MQTY=NegoTable[[#This Row],[Qty Tier]])*MROW))')
+    expect(fx[C.quoted]!.formula).toContain('_xlfn.TEXTJOIN(" / ",TRUE,_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(MQTY,(MPN=')
+    expect(fx[C.status]!.formula).toContain('COUNT(NegoTable[[#This Row],[HC Unit]:[SKW Unit]])&"/2 quoted"')
+    expect(fx[C.note]!.formula).toContain('"HC: "&INDEX(\'KK询价汇总\'!$J:$J,')
+    expect(negoDefinedNames(spec)).toEqual([
+      { name: 'MPN', formula: "TRIM(SUBSTITUTE(SUBSTITUTE('KK询价汇总'!$D$2:$D$5000,CHAR(10),\" \"),CHAR(13),\" \"))" },
+      { name: 'MQTY', formula: "IFERROR(VALUE('KK询价汇总'!$G$2:$G$5000),0)" },
+      { name: 'MROW', formula: "ROW('KK询价汇总'!$D$2:$D$5000)" },
+    ])
+    // 只有一家时 UNITS 是单列引用
+    const one = buildNegoSheetSpec(mkMaster([row({ 3: 'B-1', 6: 1, 9: 5 })]), [{ pn: 'B-1', qty: 1 }])
+    expect(negoFormulas(one, 'T')[negoSheetColumns(one.vendors).min]!.formula).toBe('IF(COUNT(T[[#This Row],[HC Unit]])=0,"",MIN(T[[#This Row],[HC Unit]]))')
   })
 
-  it('不知道表格范围（无原工作簿）→ 只按连续零件号块判断旧明细，不出 table', () => {
-    const plan = planNegoSheetWrite(grid(), summary())
-    expect(plan.table).toBeUndefined()
-    expect(plan.writes.get(6)!.get(0)).toBe('Total') // 两行明细后合计（覆盖 OLD-2）
-    expect(plan.writes.has(7)).toBe(false) // 表格首行空 → 连续块为空，OLD-3/OLD-4 不动
-  })
-
-  it('表格表头不是找到的表头行（sheet 上别的表格）→ 忽略', () => {
-    const plan = planNegoSheetWrite(grid(), summary(), { tables: [{ top: 10, bottom: 12 }] })
-    expect(plan.table).toBeUndefined()
+  it('表格 XML 与 sheetData：ref 覆盖预填行 + 空行，计算列公式，预填行带缓存值，合计区公式', () => {
+    const spec = buildNegoSheetSpec(master(), [{ pn: 'A-1', qty: 10 }, { pn: 'NOPE', qty: 3 }], { spareRows: 3 })
+    const t = negoTableXml(spec, { id: 7, name: 'NegoTable' })
+    expect(t).toContain('id="7" name="NegoTable" displayName="NegoTable" ref="A4:P9"') // 2 行 + 3 空行 → 第 9 行
+    expect(t).toContain('<autoFilter ref="A4:P9"/>')
+    expect(t).toContain('<tableColumns count="16">')
+    expect((t.match(/<calculatedColumnFormula/g) ?? []).length).toBe(14)
+    expect((t.match(/<calculatedColumnFormula array="1">/g) ?? []).length).toBe(5)
+    expect(t).toContain('<tableColumn id="4" name="Q\'ty"/>')
+    const d = negoSheetDataXml(spec, 'NegoTable')
+    expect(d).toContain('<c r="B1" t="inlineStr"><is><t xml:space="preserve">Basis For Negotiation</t></is></c>')
+    expect(d).toContain('<c r="H1" t="inlineStr"><is><t xml:space="preserve">HC</t></is></c>')
+    expect(d).toContain('<c r="H2"><f>SUM(NegoTable[HC Total])</f><v>567</v></c>')
+    expect(d).toContain('<c r="J3"><f>SUMIFS(NegoTable[Optimal],NegoTable[Status],&quot;OK&quot;)</f><v>450</v></c>')
+    expect(d).toContain('<c r="A5" t="inlineStr"><is><t xml:space="preserve">A-1</t></is></c>')
+    expect(d).toContain('<c r="D5"><v>10</v></c>')
+    expect(d).toMatch(/<c r="E5"><f>IF\(NegoTable\[\[#This Row\],\[Src Row\]\]=0,[^<]*<\/f><v>56.7<\/v><\/c>/)
+    expect(d).toMatch(/<c r="L5" t="str"><f t="array" ref="L5">[^<]*<\/f><v>OK<\/v><\/c>/)
+    expect(d).toMatch(/<c r="P5"><f t="array" ref="P5">[^<]*<\/f><v>2<\/v><\/c>/) // Src Row = Excel 第 2 行
+    expect(d).toMatch(/<c r="L6" t="str"><f t="array" ref="L6">[^<]*<\/f><v>P\/N not found<\/v><\/c>/)
+    expect(d).not.toMatch(/<c r="A7"/) // 空行不写零件号
+    expect(d).toMatch(/<c r="P7"><f t="array" ref="P7">[^<]*<\/f><v>0<\/v><\/c>/) // 空行 Src Row 缓存 0
+    expect(d).toContain('<row r="9">')
+    expect(d).not.toContain('<row r="10">')
   })
 })

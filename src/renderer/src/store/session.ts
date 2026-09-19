@@ -21,7 +21,6 @@ import {
   type Vendor,
   amountCols,
   dedupeNegoLinesByPn,
-  negoSummaryFromInputs,
 } from '@engine/index'
 import { api } from '../api'
 
@@ -528,11 +527,9 @@ export const useSession = create<SessionState>((set, get) => ({
     if (!master) return
     set({ exporting: true })
     try {
-      // 比价页当前内容（有明细时）一并写进 NEGO sheet
-      const nego = negoSummaryFromInputs(master, negoLines)
-      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null, {
-        nego: nego.lines.length > 0 ? nego : null,
-      })
+      // 比价页当前输入（编号 + 数量）一并写进 NEGO sheet：重建为与比价页同逻辑的公式活表并预填
+      const negoInputs = negoLines.filter((l) => l.pn.trim() !== '').map((l) => ({ pn: l.pn.trim(), qty: l.qty }))
+      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null, { negoInputs })
       const saved = await api.saveXlsx({
         // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
         defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,
@@ -546,7 +543,9 @@ export const useSession = create<SessionState>((set, get) => ({
               (out.mode === 'rewrite'
                 ? '汇总表已导出（注意：保真补丁失败，本次为降级导出，公式/样式可能有损，请反馈）'
                 : '汇总表已导出') +
-              (out.negoRowsWritten > 0 ? `（比价 ${out.negoRowsWritten} 行已写入 ${out.negoSheetName} sheet）` : ''),
+              (out.negoRowsWritten > 0
+                ? `（比价 ${out.negoRowsWritten} 行已写入 ${out.negoSheetName} sheet${out.negoLive ? '，表内公式可直接改编号/数量重算' : ''}）`
+                : ''),
             path: saved.path,
           },
         })

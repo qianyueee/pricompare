@@ -1,12 +1,16 @@
 import ExcelJS from 'exceljs'
 import { KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
 import { type MasterCell, type MasterData, type PassthroughSheet } from './model'
-import { negoTable, planNegoSheetWrite, type NegoSummary } from './nego'
-import { isMacroEnabledWorkbook, listSheetTables, patchMasterWorkbook } from './patchExport'
+import { negoSummaryFromInputs, negoTable } from './nego'
+import { NEGO_HEADER_ROW, buildNegoSheetSpec, type NegoInput } from './negoSheet'
+import { isMacroEnabledWorkbook, patchMasterWorkbook } from './patchExport'
 
 export interface MasterExportOptions {
-  /** 比价页当前内容：有明细时写入 NEGO sheet（与「复制为表格」同构布局，自动定位表头行） */
-  nego?: NegoSummary | null
+  /**
+   * 比价页当前输入（编号 + 下单数量）：有内容时把工作簿的 NEGO sheet 重建为与比价页同一套逻辑的
+   * 公式活表（输入编号/数量自动算单价、最低、总额、最优）并预填这些行；空则 NEGO sheet 原样不动
+   */
+  negoInputs?: NegoInput[] | null
 }
 
 export interface MasterExportOutput {
@@ -15,18 +19,11 @@ export interface MasterExportOutput {
   extension: 'xlsx' | 'xlsm'
   /** patch=字节级保真；rewrite=exceljs 降级重写（可能丢公式/样式）；fresh=从零重建 */
   mode: 'patch' | 'rewrite' | 'fresh'
-  /** 写入 NEGO sheet 的比价明细行数（0 = 没写：比价页为空或工作簿里没有 NEGO sheet） */
+  /** 写入 NEGO sheet 的比价行数（0 = 没写：比价页为空或工作簿里没有 NEGO sheet） */
   negoRowsWritten: number
   negoSheetName: string | null
-}
-
-/** 0 基 (行 → 列 → 值) 的 NEGO 写入集 */
-interface NegoWrite {
-  sheetName: string
-  writes: Map<number, Map<number, MasterCell>>
-  lineCount: number
-  /** 0 基：表头行命中的 Excel 表格 + 明细末行（见 NegoSheetPlan.table） */
-  table?: { top: number; bodyEnd: number }
+  /** true = 公式活表（补丁路径）；false = 降级路径只写了值表 */
+  negoLive: boolean
 }
 
 function findNegoSheet(master: MasterData): PassthroughSheet | null {
@@ -37,54 +34,35 @@ function findNegoSheet(master: MasterData): PassthroughSheet | null {
   )
 }
 
-function resolveNegoWrite(master: MasterData, nego: NegoSummary | null, originalBuffer: ArrayBuffer | null): NegoWrite | null {
-  if (!nego || nego.lines.length === 0) return null
-  const sheet = findNegoSheet(master)
-  if (!sheet) return null
-  // 原工作簿里 NEGO sheet 上的 Excel 表格范围：表头行命中表格时按表格体整体替换、合计行放表格下方
-  const tables = originalBuffer ? listSheetTables(originalBuffer, sheet.name) : []
-  const plan = planNegoSheetWrite(sheet.grid, nego, { tables })
-  return { sheetName: sheet.name, writes: plan.writes, lineCount: plan.lineCount, table: plan.table }
-}
-
 /**
  * 导出汇总。优先级：
- * 1) zip 级补丁（原文件字节级保真：公式/批注/样式/customXml 全保留，只改动过的单元格）
- * 2) exceljs 以原工作簿为底整本重写（兜底，会丢部分样式与公式）
- * 3) 从零重建（无原文件时）
- * 三条路径都会把比价页内容写进 NEGO sheet（有明细时）。
+ * 1) zip 级补丁（原文件字节级保真：公式/批注/样式/customXml 全保留，只改动过的单元格）——
+ *    NEGO sheet 重建为公式活表
+ * 2) exceljs 以原工作簿为底整本重写（兜底，会丢部分样式与公式）——NEGO 只写值表
+ * 3) 从零重建（无原文件时）——NEGO 只写值表
  */
 export async function buildMasterWorkbook(
   master: MasterData,
   originalBuffer: ArrayBuffer | null,
   opts: MasterExportOptions = {},
 ): Promise<MasterExportOutput> {
-  const negoSummary = opts.nego ?? null
-  const nego = resolveNegoWrite(master, negoSummary, originalBuffer)
-  const negoOut = nego
-    ? { negoRowsWritten: nego.lineCount, negoSheetName: nego.sheetName }
-    : { negoRowsWritten: 0, negoSheetName: null }
+  const inputs = (opts.negoInputs ?? []).filter((i) => i.pn.trim() !== '')
+  const negoSheet = inputs.length > 0 ? findNegoSheet(master) : null
   if (originalBuffer) {
     try {
       const patched = patchMasterWorkbook(
         master,
         originalBuffer,
-        nego
-          ? [
-              {
-                sheetName: nego.sheetName,
-                changes: new Map([...nego.writes].map(([r, m]) => [r + 1, m])),
-                table: nego.table ? { top: nego.table.top + 1, bodyEnd: nego.table.bodyEnd + 1 } : undefined,
-              },
-            ]
-          : [],
+        negoSheet ? { nego: { sheetName: negoSheet.name, spec: buildNegoSheetSpec(master, inputs) } } : {},
       )
       if (patched) {
         return {
           buffer: patched.buffer,
           extension: isMacroEnabledWorkbook(originalBuffer) ? 'xlsm' : 'xlsx',
           mode: 'patch',
-          ...negoOut,
+          negoRowsWritten: patched.negoRows,
+          negoSheetName: patched.negoRows > 0 && negoSheet ? negoSheet.name : null,
+          negoLive: patched.negoRows > 0,
         }
       }
     } catch {
@@ -92,16 +70,42 @@ export async function buildMasterWorkbook(
     }
     try {
       // exceljs 重写生成的是标准 xlsx 内容类型
-      return { buffer: await rewriteOriginal(master, originalBuffer, nego), extension: 'xlsx', mode: 'rewrite', ...negoOut }
+      const r = await rewriteOriginal(master, originalBuffer, negoSheet?.name ?? null, inputs)
+      return { buffer: r.buffer, extension: 'xlsx', mode: 'rewrite', negoRowsWritten: r.negoRows, negoSheetName: r.negoSheet, negoLive: false }
     } catch {
       // 原文件加载失败 → 退化为从零重建
     }
   }
-  const fresh = await buildFresh(master, nego, negoSummary)
-  return { buffer: fresh.buffer, extension: 'xlsx', mode: 'fresh', negoRowsWritten: fresh.negoRows, negoSheetName: fresh.negoSheet }
+  const fresh = await buildFresh(master, negoSheet?.name ?? null, inputs)
+  return { buffer: fresh.buffer, extension: 'xlsx', mode: 'fresh', negoRowsWritten: fresh.negoRows, negoSheetName: fresh.negoSheet, negoLive: false }
 }
 
-async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer, nego: NegoWrite | null): Promise<ArrayBuffer> {
+/** 降级路径的 NEGO 值表：清空 sheet，第 1 行标题、第 4 行起表头 + 明细 + Total（与「复制为表格」同构） */
+function writeNegoValues(ws: ExcelJS.Worksheet, master: MasterData, inputs: NegoInput[]): number {
+  const summary = negoSummaryFromInputs(master, inputs)
+  if (summary.lines.length === 0) return 0
+  try {
+    for (const [t] of ws.getTables()) ws.removeTable(t.name)
+  } catch {
+    // 无表格
+  }
+  if (ws.rowCount > 0) ws.spliceRows(1, ws.rowCount)
+  ws.getCell('B1').value = 'Basis For Negotiation'
+  negoTable(summary).forEach((cells, ri) => {
+    const r = ws.getRow(NEGO_HEADER_ROW + ri)
+    cells.forEach((v, c) => {
+      if (v !== null) r.getCell(c + 1).value = v
+    })
+  })
+  return summary.lines.length
+}
+
+async function rewriteOriginal(
+  master: MasterData,
+  originalBuffer: ArrayBuffer,
+  negoSheetName: string | null,
+  inputs: NegoInput[],
+): Promise<{ buffer: ArrayBuffer; negoRows: number; negoSheet: string | null }> {
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.load(originalBuffer)
   const ws = wb.getWorksheet(master.sheetName) ?? wb.worksheets[0]
@@ -124,19 +128,22 @@ async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer, 
       if (row.getCell(c).value !== null) row.getCell(c).value = null
     }
   }
-  if (nego) {
-    const nws = wb.getWorksheet(nego.sheetName)
+  let negoRows = 0
+  let negoSheet: string | null = null
+  if (negoSheetName && inputs.length > 0) {
+    const nws = wb.getWorksheet(negoSheetName)
     if (nws) {
-      for (const [r, m] of nego.writes) for (const [c, v] of m) nws.getRow(r + 1).getCell(c + 1).value = v
+      negoRows = writeNegoValues(nws, master, inputs)
+      negoSheet = negoRows > 0 ? negoSheetName : null
     }
   }
-  return (await wb.xlsx.writeBuffer()) as ArrayBuffer
+  return { buffer: (await wb.xlsx.writeBuffer()) as ArrayBuffer, negoRows, negoSheet }
 }
 
 async function buildFresh(
   master: MasterData,
-  nego: NegoWrite | null,
-  negoSummary: NegoSummary | null,
+  negoSheetName: string | null,
+  inputs: NegoInput[],
 ): Promise<{ buffer: ArrayBuffer; negoRows: number; negoSheet: string | null }> {
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet(master.sheetName || 'KK询价汇总', {
@@ -172,29 +179,26 @@ async function buildFresh(
   let negoSheet: string | null = null
   for (const sheet of master.passthrough) {
     const pws = wb.addWorksheet(sheet.name)
+    if (negoSheetName && sheet.name === negoSheetName && inputs.length > 0) {
+      negoRows = writeNegoValues(pws, master, inputs)
+      if (negoRows > 0) {
+        negoSheet = sheet.name
+        continue
+      }
+    }
     sheet.grid.forEach((cells, ri) => {
       const r = pws.getRow(ri + 1)
       cells.forEach((v: MasterCell, c: number) => {
         if (v !== null) r.getCell(c + 1).value = v
       })
     })
-    if (nego && sheet.name === nego.sheetName) {
-      for (const [r, m] of nego.writes) for (const [c, v] of m) pws.getRow(r + 1).getCell(c + 1).value = v
-      negoRows = nego.lineCount
-      negoSheet = sheet.name
-    }
   }
   // 从零重建且原本没有 NEGO sheet：新建一个放比价内容
-  if (!nego && negoSummary && negoSummary.lines.length > 0) {
+  if (!negoSheet && inputs.length > 0) {
     const pws = wb.addWorksheet('NEGO')
-    negoTable(negoSummary).forEach((cells, ri) => {
-      const r = pws.getRow(ri + 1)
-      cells.forEach((v, c) => {
-        if (v !== null) r.getCell(c + 1).value = v
-      })
-    })
-    negoRows = negoSummary.lines.length
-    negoSheet = 'NEGO'
+    negoRows = writeNegoValues(pws, master, inputs)
+    if (negoRows > 0) negoSheet = 'NEGO'
+    else wb.removeWorksheet(pws.id)
   }
   return { buffer: (await wb.xlsx.writeBuffer()) as ArrayBuffer, negoRows, negoSheet }
 }

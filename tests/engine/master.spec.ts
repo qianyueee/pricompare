@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs'
 import { describe, expect, it } from 'vitest'
-import { makeFileA, makeMasterFile, FIXTURE_PNS } from '../fixtures/buildFixtures'
+import { makeFileA, makeMasterFile, FIXTURE_DESCS, FIXTURE_PNS } from '../fixtures/buildFixtures'
 import { makeQuote } from '../fixtures/rows'
 import {
   CANONICAL_LAYOUT,
@@ -13,7 +13,6 @@ import {
   isMasterWorkbook,
   isPlaceholderRow,
   isRealQuoteNo,
-  negoSummaryFromInputs,
   parseMasterWorkbook,
   planMerge,
   readWorkbook,
@@ -389,86 +388,93 @@ describe('汇总导出', () => {
     expect(wb.getWorksheet('NEGO')!.getCell('A2').value).toBe('marker')
   })
 
-  it('导出时把比价内容写进 NEGO sheet（补丁路径）；再次导出按表头行定位并收缩旧明细', async () => {
+  it('导出时 NEGO sheet 重建为公式活表（补丁路径）：表格部件 / 名称 / 条件格式 / 缓存值；比价页为空则原样不动', async () => {
     const original = await makeMasterFile()
     const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
-    const nego = negoSummaryFromInputs(master, [
-      { pn: FIXTURE_PNS[0]!, qty: 10 },
-      { pn: '0900001-000', qty: 5 },
-      { pn: 'NOPE-1', qty: 3 }, // 总表里没有 → 不计入
-    ])
-    expect(nego.lines).toHaveLength(2)
-    const out = await buildMasterWorkbook(master, original, { nego })
+    const out = await buildMasterWorkbook(master, original, {
+      negoInputs: [
+        { pn: FIXTURE_PNS[0]!, qty: 10 },
+        { pn: '0900001-000', qty: 5 },
+        { pn: 'NOPE-1', qty: 3 },
+        { pn: '', qty: 1 },
+      ],
+    })
     expect(out.mode).toBe('patch')
-    expect(out.negoRowsWritten).toBe(2)
+    expect(out.negoRowsWritten).toBe(3)
     expect(out.negoSheetName).toBe('NEGO')
-    const re = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!
-    expect(re.rows[0]!.cells[9]).toBe(56.7) // 汇总 sheet 未动
-    const g = re.passthrough.find((s) => s.name === 'NEGO')!.grid
-    expect(g[0]![1]).toBe('Basis For Negotiation') // 标题保留
-    expect(g[1]![0]).toBe('marker')
-    expect(g[2]!.slice(0, 4)).toEqual(['P/N', 'Rev', 'Description', "Q'ty"]) // 无表头 → 第 3 行起
-    expect(g[3]![0]).toBe(FIXTURE_PNS[0])
-    expect(g[3]![3]).toBe(10)
-    expect(g[4]![0]).toBe('0900001-000')
-    expect(g[5]![0]).toBe('Total')
-    // 再导出：以上次输出为底，比价只剩 1 行 → 识别到表头行、多出的旧行清空
-    const master2 = parseMasterWorkbook(readWorkbook(out.buffer), 'm2.xlsx')!
-    const nego2 = negoSummaryFromInputs(master2, [{ pn: FIXTURE_PNS[0]!, qty: 10 }])
-    const out2 = await buildMasterWorkbook(master2, out.buffer, { nego: nego2 })
-    expect(out2.mode).toBe('patch')
-    const g2 = parseMasterWorkbook(readWorkbook(out2.buffer), 'o2.xlsx')!.passthrough[0]!.grid
-    expect(g2[2]![0]).toBe('P/N')
-    expect(g2[3]![0]).toBe(FIXTURE_PNS[0])
-    expect(g2[4]![0]).toBe('Total')
-    expect((g2[5] ?? []).every((v) => v === null || String(v).trim() === '')).toBe(true) // 旧 Total 行整体清空
-    expect(g2[3]![4]).toBe(56.7) // 只剩 HC 一家：仍按表头对齐落在 HC Unit 列
-    expect(g2[3]![5]).toBeNull() // SKW Unit 列清空
-    // 比价页为空 → NEGO sheet 原样不动
-    const out3 = await buildMasterWorkbook(master2, out.buffer, { nego: negoSummaryFromInputs(master2, []) })
-    expect(out3.negoRowsWritten).toBe(0)
-  })
-
-  it('NEGO sheet 表头在第 3 行、第 20 行有页脚：明细插在中间且 XML 行号保持升序、页脚不动', async () => {
-    const base = new ExcelJS.Workbook()
-    await base.xlsx.load(await makeMasterFile())
-    const nws = base.getWorksheet('NEGO')!
-    nws.getRow(3).values = ['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal']
-    nws.getCell('A20').value = 'footer'
-    const original = (await base.xlsx.writeBuffer()) as ArrayBuffer
-    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
-    const nego = negoSummaryFromInputs(master, [
-      { pn: FIXTURE_PNS[0]!, qty: 10 },
-      { pn: '0900001-000', qty: 5 },
-    ])
-    const out = await buildMasterWorkbook(master, original, { nego })
-    expect(out.mode).toBe('patch')
-    const g = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!.passthrough[0]!.grid
-    expect(g[2]![0]).toBe('P/N') // 用户表头原样
-    expect(g[3]![0]).toBe(FIXTURE_PNS[0])
-    expect(g[4]![0]).toBe('0900001-000')
-    expect(g[5]![0]).toBe('Total')
-    expect(g[19]![0]).toBe('footer')
-    // sheetData 内 <row r> 必须升序（否则 Excel 报修复）
+    expect(out.negoLive).toBe(true)
     const { unzipSync } = await import('fflate')
+    const dec = new TextDecoder()
     const files = unzipSync(new Uint8Array(out.buffer))
-    // 我们写入的格是内联字符串，按 Total 定位 NEGO sheet 的 XML（ExcelJS 写的原有文字走共享字符串表）
+    // 工作簿名称 + 打开时全量重算
+    const wbXml = dec.decode(files['xl/workbook.xml']!)
+    expect(wbXml).toContain("<definedName name=\"MPN\">TRIM(SUBSTITUTE(SUBSTITUTE('KK询价汇总'!$D$2:$D$5000,CHAR(10),")
+    expect(wbXml).toContain("<definedName name=\"MQTY\">IFERROR(VALUE('KK询价汇总'!$G$2:$G$5000),0)</definedName>")
+    expect(wbXml).toContain("<definedName name=\"MROW\">ROW('KK询价汇总'!$D$2:$D$5000)</definedName>")
+    expect(wbXml).toMatch(/<calcPr[^>]*fullCalcOnLoad="1"/)
+    expect(files['xl/calcChain.xml']).toBeUndefined()
+    // 新建的表格部件：关系 + 内容类型 + 计算列
+    const tablePaths = Object.keys(files).filter((k) => /^xl\/tables\/[^/]+\.xml$/.test(k))
+    expect(tablePaths).toHaveLength(1)
+    const tXml = dec.decode(files[tablePaths[0]!]!)
+    expect(tXml).toContain('displayName="NegoTable"')
+    expect(tXml).toContain('ref="A4:P17"') // 3 行 + 10 空行；2 家 → 16 列
+    expect((tXml.match(/<calculatedColumnFormula/g) ?? []).length).toBe(14)
+    expect(dec.decode(files['[Content_Types].xml']!)).toContain(`PartName="/${tablePaths[0]}"`)
     const negoPath = Object.keys(files).find(
-      (k) => /xl\/worksheets\/sheet\d+\.xml$/.test(k) && new TextDecoder().decode(files[k]!).includes('>Total</t>'),
+      (k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k) && dec.decode(files[k]!).includes("Copy PN + Q'ty from PO"),
     )!
-    const rowNos = [...new TextDecoder().decode(files[negoPath]!).matchAll(/<row r="(\d+)"/g)].map((m) => Number(m[1]))
-    expect(rowNos).toEqual([...rowNos].sort((a, b) => a - b))
-    expect(rowNos).toContain(4)
-    expect(rowNos).toContain(20)
+    const relsXml = dec.decode(files[negoPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')]!)
+    expect(relsXml).toContain('Target="../tables/table1.xml"')
+    const sx = dec.decode(files[negoPath]!)
+    expect(sx).toContain('<tableParts count="1">')
+    expect((sx.match(/<conditionalFormatting /g) ?? []).length).toBe(3)
+    expect(sx).toMatch(/<c r="E5"><f>[^<]*'KK询价汇总'!\$J:\$J[^<]*<\/f><v>56.7<\/v><\/c>/)
+    expect(sx).toMatch(/<c r="L5" t="str"><f t="array" ref="L5">[^<]*<\/f><v>1\/2 quoted<\/v><\/c>/)
+    expect(sx).toMatch(/<c r="L7" t="str"><f t="array" ref="L7">[^<]*<\/f><v>P\/N not found<\/v><\/c>/)
+    expect(sx).toContain('<c r="H2"><f>SUM(NegoTable[HC Total])</f><v>1067</v></c>')
+    expect((sx.match(/<row r="/g) ?? []).length).toBe(17)
+    const styles = dec.decode(files['xl/styles.xml']!)
+    expect((styles.match(/FFC6EFCE/g) ?? []).length).toBe(1)
+    // SheetJS 回读：汇总 sheet 未动、NEGO 预填行缓存值
+    const re = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!
+    expect(re.rows[0]!.cells[9]).toBe(56.7)
+    const g = re.passthrough.find((s) => s.name === 'NEGO')!.grid
+    expect(g[0]![1]).toBe('Basis For Negotiation')
+    expect(g[1]![7]).toBe(1067) // HC 合计 567 + 500
+    expect(g[1]![9]).toBe(1017) // 最优合计 567 + 450
+    expect(g[2]![7]).toBe(500) // 全部有价的行（只有第 2 行）
+    expect(g[3]!.slice(0, 7)).toEqual(['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min'])
+    expect(g[4]!.slice(0, 12)).toEqual([FIXTURE_PNS[0], 'AA', FIXTURE_DESCS[0], 10, 56.7, null, 56.7, 567, null, 567, 'HC', '1/2 quoted'])
+    expect(g[4]![13]).toBe('10')
+    expect(g[5]!.slice(3, 12)).toEqual([5, 100, 90, 90, 500, 450, 450, 'SKW', 'OK'])
+    expect(g[6]![0]).toBe('NOPE-1')
+    expect(g[6]![11]).toBe('P/N not found')
+    expect(g[6]![13]).toBe('-')
+    expect(g[7]?.[0] ?? null).toBeNull() // 空行
+    // 比价页为空 → 工作簿原样（NEGO 的 marker 还在）
+    const out0 = await buildMasterWorkbook(master, original, { negoInputs: [] })
+    expect(out0.negoRowsWritten).toBe(0)
+    expect(parseMasterWorkbook(readWorkbook(out0.buffer), 'o0.xlsx')!.passthrough[0]!.grid[1]![0]).toBe('marker')
+    // 无原文件：从零重建时 NEGO 只写值表（第 4 行表头 + 明细 + Total）
+    const fresh = await buildMasterWorkbook(master, null, { negoInputs: [{ pn: FIXTURE_PNS[0]!, qty: 10 }] })
+    expect(fresh.mode).toBe('fresh')
+    expect(fresh.negoLive).toBe(false)
+    expect(fresh.negoRowsWritten).toBe(1)
+    const fwb = new ExcelJS.Workbook()
+    await fwb.xlsx.load(fresh.buffer)
+    const fws = fwb.getWorksheet('NEGO')!
+    expect(fws.getCell('B1').value).toBe('Basis For Negotiation')
+    expect(fws.getCell('A4').value).toBe('P/N')
+    expect(fws.getCell('A5').value).toBe(FIXTURE_PNS[0])
+    expect(fws.getCell('A6').value).toBe('Total')
   })
 
-  it('NEGO sheet 是 Excel 表格（真实汇总写法）：表格体整体替换、合计行在表格下方、表格随明细收缩再扩展', async () => {
+  it('原 NEGO 已是 Excel 表格（真实写法）：复用其表格名，旧 XLOOKUP 清掉；再次导出不重复追加 dxf / 名称，表格随行数收缩', async () => {
     const base = new ExcelJS.Workbook()
     await base.xlsx.load(await makeMasterFile())
     const nws = base.getWorksheet('NEGO')!
-    nws.getCell('A3').value = 'Copy PN from PO'
-    nws.getCell('B2').value = { formula: 'SUM(Table1[[#All],[HC Total]])' }
-    const lookup = (r: number) => ({ formula: `XLOOKUP($A${r},KK询价汇总!$D:$D,KK询价汇总!E:E)` })
+    nws.getCell('I2').value = { formula: 'SUM(Table1[HC Total])' }
     nws.addTable({
       name: 'Table1',
       ref: 'A4',
@@ -478,71 +484,73 @@ describe('汇总导出', () => {
       columns: ['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit Price', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal2'].map(
         (name) => ({ name, filterButton: true }),
       ),
-      // 表格 A4:J9：第 5 行空着、零件号从第 6 行起贴，Rev 列是没有缓存值的 XLOOKUP 公式
-      rows: [
-        [null, null, null, null, null, null, null, null, null, null],
-        ['OLD-1', lookup(6), null, null, null, null, null, null, null, null],
-        ['OLD-2', lookup(7), null, null, null, null, null, null, null, null],
-        ['OLD-3', lookup(8), null, null, null, null, null, null, null, null],
-        ['OLD-4', lookup(9), null, null, null, null, null, null, null, null],
-      ],
+      rows: [['OLD-1', { formula: 'XLOOKUP($A5,KK询价汇总!$D:$D,KK询价汇总!E:E)' }, null, null, null, null, null, null, null, null]],
     })
     const original = (await base.xlsx.writeBuffer()) as ArrayBuffer
-    const blank = (v: unknown) => v === null || v === undefined || String(v).trim() === ''
+    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
     const { unzipSync } = await import('fflate')
     const dec = new TextDecoder()
     const inspect = (buffer: ArrayBuffer) => {
       const files = unzipSync(new Uint8Array(buffer))
-      const tablePath = Object.keys(files).find((k) => /xl\/tables\/.*\.xml$/.test(k) && dec.decode(files[k]!).includes('HC Unit Price'))!
+      const tables = Object.keys(files).filter((k) => /^xl\/tables\/[^/]+\.xml$/.test(k)) // 过滤 zip 目录项
       const negoPath = Object.keys(files).find(
-        (k) => /xl\/worksheets\/sheet\d+\.xml$/.test(k) && dec.decode(files[k]!).includes('>Total</t>'),
+        (k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k) && dec.decode(files[k]!).includes("Copy PN + Q'ty from PO"),
       )!
-      return { refs: dec.decode(files[tablePath]!).match(/ref="([^"]+)"/g), negoXml: dec.decode(files[negoPath]!) }
+      return {
+        tables,
+        tableXml: dec.decode(files[tables[0]!]!),
+        negoXml: dec.decode(files[negoPath]!),
+        styles: dec.decode(files['xl/styles.xml']!),
+        wbXml: dec.decode(files['xl/workbook.xml']!),
+        calcChain: files['xl/calcChain.xml'],
+      }
     }
-
-    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
-    const nego = negoSummaryFromInputs(master, [
-      { pn: FIXTURE_PNS[0]!, qty: 10 },
-      { pn: '0900001-000', qty: 5 },
-    ])
-    const out = await buildMasterWorkbook(master, original, { nego })
-    expect(out.mode).toBe('patch')
-    expect(out.negoRowsWritten).toBe(2)
-    const g = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!.passthrough[0]!.grid
-    expect(g[2]![0]).toBe('Copy PN from PO') // 说明行不动
-    expect(g[3]![0]).toBe('P/N') // 用户表头原样
-    expect(g[4]![0]).toBe(FIXTURE_PNS[0]) // 明细紧贴表头（表格首行原本空着）
-    expect(g[4]![4]).toBe(56.7) // 'HC Unit Price' 列
-    expect(g[5]![0]).toBe('0900001-000')
-    expect(g[6]![0]).toBe('Total') // 合计行在明细下一行
-    expect((g[7] ?? []).every(blank)).toBe(true) // 旧零件号 OLD-3/OLD-4 整体清空
-    expect((g[8] ?? []).every(blank)).toBe(true)
-    const one = inspect(out.buffer)
-    // 表格收缩到明细末行（合计行在表格外：表外 SUM(Table1[[#All],…]) 不会把合计再加一遍）
-    expect(one.refs).toEqual(['ref="A4:J6"', 'ref="A4:J6"'])
-    expect(one.negoXml).not.toContain('XLOOKUP') // 旧明细区里缓存值为空的公式格也清掉（否则零件号一清就成 #N/A）
-    expect(one.negoXml).toContain('SUM(Table1[[#All],[HC Total]])') // 表格上方用户自己的合计公式保留
-
-    // 再导出只剩 1 行 → 表格缩到 A4:J5、合计到第 6 行、旧合计行清空
-    const master2 = parseMasterWorkbook(readWorkbook(out.buffer), 'm2.xlsx')!
-    const out2 = await buildMasterWorkbook(master2, out.buffer, { nego: negoSummaryFromInputs(master2, [{ pn: FIXTURE_PNS[0]!, qty: 10 }]) })
-    const g2 = parseMasterWorkbook(readWorkbook(out2.buffer), 'o2.xlsx')!.passthrough[0]!.grid
-    expect(g2[4]![0]).toBe(FIXTURE_PNS[0])
-    expect(g2[5]![0]).toBe('Total')
-    expect((g2[6] ?? []).every(blank)).toBe(true)
-    expect(inspect(out2.buffer).refs).toEqual(['ref="A4:J5"', 'ref="A4:J5"'])
-
-    // 又变回 2 行 → 表格扩回 A4:J6
-    const master3 = parseMasterWorkbook(readWorkbook(out2.buffer), 'm3.xlsx')!
-    const out3 = await buildMasterWorkbook(master3, out2.buffer, {
-      nego: negoSummaryFromInputs(master3, [
+    const out = await buildMasterWorkbook(master, original, {
+      negoInputs: [
         { pn: FIXTURE_PNS[0]!, qty: 10 },
         { pn: '0900001-000', qty: 5 },
-      ]),
+      ],
     })
-    const g3 = parseMasterWorkbook(readWorkbook(out3.buffer), 'o3.xlsx')!.passthrough[0]!.grid
-    expect(g3[5]![0]).toBe('0900001-000')
-    expect(g3[6]![0]).toBe('Total')
-    expect(inspect(out3.buffer).refs).toEqual(['ref="A4:J6"', 'ref="A4:J6"'])
+    expect(out.negoLive).toBe(true)
+    const one = inspect(out.buffer)
+    expect(one.tables).toHaveLength(1)
+    expect(one.tableXml).toContain('displayName="Table1"')
+    expect(one.tableXml).toContain('ref="A4:P16"')
+    expect(one.tableXml).toContain('name="Qty Tier"')
+    expect(one.tableXml).not.toContain('XLOOKUP')
+    expect(one.negoXml).not.toContain('XLOOKUP')
+    expect(one.negoXml).toContain('Table1[[#This Row],[Src Row]]')
+    expect(one.negoXml).toContain('<c r="H2"><f>SUM(Table1[HC Total])</f>')
+    expect((one.styles.match(/FFC6EFCE/g) ?? []).length).toBe(1)
+    // 再导出只剩 1 行：表格部件与名称复用、dxf 与名称不重复、表格收缩到 1 行 + 10 空行
+    const master2 = parseMasterWorkbook(readWorkbook(out.buffer), 'm2.xlsx')!
+    const out2 = await buildMasterWorkbook(master2, out.buffer, { negoInputs: [{ pn: FIXTURE_PNS[0]!, qty: 10 }] })
+    const two = inspect(out2.buffer)
+    expect(two.tables).toEqual(one.tables)
+    expect(two.tableXml).toContain('displayName="Table1"')
+    expect(two.tableXml).toContain('ref="A4:P15"')
+    expect((two.styles.match(/FFC6EFCE/g) ?? []).length).toBe(1)
+    expect((two.wbXml.match(/<definedName name="MPN">/g) ?? []).length).toBe(1)
+    expect(two.calcChain).toBeUndefined()
+    const g2 = parseMasterWorkbook(readWorkbook(out2.buffer), 'o2.xlsx')!.passthrough[0]!.grid
+    expect(g2[4]![0]).toBe(FIXTURE_PNS[0])
+    expect(g2[5]?.[0] ?? null).toBeNull()
+  })
+
+  it('CL 插列布局：活表供应商列 = 有报价的列（HC / SKW / CL），公式按物理列引用汇总表', async () => {
+    const original = await makeMasterFile({ extraVendor: 'CL' })
+    const master = parseMasterWorkbook(readWorkbook(original), 'm.xlsx')!
+    const out = await buildMasterWorkbook(master, original, { negoInputs: [{ pn: '0900001-000', qty: 5 }] })
+    expect(out.negoLive).toBe(true)
+    const { unzipSync } = await import('fflate')
+    const dec = new TextDecoder()
+    const files = unzipSync(new Uint8Array(out.buffer))
+    const tXml = dec.decode(files[Object.keys(files).find((k) => /^xl\/tables\/[^/]+\.xml$/.test(k))!]!)
+    expect(tXml).toContain('name="CL Unit"')
+    expect(tXml).toContain("'KK询价汇总'!$L:$L")
+    expect(tXml).toContain('ref="A4:R15"') // 3 家 → 18 列
+    const g = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!.passthrough.find((s) => s.name === 'NEGO')!.grid
+    expect(g[3]!.slice(4, 12)).toEqual(['HC Unit', 'SKW Unit', 'CL Unit', 'Min', 'HC Total', 'SKW Total', 'CL Total', 'Optimal'])
+    expect(g[4]!.slice(3, 14)).toEqual([5, 100, 90, 88, 88, 500, 450, 440, 440, 'CL', 'OK'])
   })
 })

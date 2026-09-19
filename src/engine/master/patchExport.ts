@@ -2,6 +2,7 @@ import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
 import { isDataRow, parseMasterWorkbook, type MasterCell, type MasterData } from './model'
+import { NEGO_DXFS, negoDefinedNames, negoSheetXml, negoTableXml, type NegoDxfIds, type NegoSheetSpec } from './negoSheet'
 
 /**
  * zip 级"外科手术"导出：原工作簿每个字节原样保留，只把【确实改过的单元格】
@@ -92,69 +93,172 @@ export interface PatchResult {
   buffer: ArrayBuffer
   changedCells: number
   formulaCellsReplaced: number
-  /** 额外 sheet（如 NEGO）写入的单元格数 */
-  extraCells: number
+  /** 重建为活表的 NEGO sheet 里预填的比价行数（0 = 未重建） */
+  negoRows: number
 }
 
-/** 汇总以外的 sheet 补丁：Excel 1 基行号 → 0 基列 → 值（null = 清空） */
-export interface ExtraSheetPatch {
-  sheetName: string
-  changes: Map<number, Map<number, MasterCell>>
-  /**
-   * 写入区表头行正好是该 sheet 上某个 Excel 表格（Table）的表头时（1 基 Excel 行号）：
-   * 把该表格 ref/autoFilter 底部收缩或扩展到 bodyEnd（明细末行；合计行在其下、不进表格）
-   */
-  table?: { top: number; bodyEnd: number }
+/** sheet 关系文件路径 */
+const relsPathOf = (sheetPath: string): string => sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')
+
+/** 关系 Target（绝对 /xl/… 或相对 ../tables/…）→ zip 内路径 */
+function resolveTarget(sheetPath: string, target: string): string {
+  const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
+  return target.startsWith('/') ? target.slice(1) : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
 }
 
 /** sheet 关系文件里指向的所有表格（Table）part 路径 */
 function sheetTablePaths(files: Record<string, Uint8Array>, sheetPath: string): string[] {
-  const relsPath = sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')
-  const relsFile = files[relsPath]
+  const relsFile = files[relsPathOf(sheetPath)]
   if (!relsFile) return []
-  const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
   const out: string[] = []
   for (const m of dec.decode(relsFile).matchAll(/<Relationship\b[^>]*\/?>/g)) {
     if (!/\/table"/.test(m[0])) continue
     const target = attrOf(m[0], 'Target')
     if (!target) continue
-    const tablePath = target.startsWith('/') ? target.slice(1) : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
+    const tablePath = resolveTarget(sheetPath, target)
     if (files[tablePath]) out.push(tablePath)
   }
   return out
 }
 
 const TABLE_REF_RE = /(ref=")([A-Z]+)(\d+)(:[A-Z]+)(\d+)(")/g
+const TABLE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/table'
+const TABLE_CT = 'application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml'
 
-/**
- * 读出某个 sheet 上 Excel 表格（Table）的行范围（0 基：top = 表头行，bottom = 末行）。
- * 供 NEGO 写入规划识别"表头行就是表格表头"的 sheet；读不到（非 zip / 无表格）返回空数组。
- */
-export function listSheetTables(buffer: ArrayBuffer, sheetName: string): { top: number; bottom: number }[] {
-  try {
-    const files = unzipSync(new Uint8Array(buffer))
-    const sheetPath = findSheetPath(files, sheetName)
-    if (!sheetPath) return []
-    const out: { top: number; bottom: number }[] = []
-    for (const tablePath of sheetTablePaths(files, sheetPath)) {
-      const m = dec.decode(files[tablePath]!).match(/<table\b[^>]*\sref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/)
-      if (m) out.push({ top: Number(m[2]) - 1, bottom: Number(m[4]) - 1 })
-    }
-    return out
-  } catch {
-    return []
-  }
+/** NEGO 活表重建请求 */
+export interface NegoPatch {
+  sheetName: string
+  spec: NegoSheetSpec
 }
 
-/** 表头在 top 行（1 基）的表格：ref/autoFilter 底部设为 newBottom（可缩可扩；至少保留一行表体） */
-function setTableBottom(files: Record<string, Uint8Array>, sheetPath: string, top: number, newBottom: number): void {
-  for (const tablePath of sheetTablePaths(files, sheetPath)) {
-    const xml = dec.decode(files[tablePath]!)
-    const patched = xml.replace(TABLE_REF_RE, (all, p1: string, c1: string, t: string, c2: string, _b: string, p6: string) =>
-      Number(t) === top ? `${p1}${c1}${t}${c2}${Math.max(newBottom, top + 1)}${p6}` : all,
-    )
-    if (patched !== xml) files[tablePath] = enc.encode(patched)
+export interface PatchOptions {
+  /** 有比价输入时：把 NEGO sheet 重建为公式活表（见 negoSheet.ts） */
+  nego?: NegoPatch | null
+}
+
+/** styles.xml 里确保有活表条件格式用的三个 dxf（已存在则复用下标，避免每次导出重复追加） */
+function ensureNegoDxfs(files: Record<string, Uint8Array>): NegoDxfIds {
+  const path = 'xl/styles.xml'
+  const wanted: [keyof NegoDxfIds, string][] = [
+    ['minUnit', NEGO_DXFS.minUnit],
+    ['tier', NEGO_DXFS.tier],
+    ['status', NEGO_DXFS.status],
+  ]
+  const ids: NegoDxfIds = { minUnit: 0, tier: 1, status: 2 }
+  if (!files[path]) return ids
+  let xml = dec.decode(files[path])
+  const m = xml.match(/<dxfs\b[^>]*?(?:\/>|>([\s\S]*?)<\/dxfs>)/)
+  const list = m?.[1] ? [...m[1].matchAll(/<dxf\b(?:[^>]*\/>|[^>]*>[\s\S]*?<\/dxf>)/g)].map((x) => x[0]) : []
+  for (const [key, dxf] of wanted) {
+    let i = list.indexOf(dxf)
+    if (i < 0) {
+      list.push(dxf)
+      i = list.length - 1
+    }
+    ids[key] = i
   }
+  const block = `<dxfs count="${list.length}">${list.join('')}</dxfs>`
+  // 替换串一律用函数形式：用户样式里的 formatCode 可能含 "$&" 这类会被 String.replace 展开的序列
+  if (m) xml = xml.replace(m[0], () => block)
+  else if (/<tableStyles\b/.test(xml)) xml = xml.replace(/<tableStyles\b/, () => `${block}<tableStyles`)
+  else if (/<colors\b/.test(xml)) xml = xml.replace(/<colors\b/, () => `${block}<colors`)
+  else if (/<extLst\b/.test(xml)) xml = xml.replace(/<extLst\b/, () => `${block}<extLst`)
+  else xml = xml.replace('</styleSheet>', () => `${block}</styleSheet>`)
+  files[path] = enc.encode(xml)
+  return ids
+}
+
+/** workbook.xml：写入 / 覆盖名称 MPN、MQTY、MROW，并让 Excel 打开时全量重算（公式无缓存值） */
+function ensureNegoDefinedNames(files: Record<string, Uint8Array>, spec: NegoSheetSpec): void {
+  const path = 'xl/workbook.xml'
+  if (!files[path]) return
+  let xml = dec.decode(files[path])
+  const names = negoDefinedNames(spec)
+  for (const n of names) {
+    xml = xml.replace(new RegExp(`<definedName\\b[^>]*\\sname="${n.name}"[^>]*>[\\s\\S]*?</definedName>`, 'g'), '')
+  }
+  const entries = names.map((n) => `<definedName name="${n.name}">${xmlEscape(n.formula)}</definedName>`).join('')
+  if (/<definedNames>/.test(xml)) xml = xml.replace('<definedNames>', () => `<definedNames>${entries}`)
+  else if (/<definedNames\s*\/>/.test(xml)) xml = xml.replace(/<definedNames\s*\/>/, () => `<definedNames>${entries}</definedNames>`)
+  else xml = xml.replace('</sheets>', () => `</sheets><definedNames>${entries}</definedNames>`)
+  if (/<calcPr\b/.test(xml)) {
+    xml = /fullCalcOnLoad="/.test(xml)
+      ? xml.replace(/fullCalcOnLoad="[^"]*"/, 'fullCalcOnLoad="1"')
+      : xml.replace(/<calcPr\b/, '<calcPr fullCalcOnLoad="1"')
+  } else {
+    xml = xml.replace('</definedNames>', '</definedNames><calcPr fullCalcOnLoad="1"/>')
+  }
+  files[path] = enc.encode(xml)
+}
+
+/**
+ * 把 NEGO sheet 重建为公式活表：复用 sheet 上已有的表格 part（id / 名称不变，用户在别处写的
+ * SUM(Table1[…]) 仍然有效），没有则新建 part（关系 + 内容类型）；表格 XML 与 sheet XML 整体重写。
+ * 返回预填行数；工作簿里找不到该 sheet → null。
+ */
+function rebuildNegoSheet(files: Record<string, Uint8Array>, patch: NegoPatch): number | null {
+  const sheetPath = findSheetPath(files, patch.sheetName)
+  if (!sheetPath || !files[sheetPath]) return null
+  const spec = patch.spec
+  const relsPath = relsPathOf(sheetPath)
+  let rels = files[relsPath]
+    ? dec.decode(files[relsPath])
+    : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+  rels = rels.replace(/<Relationships\b([^>]*)\/>/, '<Relationships$1></Relationships>')
+  // 已有表格 part？
+  let tableRId: string | null = null
+  let tablePath: string | null = null
+  for (const m of rels.matchAll(/<Relationship\b[^>]*\/?>/g)) {
+    if (attrOf(m[0], 'Type') !== TABLE_REL) continue
+    const target = attrOf(m[0], 'Target')
+    const id = attrOf(m[0], 'Id')
+    if (!target || !id) continue
+    const p = resolveTarget(sheetPath, target)
+    if (files[p]) {
+      tableRId = id
+      tablePath = p
+      break
+    }
+  }
+  const allTables = Object.keys(files).filter((k) => /^xl\/tables\/[^/]+\.xml$/.test(k))
+  const tableIds = allTables.map((k) => Number(dec.decode(files[k]!).match(/<table\b[^>]*\sid="(\d+)"/)?.[1] ?? 0))
+  const tableNames = new Set(
+    allTables.map((k) => xmlUnescape(dec.decode(files[k]!).match(/<table\b[^>]*\sdisplayName="([^"]*)"/)?.[1] ?? '')),
+  )
+  let id = 0
+  let name = ''
+  if (tablePath && tableRId) {
+    const t = dec.decode(files[tablePath]!)
+    id = Number(t.match(/<table\b[^>]*\sid="(\d+)"/)?.[1] ?? 0)
+    name = xmlUnescape(t.match(/<table\b[^>]*\sdisplayName="([^"]*)"/)?.[1] ?? '')
+    tableNames.delete(name)
+  } else {
+    let n = 1
+    while (files[`xl/tables/table${n}.xml`]) n++
+    tablePath = `xl/tables/table${n}.xml`
+    let k = 1
+    while (new RegExp(`\\sId="rId${k}"`).test(rels)) k++
+    tableRId = `rId${k}`
+    rels = rels.replace('</Relationships>', () => `<Relationship Id="${tableRId}" Type="${TABLE_REL}" Target="../tables/table${n}.xml"/></Relationships>`)
+    files[relsPath] = enc.encode(rels)
+    const ct = '[Content_Types].xml'
+    if (files[ct]) {
+      const c = dec.decode(files[ct])
+      if (!c.includes(`PartName="/${tablePath}"`)) {
+        files[ct] = enc.encode(c.replace('</Types>', () => `<Override PartName="/${tablePath}" ContentType="${TABLE_CT}"/></Types>`))
+      }
+    }
+  }
+  if (!id || tableIds.filter((x) => x === id).length > 1) id = Math.max(0, ...tableIds) + 1
+  if (!name || tableNames.has(name)) {
+    name = 'NegoTable'
+    for (let i = 2; tableNames.has(name); i++) name = `NegoTable${i}`
+  }
+  const dxf = ensureNegoDxfs(files)
+  ensureNegoDefinedNames(files, spec)
+  files[tablePath] = enc.encode(negoTableXml(spec, { id, name }))
+  files[sheetPath] = enc.encode(negoSheetXml(dec.decode(files[sheetPath]), spec, name, tableRId, dxf))
+  return spec.rows.length
 }
 
 /**
@@ -212,7 +316,7 @@ function applyRowChanges(
         cells.set(col, buildCellXml(ref, s, val))
       }
       const body = [...cells.entries()].sort((x, y) => x[0] - y[0]).map(([, c]) => c).join('')
-      xml = xml.replace(rowXml, `${openTag}${body}</row>`)
+      xml = xml.replace(rowXml, () => `${openTag}${body}</row>`) // 函数形式：单元格文本里的 $& 等不会被展开
     } else {
       const body = [...rowMap.entries()]
         .filter(([, val]) => val !== null) // 新行里的清空写入没有对象
@@ -230,8 +334,8 @@ function applyRowChanges(
         }
       }
       if (!inserted) {
-        if (xml.includes('</sheetData>')) xml = xml.replace('</sheetData>', `${rowXmlNew}</sheetData>`)
-        else xml = xml.replace('<sheetData/>', `<sheetData>${rowXmlNew}</sheetData>`)
+        if (xml.includes('</sheetData>')) xml = xml.replace('</sheetData>', () => `${rowXmlNew}</sheetData>`)
+        else xml = xml.replace('<sheetData/>', () => `<sheetData>${rowXmlNew}</sheetData>`)
       }
     }
   }
@@ -265,7 +369,7 @@ function bumpDimension(xml: string, newBottom: number): string {
 export function patchMasterWorkbook(
   master: MasterData,
   originalBuffer: ArrayBuffer,
-  extraSheets: ExtraSheetPatch[] = [],
+  opts: PatchOptions = {},
 ): PatchResult | null {
   const files = unzipSync(new Uint8Array(originalBuffer))
   const sheetPath = findSheetPath(files, master.sheetName)
@@ -299,9 +403,9 @@ export function patchMasterWorkbook(
       changedCells++
     }
   }
-  const extras = extraSheets.filter((e) => e.changes.size > 0)
-  if (changedCells === 0 && extras.length === 0) {
-    return { buffer: originalBuffer.slice(0), changedCells: 0, formulaCellsReplaced: 0, extraCells: 0 }
+  const nego = opts.nego && opts.nego.spec.rows.length > 0 ? opts.nego : null
+  if (changedCells === 0 && !nego) {
+    return { buffer: originalBuffer.slice(0), changedCells: 0, formulaCellsReplaced: 0, negoRows: 0 }
   }
 
   let formulaCellsReplaced = 0
@@ -347,24 +451,14 @@ export function patchMasterWorkbook(
     files[sheetPath] = enc.encode(xml)
   }
 
-  // 其他 sheet（NEGO 比价内容等）：同一套单元格补丁，只动目标格
-  let extraCells = 0
-  for (const extra of extras) {
-    const path = findSheetPath(files, extra.sheetName)
-    if (!path || !files[path]) continue
-    const applied = applyRowChanges(dec.decode(files[path]), extra.changes, new Map(), '')
-    formulaCellsReplaced += applied.formulaCellsReplaced
-    const rowsWritten = [...extra.changes.keys()]
-    const bottom = Math.max(...rowsWritten)
-    files[path] = enc.encode(bumpDimension(applied.xml, bottom))
-    if (extra.table) {
-      // 表头行就是 Excel 表格表头：表格随明细收缩/扩展，合计行留在表格下方（表外的 SUM(Table[[#All],…]) 不重复计入）
-      setTableBottom(files, path, extra.table.top, extra.table.bodyEnd)
-    } else {
-      // NEGO 上的 Excel 表格（表头在写入区上方）随明细行数扩展底部，斑马纹/筛选跟着延伸
-      extendTablesBottom(files, path, bottom, Math.min(...rowsWritten))
+  // NEGO sheet 重建为公式活表（表格 + 名称 + 条件格式整体重写）
+  let negoRows = 0
+  if (nego) {
+    const rebuilt = rebuildNegoSheet(files, nego)
+    if (rebuilt !== null) {
+      negoRows = rebuilt
+      formulaCellsReplaced++ // 公式整体换过 → calcChain 必须移除
     }
-    for (const m of extra.changes.values()) extraCells += m.size
   }
 
   // 覆盖过公式单元格 → calcChain 里的引用会悬空，整体移除（Excel 会自动重建）
@@ -389,6 +483,6 @@ export function patchMasterWorkbook(
     buffer: out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer,
     changedCells,
     formulaCellsReplaced,
-    extraCells,
+    negoRows,
   }
 }
