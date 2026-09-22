@@ -2,7 +2,20 @@ import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
 import { isDataRow, parseMasterWorkbook, type MasterCell, type MasterData } from './model'
-import { NEGO_DXFS, negoDefinedNames, negoSheetXml, negoTableXml, type NegoDxfIds, type NegoSheetSpec } from './negoSheet'
+import {
+  NEGO_CELL_STYLES,
+  NEGO_DXF_DEFS,
+  NEGO_MONEY_FORMAT,
+  NEGO_NO_STYLES,
+  negoDefinedNames,
+  negoSheetXml,
+  negoTableXml,
+  type NegoCellStyleDef,
+  type NegoCellStyleRole,
+  type NegoDxfRole,
+  type NegoSheetSpec,
+  type NegoStyleIds,
+} from './negoSheet'
 
 /**
  * zip 级"外科手术"导出：原工作簿每个字节原样保留，只把【确实改过的单元格】
@@ -136,36 +149,134 @@ export interface PatchOptions {
   nego?: NegoPatch | null
 }
 
-/** styles.xml 里确保有活表条件格式用的三个 dxf（已存在则复用下标，避免每次导出重复追加） */
-function ensureNegoDxfs(files: Record<string, Uint8Array>): NegoDxfIds {
-  const path = 'xl/styles.xml'
-  const wanted: [keyof NegoDxfIds, string][] = [
-    ['minUnit', NEGO_DXFS.minUnit],
-    ['tier', NEGO_DXFS.tier],
-    ['status', NEGO_DXFS.status],
-  ]
-  const ids: NegoDxfIds = { minUnit: 0, tier: 1, status: 2 }
-  if (!files[path]) return ids
-  let xml = dec.decode(files[path])
-  const m = xml.match(/<dxfs\b[^>]*?(?:\/>|>([\s\S]*?)<\/dxfs>)/)
-  const list = m?.[1] ? [...m[1].matchAll(/<dxf\b(?:[^>]*\/>|[^>]*>[\s\S]*?<\/dxf>)/g)].map((x) => x[0]) : []
-  for (const [key, dxf] of wanted) {
-    let i = list.indexOf(dxf)
-    if (i < 0) {
-      list.push(dxf)
-      i = list.length - 1
-    }
-    ids[key] = i
+/** styles.xml 的一个集合节（fonts / fills / borders / cellXfs / dxfs / numFmts）：读出条目、改完写回并更新 count */
+function patchStyleSection(
+  xml: string,
+  section: string,
+  item: string,
+  mutate: (items: string[]) => void,
+  insertIfMissing: (xml: string, block: string) => string,
+): string {
+  const m = xml.match(new RegExp(`<${section}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${section}>)`))
+  const items = m?.[2] ? [...m[2].matchAll(new RegExp(`<${item}\\b(?:[^>]*/>|[^>]*>[\\s\\S]*?</${item}>)`, 'g'))].map((x) => x[0]) : []
+  mutate(items)
+  const attrs = (m?.[1] ?? '').replace(/\s*count="\d+"/, '')
+  const block = `<${section} count="${items.length}"${attrs}>${items.join('')}</${section}>`
+  return m ? xml.replace(m[0], () => block) : insertIfMissing(xml, block)
+}
+
+const indexOrPush = (items: string[], x: string): number => {
+  const i = items.indexOf(x)
+  if (i >= 0) return i
+  items.push(x)
+  return items.length - 1
+}
+
+/**
+ * 把一组单元格样式写进 styles.xml（字体 / 填充 / 边框 / 数字格式 / cellXfs 均按内容去重，重复导出不膨胀），
+ * 返回每个样式的 cellXfs 下标与自定义数字格式分配到的 id
+ */
+function ensureCellStyles(xml: string, defs: NegoCellStyleDef[]): { xml: string; ids: number[]; numFmtIds: Map<string, number> } {
+  const numFmtIds = new Map<string, number>()
+  const customCodes = [...new Set(defs.map((d) => d.numFmt).filter((n): n is string => typeof n === 'string'))]
+  if (customCodes.length > 0) {
+    xml = patchStyleSection(
+      xml,
+      'numFmts',
+      'numFmt',
+      (items) => {
+        let maxId = 163
+        for (const it of items) maxId = Math.max(maxId, Number(attrOf(it, 'numFmtId') ?? 0))
+        for (const code of customCodes) {
+          const esc = xmlEscape(code)
+          const hit = items.find((it) => attrOf(it, 'formatCode') === esc)
+          if (hit) numFmtIds.set(code, Number(attrOf(hit, 'numFmtId')))
+          else {
+            maxId += 1
+            items.push(`<numFmt numFmtId="${maxId}" formatCode="${esc}"/>`)
+            numFmtIds.set(code, maxId)
+          }
+        }
+      },
+      (x, block) => x.replace(/<styleSheet\b[^>]*>/, (open) => `${open}${block}`),
+    )
   }
-  const block = `<dxfs count="${list.length}">${list.join('')}</dxfs>`
-  // 替换串一律用函数形式：用户样式里的 formatCode 可能含 "$&" 这类会被 String.replace 展开的序列
-  if (m) xml = xml.replace(m[0], () => block)
-  else if (/<tableStyles\b/.test(xml)) xml = xml.replace(/<tableStyles\b/, () => `${block}<tableStyles`)
-  else if (/<colors\b/.test(xml)) xml = xml.replace(/<colors\b/, () => `${block}<colors`)
-  else if (/<extLst\b/.test(xml)) xml = xml.replace(/<extLst\b/, () => `${block}<extLst`)
-  else xml = xml.replace('</styleSheet>', () => `${block}</styleSheet>`)
-  files[path] = enc.encode(xml)
-  return ids
+  const fontIds: number[] = []
+  const fillIds: number[] = []
+  const borderIds: number[] = []
+  const after = (tag: string) => (x: string, block: string) => x.replace(new RegExp(`</${tag}>`), () => `</${tag}>${block}`)
+  xml = patchStyleSection(xml, 'fonts', 'font', (items) => defs.forEach((d) => fontIds.push(indexOrPush(items, d.font))), after('numFmts'))
+  xml = patchStyleSection(xml, 'fills', 'fill', (items) => defs.forEach((d) => fillIds.push(d.fill ? indexOrPush(items, d.fill) : 0)), after('fonts'))
+  xml = patchStyleSection(
+    xml,
+    'borders',
+    'border',
+    (items) => defs.forEach((d) => borderIds.push(d.border ? indexOrPush(items, d.border) : 0)),
+    after('fills'),
+  )
+  const ids: number[] = []
+  xml = patchStyleSection(
+    xml,
+    'cellXfs',
+    'xf',
+    (items) => {
+      defs.forEach((d, k) => {
+        const nf = typeof d.numFmt === 'string' ? (numFmtIds.get(d.numFmt) ?? 0) : (d.numFmt ?? 0)
+        const xf =
+          `<xf numFmtId="${nf}" fontId="${fontIds[k]}" fillId="${fillIds[k]}" borderId="${borderIds[k]}" xfId="0"` +
+          `${nf ? ' applyNumberFormat="1"' : ''} applyFont="1"${fillIds[k] ? ' applyFill="1"' : ''}${borderIds[k] ? ' applyBorder="1"' : ''}` +
+          (d.align ? ` applyAlignment="1"><alignment ${d.align}/></xf>` : '/>')
+        ids.push(indexOrPush(items, xf))
+      })
+    },
+    after('cellStyleXfs'),
+  )
+  return { xml, ids, numFmtIds }
+}
+
+/** 确保 dxf（条件格式 / 表格列 dataDxf）存在，按内容去重 */
+function ensureDxfs(xml: string, dxfs: string[]): { xml: string; ids: number[] } {
+  const ids: number[] = []
+  xml = patchStyleSection(
+    xml,
+    'dxfs',
+    'dxf',
+    (items) => dxfs.forEach((d) => ids.push(indexOrPush(items, d))),
+    (x, block) => {
+      if (/<tableStyles\b/.test(x)) return x.replace(/<tableStyles\b/, () => `${block}<tableStyles`)
+      if (/<colors\b/.test(x)) return x.replace(/<colors\b/, () => `${block}<colors`)
+      if (/<extLst\b/.test(x)) return x.replace(/<extLst\b/, () => `${block}<extLst`)
+      return x.replace('</styleSheet>', () => `${block}</styleSheet>`)
+    },
+  )
+  return { xml, ids }
+}
+
+/** 活表用到的全部样式（与用户 NEGO v2 一致）写进目标工作簿的 styles.xml，返回下标 */
+function ensureNegoStyles(files: Record<string, Uint8Array>): NegoStyleIds {
+  const path = 'xl/styles.xml'
+  if (!files[path]) return NEGO_NO_STYLES
+  let xml = dec.decode(files[path])
+  const cellRoles = Object.keys(NEGO_CELL_STYLES) as NegoCellStyleRole[]
+  const cells = ensureCellStyles(
+    xml,
+    cellRoles.map((r) => NEGO_CELL_STYLES[r]),
+  )
+  xml = cells.xml
+  const moneyId = cells.numFmtIds.get(NEGO_MONEY_FORMAT) ?? 0
+  const dxfRoles = Object.keys(NEGO_DXF_DEFS) as NegoDxfRole[]
+  const dx = ensureDxfs(
+    xml,
+    dxfRoles.map((r) => {
+      const d = NEGO_DXF_DEFS[r]
+      return typeof d === 'function' ? d(moneyId) : d
+    }),
+  )
+  files[path] = enc.encode(dx.xml)
+  return {
+    cell: Object.fromEntries(cellRoles.map((r, i) => [r, cells.ids[i]!])) as Record<NegoCellStyleRole, number>,
+    dxf: Object.fromEntries(dxfRoles.map((r, i) => [r, dx.ids[i]!])) as Record<NegoDxfRole, number>,
+  }
 }
 
 /** workbook.xml：写入 / 覆盖名称 MPN、MQTY、MROW，并让 Excel 打开时全量重算（公式无缓存值） */
@@ -254,10 +365,10 @@ function rebuildNegoSheet(files: Record<string, Uint8Array>, patch: NegoPatch): 
     name = 'NegoTable'
     for (let i = 2; tableNames.has(name); i++) name = `NegoTable${i}`
   }
-  const dxf = ensureNegoDxfs(files)
+  const st = ensureNegoStyles(files)
   ensureNegoDefinedNames(files, spec)
-  files[tablePath] = enc.encode(negoTableXml(spec, { id, name }))
-  files[sheetPath] = enc.encode(negoSheetXml(dec.decode(files[sheetPath]), spec, name, tableRId, dxf))
+  files[tablePath] = enc.encode(negoTableXml(spec, { id, name }, st))
+  files[sheetPath] = enc.encode(negoSheetXml(dec.decode(files[sheetPath]), spec, name, tableRId, st))
   return spec.rows.length
 }
 

@@ -308,7 +308,7 @@ describe('导出 NEGO 活表：buildNegoSheetSpec（与比价页同逻辑的缓�
   it('列布局、公式文本与工作簿名称：结构化引用、按物理列引用汇总表、数组公式标记', () => {
     const spec = buildNegoSheetSpec(master(), [{ pn: 'A-1', qty: 10 }])
     const C = negoSheetColumns(spec.vendors)
-    expect(C.names).toEqual(['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min', 'HC Total', 'SKW Total', 'Optimal', 'Best', 'Status', 'Qty Tier', "Quoted Q'ty", 'Note', 'Src Row'])
+    expect(C.names).toEqual(['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Status', 'Min', 'HC Total', 'SKW Total', 'Best', 'Optimal', 'Qty Tier', "Quoted Q'ty", 'Note', 'Src Row'])
     expect(C.count).toBe(16)
     const fx = negoFormulas(spec, 'NegoTable')
     expect(fx[C.pn]).toBeNull()
@@ -347,18 +347,20 @@ describe('导出 NEGO 活表：buildNegoSheetSpec（与比价页同逻辑的缓�
     expect(t).toContain('<tableColumn id="4" name="Q\'ty"/>')
     const d = negoSheetDataXml(spec, 'NegoTable')
     expect(d).toContain('<c r="B1" t="inlineStr"><is><t xml:space="preserve">Basis For Negotiation</t></is></c>')
-    expect(d).toContain('<c r="H1" t="inlineStr"><is><t xml:space="preserve">HC</t></is></c>')
-    expect(d).toContain('<c r="H2"><f>SUM(NegoTable[HC Total])</f><v>567</v></c>')
-    expect(d).toContain('<c r="J3"><f>SUMIFS(NegoTable[Optimal],NegoTable[Status],&quot;OK&quot;)</f><v>450</v></c>')
+    expect(d).toContain('<c r="I1" t="inlineStr"><is><t xml:space="preserve">HC</t></is></c>') // HC Total 列上方
+    expect(d).toContain('<c r="I2"><f>SUM(NegoTable[HC Total])</f><v>567</v></c>')
+    expect(d).toContain('<c r="L3"><f>SUMIFS(NegoTable[Optimal],NegoTable[Status],&quot;OK&quot;)</f><v>450</v></c>')
+    expect(d).toContain('<row r="1" ht="25.3" customHeight="1">')
+    expect(d).toContain('<row r="5" ht="15" customHeight="1">')
     expect(d).toContain('<c r="A5" t="inlineStr"><is><t xml:space="preserve">A-1</t></is></c>')
     expect(d).toContain('<c r="D5"><v>10</v></c>')
     expect(d).toMatch(/<c r="E5"><f>IF\(NegoTable\[\[#This Row\],\[Src Row\]\]=0,[^<]*<\/f><v>56.7<\/v><\/c>/)
-    expect(d).toMatch(/<c r="L5" t="str"><f t="array" ref="L5">[^<]*<\/f><v>OK<\/v><\/c>/)
+    expect(d).toMatch(/<c r="G5" t="str"><f t="array" ref="G5">[^<]*<\/f><v>OK<\/v><\/c>/) // Status 在单价之后
     expect(d).toMatch(/<c r="P5"><f t="array" ref="P5">[^<]*<\/f><v>2<\/v><\/c>/) // Src Row = Excel 第 2 行
-    expect(d).toMatch(/<c r="L6" t="str"><f t="array" ref="L6">[^<]*<\/f><v>P\/N not found<\/v><\/c>/)
+    expect(d).toMatch(/<c r="G6" t="str"><f t="array" ref="G6">[^<]*<\/f><v>P\/N not found<\/v><\/c>/)
     expect(d).not.toMatch(/<c r="A7"/) // 空行不写零件号
     expect(d).toMatch(/<c r="P7"><f t="array" ref="P7">[^<]*<\/f><v>0<\/v><\/c>/) // 空行 Src Row 缓存 0
-    expect(d).toContain('<row r="9">')
-    expect(d).not.toContain('<row r="10">')
+    expect(d).toContain('<row r="9" ht="15" customHeight="1">')
+    expect(d).not.toContain('<row r="10"')
   })
 })

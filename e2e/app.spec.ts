@@ -223,9 +223,9 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   const hcUnit = nws.getCell('E5').value as { formula?: string; result?: unknown }
   expect(String(hcUnit.formula ?? '')).toContain('INDEX(') // HC Unit 是公式，带缓存值
   expect(hcUnit.result).toBe(60)
-  expect(String((nws.getCell('H2').value as { formula?: string }).formula ?? '')).toContain('SUM(') // 上方各家合计
+  expect(String((nws.getCell('I2').value as { formula?: string }).formula ?? '')).toContain('SUM(') // 上方各家合计（HC Total 列）
   expect(nws.getCell('A11').value).toBe(FIXTURE_PNS[5]) // 第 7 行输入：数量未填
-  expect(JSON.stringify(nws.getCell('L11').value)).toContain('Qty missing')
+  expect(JSON.stringify(nws.getCell('G11').value)).toContain('Qty missing') // Status 列
 })
 
 test('同一批不同供应商报价：第二家自动识别批次并落到同一行', async ({ page }) => {

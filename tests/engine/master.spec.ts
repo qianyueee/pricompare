@@ -428,28 +428,35 @@ describe('汇总导出', () => {
     expect(relsXml).toContain('Target="../tables/table1.xml"')
     const sx = dec.decode(files[negoPath]!)
     expect(sx).toContain('<tableParts count="1">')
-    expect((sx.match(/<conditionalFormatting /g) ?? []).length).toBe(3)
-    expect(sx).toMatch(/<c r="E5"><f>[^<]*'KK询价汇总'!\$J:\$J[^<]*<\/f><v>56.7<\/v><\/c>/)
-    expect(sx).toMatch(/<c r="L5" t="str"><f t="array" ref="L5">[^<]*<\/f><v>1\/2 quoted<\/v><\/c>/)
-    expect(sx).toMatch(/<c r="L7" t="str"><f t="array" ref="L7">[^<]*<\/f><v>P\/N not found<\/v><\/c>/)
-    expect(sx).toContain('<c r="H2"><f>SUM(NegoTable[HC Total])</f><v>1067</v></c>')
+    expect((sx.match(/<conditionalFormatting /g) ?? []).length).toBe(2)
+    expect(sx).toMatch(/<c r="E5" s="\d+"><f>[^<]*'KK询价汇总'!\$J:\$J[^<]*<\/f><v>56.7<\/v><\/c>/)
+    expect(sx).toMatch(/<c r="G5" s="\d+" t="str"><f t="array" ref="G5">[^<]*<\/f><v>1\/2 quoted<\/v><\/c>/)
+    expect(sx).toMatch(/<c r="G7" s="\d+" t="str"><f t="array" ref="G7">[^<]*<\/f><v>P\/N not found<\/v><\/c>/)
+    expect(sx).toMatch(/<c r="I2" s="\d+"><f>SUM\(NegoTable\[HC Total\]\)<\/f><v>1067<\/v><\/c>/)
+    expect(sx).toMatch(/<c r="B1" s="\d+" t="inlineStr">/) // 标题带样式
+    expect(sx).toMatch(/<c r="C1" s="\d+"\/>/) // 标题区空格也是浅绿底
     expect((sx.match(/<row r="/g) ?? []).length).toBe(17)
+    // 样式写进 styles.xml：浅绿填充、Aptos 表头字体、¥ 格式、红色加粗 dxf、表格列 dataDxf
     const styles = dec.decode(files['xl/styles.xml']!)
-    expect((styles.match(/FFC6EFCE/g) ?? []).length).toBe(1)
+    expect((styles.match(/FFE2EFDA/g) ?? []).length).toBe(1)
+    expect((styles.match(/<name val="Aptos"\/>/g) ?? []).length).toBe(1)
+    expect(styles).toContain('formatCode="[$¥-804]#,##0.00"')
+    expect(styles).toContain('<dxf><font><b/><i val="0"/><color rgb="FFFF0000"/></font></dxf>')
+    expect(tXml).toMatch(/<tableColumn id="1" name="P\/N" dataDxfId="\d+"\/>/)
     // SheetJS 回读：汇总 sheet 未动、NEGO 预填行缓存值
     const re = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!
     expect(re.rows[0]!.cells[9]).toBe(56.7)
     const g = re.passthrough.find((s) => s.name === 'NEGO')!.grid
     expect(g[0]![1]).toBe('Basis For Negotiation')
-    expect(g[1]![7]).toBe(1067) // HC 合计 567 + 500
-    expect(g[1]![9]).toBe(1017) // 最优合计 567 + 450
-    expect(g[2]![7]).toBe(500) // 全部有价的行（只有第 2 行）
-    expect(g[3]!.slice(0, 7)).toEqual(['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Min'])
-    expect(g[4]!.slice(0, 12)).toEqual([FIXTURE_PNS[0], 'AA', FIXTURE_DESCS[0], 10, 56.7, null, 56.7, 567, null, 567, 'HC', '1/2 quoted'])
+    expect(g[1]![8]).toBe(1067) // HC 合计 567 + 500
+    expect(g[1]![11]).toBe(1017) // 最优合计 567 + 450
+    expect(g[2]![8]).toBe(500) // 全部有价的行（只有第 2 行）
+    expect(g[3]!.slice(0, 8)).toEqual(['P/N', 'Rev', 'Description', "Q'ty", 'HC Unit', 'SKW Unit', 'Status', 'Min'])
+    expect(g[4]!.slice(0, 12)).toEqual([FIXTURE_PNS[0], 'AA', FIXTURE_DESCS[0], 10, 56.7, null, '1/2 quoted', 56.7, 567, null, 'HC', 567])
     expect(g[4]![13]).toBe('10')
-    expect(g[5]!.slice(3, 12)).toEqual([5, 100, 90, 90, 500, 450, 450, 'SKW', 'OK'])
+    expect(g[5]!.slice(3, 12)).toEqual([5, 100, 90, 'OK', 90, 500, 450, 'SKW', 450])
     expect(g[6]![0]).toBe('NOPE-1')
-    expect(g[6]![11]).toBe('P/N not found')
+    expect(g[6]![6]).toBe('P/N not found')
     expect(g[6]![13]).toBe('-')
     expect(g[7]?.[0] ?? null).toBeNull() // 空行
     // 比价页为空 → 工作簿原样（NEGO 的 marker 还在）
@@ -520,8 +527,9 @@ describe('汇总导出', () => {
     expect(one.tableXml).not.toContain('XLOOKUP')
     expect(one.negoXml).not.toContain('XLOOKUP')
     expect(one.negoXml).toContain('Table1[[#This Row],[Src Row]]')
-    expect(one.negoXml).toContain('<c r="H2"><f>SUM(Table1[HC Total])</f>')
-    expect((one.styles.match(/FFC6EFCE/g) ?? []).length).toBe(1)
+    expect(one.negoXml).toMatch(/<c r="I2" s="\d+"><f>SUM\(Table1\[HC Total\]\)<\/f>/)
+    expect((one.styles.match(/FFE2EFDA/g) ?? []).length).toBe(1)
+    expect((one.styles.match(/<name val="Aptos"\/>/g) ?? []).length).toBe(1)
     // 再导出只剩 1 行：表格部件与名称复用、dxf 与名称不重复、表格收缩到 1 行 + 10 空行
     const master2 = parseMasterWorkbook(readWorkbook(out.buffer), 'm2.xlsx')!
     const out2 = await buildMasterWorkbook(master2, out.buffer, { negoInputs: [{ pn: FIXTURE_PNS[0]!, qty: 10 }] })
@@ -529,7 +537,13 @@ describe('汇总导出', () => {
     expect(two.tables).toEqual(one.tables)
     expect(two.tableXml).toContain('displayName="Table1"')
     expect(two.tableXml).toContain('ref="A4:P15"')
-    expect((two.styles.match(/FFC6EFCE/g) ?? []).length).toBe(1)
+    expect((two.styles.match(/FFE2EFDA/g) ?? []).length).toBe(1) // 再导出样式不重复追加
+    expect((two.styles.match(/<name val="Aptos"\/>/g) ?? []).length).toBe(1)
+    // ¥ 格式出现在 numFmts 与两个列 dxf 里（money / status），再导出次数不变
+    expect((two.styles.match(/formatCode="\[\$¥-804\]#,##0\.00"/g) ?? []).length).toBe(
+      (one.styles.match(/formatCode="\[\$¥-804\]#,##0\.00"/g) ?? []).length,
+    )
+    expect(two.styles.length).toBe(one.styles.length)
     expect((two.wbXml.match(/<definedName name="MPN">/g) ?? []).length).toBe(1)
     expect(two.calcChain).toBeUndefined()
     const g2 = parseMasterWorkbook(readWorkbook(out2.buffer), 'o2.xlsx')!.passthrough[0]!.grid
@@ -550,7 +564,7 @@ describe('汇总导出', () => {
     expect(tXml).toContain("'KK询价汇总'!$L:$L")
     expect(tXml).toContain('ref="A4:R15"') // 3 家 → 18 列
     const g = parseMasterWorkbook(readWorkbook(out.buffer), 'o.xlsx')!.passthrough.find((s) => s.name === 'NEGO')!.grid
-    expect(g[3]!.slice(4, 12)).toEqual(['HC Unit', 'SKW Unit', 'CL Unit', 'Min', 'HC Total', 'SKW Total', 'CL Total', 'Optimal'])
-    expect(g[4]!.slice(3, 14)).toEqual([5, 100, 90, 88, 88, 500, 450, 440, 440, 'CL', 'OK'])
+    expect(g[3]!.slice(4, 14)).toEqual(['HC Unit', 'SKW Unit', 'CL Unit', 'Status', 'Min', 'HC Total', 'SKW Total', 'CL Total', 'Best', 'Optimal'])
+    expect(g[4]!.slice(3, 14)).toEqual([5, 100, 90, 88, 'OK', 88, 500, 450, 440, 'CL', 440])
   })
 })
