@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   ALL_FIELDS,
   FIELD_LABELS,
+  KK_VENDOR_COLS,
   colLetter,
   letterToIdx,
   planMerge,
@@ -28,14 +29,7 @@ const EMPTY_MASTER: MasterData = {
   importedAt: null,
 }
 
-const SLOT_OPTIONS = [
-  { idx: 8, label: 'I · Mao' },
-  { idx: 9, label: 'J · HC' },
-  { idx: 10, label: 'K · SKW' },
-  { idx: 11, label: 'L · BY' },
-  { idx: 12, label: 'M · YJ' },
-  { idx: 13, label: 'N · JM' },
-]
+const SLOT_OPTIONS = KK_VENDOR_COLS.map((v) => ({ idx: v.col, label: `${colLetter(v.col)} · ${v.header}` }))
 
 function Inner({ file }: { file: LoadedFile }) {
   const analysis = file.analysis!

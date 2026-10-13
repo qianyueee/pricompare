@@ -4,6 +4,7 @@ import { makeFileA, makeMasterFile, FIXTURE_PNS } from '../fixtures/buildFixture
 import { makeQuote } from '../fixtures/rows'
 import {
   KK_COL,
+  KK_COL_COUNT,
   KK_HEADERS,
   applyMerge,
   buildMasterWorkbook,
@@ -113,7 +114,7 @@ describe('合并规则', () => {
 
   it('TDB 占位可回填 + 同零件同数量多行按材料对齐（中文/空格归一化）', () => {
     const mk = (vals: Record<number, string | number>): { cells: (string | number | null)[] } => {
-      const cells = Array.from({ length: 33 }, () => null as string | number | null)
+      const cells = Array.from({ length: KK_COL_COUNT }, () => null as string | number | null)
       for (const [k, v] of Object.entries(vals)) cells[Number(k)] = v
       return { cells }
     }
@@ -186,7 +187,7 @@ describe('合并规则', () => {
 
 describe('并入智能化（0823/0826/0828 实证规则）', () => {
   const mk = (vals: Record<number, string | number>): { cells: (string | number | null)[] } => {
-    const cells = Array.from({ length: 33 }, () => null as string | number | null)
+    const cells = Array.from({ length: KK_COL_COUNT }, () => null as string | number | null)
     for (const [k, v] of Object.entries(vals)) cells[Number(k)] = v
     return { cells }
   }

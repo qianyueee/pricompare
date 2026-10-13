@@ -66,7 +66,7 @@ describe('KK 汇总导出', () => {
     expect(out.slotByVendor['skw']).toBe(10) // K
     expect(out.slotByVendor['newv']).toBe(8) // I（Mao 缺席，最左空槽）
     expect(out.slotByVendor['usv']).toBe(14) // O
-    expect(out.headers).toHaveLength(33)
+    expect(out.headers).toHaveLength(34)
     expect(out.headers[8]).toBe('新供应商')
     // 其余表头逐字节与 KK 模板一致（含 \n 与双空格）
     KK_HEADERS.forEach((h, i) => {
@@ -83,7 +83,7 @@ describe('KK 汇总导出', () => {
       displayNames: { hc: 'HC', skw: 'SKW', newv: '新供应商', usv: 'US Shop' },
     })
     const ws = await reload(out.buffer)
-    expect(headerValues(ws).slice(0, 33)).toEqual(out.headers)
+    expect(headerValues(ws).slice(0, 34)).toEqual(out.headers)
     // P-1 行：I=新供应商95 J=HC100 K=SKW90(最低,绿) O=US20
     const r2 = ws.getRow(2)
     expect(r2.getCell(4).value).toBe('P-1')
@@ -115,7 +115,7 @@ describe('KK 汇总导出', () => {
   })
 
   it('超出 I–N 槽位时在 N 后插入新列并告警', async () => {
-    const vendors = ['mao', 'hc', 'skw', 'by', 'yj', 'jm'].map((id) => ({
+    const vendors = ['mao', 'hc', 'skw', 'cl', 'by', 'jm'].map((id) => ({
       vendorId: id,
       vendorDisplay: id.toUpperCase(),
       rows: [makeQuote('P-1', { amount: 100 })],
@@ -131,7 +131,7 @@ describe('KK 汇总导出', () => {
       registry: SEED_VENDORS,
       displayNames: { x1: '厂商七', x2: '厂商八' },
     })
-    expect(out.headers).toHaveLength(35)
+    expect(out.headers).toHaveLength(36)
     expect(out.headers[14]).toBe('厂商七')
     expect(out.headers[15]).toBe('厂商八')
     expect(out.headers[16]).toBe('US Vendor (US$)') // O 列后移

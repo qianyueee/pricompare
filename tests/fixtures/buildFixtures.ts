@@ -235,7 +235,7 @@ export async function makeFileC(): Promise<ArrayBuffer> {
 }
 
 /**
- * KK 汇总固件：表头 33 列 + 2 行既有数据 + 3 行只有 A 列序号的预编号空行 + NEGO 透传 sheet。
+ * KK 汇总固件：表头 34 列（10-07 新布局）+ 2 行既有数据 + 3 行只有 A 列序号的预编号空行 + NEGO 透传 sheet。
  * R2 与文件 A 的第一个零件同 P/N 同数量、HC(J) 已报、SKW(K) 空 —— 供"填充既有行"用例。
  */
 export async function makeMasterFile(): Promise<ArrayBuffer> {

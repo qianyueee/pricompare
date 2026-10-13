@@ -100,7 +100,7 @@ src/engine/            纯 TS 引擎（无 Electron 依赖，可单测）
   normalize/             价格与交期清洗（22 → 22Days）
   vendor.ts              供应商注册表与归属猜测
   fingerprint.ts         表头指纹（映射模板记忆）
-  master/model.ts        汇总表解析（33 列原值 + NEGO 透传 + 预编号空行）
+  master/model.ts        汇总表解析（34 列原值、按表头对位兼容旧布局 + NEGO 透传 + 预编号空行）
   master/merge.ts        并入规则引擎（fill/append、W 拼接、V 真单号、H/U、规格优先级）
   master/clean.ts        文本金额规范（￥/$/全角逗号/nbsp → 数字，备注文字保留）
   master/nego.ts         NEGO 比价（数量档提取、各家总额与最优组合、TSV 剪贴板）

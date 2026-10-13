@@ -1,7 +1,7 @@
 import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
-import { KK_COL_COUNT, isDataRow, parseMasterWorkbook, type MasterCell, type MasterData } from './model'
+import { KK_COL_COUNT, isDataRow, parseMasterWorkbookDetailed, type MasterCell, type MasterData } from './model'
 
 /**
  * zip 级"外科手术"导出：原工作簿每个字节原样保留，只把【确实改过的单元格】
@@ -112,9 +112,11 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
   const files = unzipSync(new Uint8Array(originalBuffer))
   const sheetPath = findSheetPath(files, master.sheetName)
   if (!sheetPath || !files[sheetPath]) return null
-  const originalMaster = parseMasterWorkbook(readWorkbook(originalBuffer), master.sourceFileName ?? '')
-  if (!originalMaster) return null
-  const origRows = originalMaster.rows
+  const parsed = parseMasterWorkbookDetailed(readWorkbook(originalBuffer), master.sourceFileName ?? '')
+  if (!parsed) return null
+  const origRows = parsed.master.rows
+  // 逻辑列（KK_HEADERS 列序）→ 原表物理列：原表是旧布局时按表头对位写回原来的位置
+  const physCol = parsed.columnMap
 
   // 变更集（与导入时同一条解析管线比对，未动的单元格绝不触碰）
   const norm = (v: MasterCell | undefined): MasterCell =>
@@ -131,12 +133,15 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
       if (a === b) continue
       if (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9) continue
       if (a !== null && b !== null && String(a) === String(b)) continue
+      // 原表没有这一列（如旧布局没有 CL）→ 补丁无处可写，交给整本重写
+      const phys = physCol[c]
+      if (phys === null || phys === undefined) return null
       let rowMap = changes.get(i + 2)
       if (!rowMap) {
         rowMap = new Map()
         changes.set(i + 2, rowMap)
       }
-      rowMap.set(c, b)
+      rowMap.set(phys, b)
       changedCells++
     }
   }

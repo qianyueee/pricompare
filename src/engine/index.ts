@@ -8,16 +8,19 @@ export { rankPriceCandidates, probeDataRows } from './priceColumn'
 export { extractRows, type ExtractResult } from './extractRows'
 export { parsePrice, detectCurrencyFromText } from './normalize/price'
 export { parseLeadTime, formatLeadTime } from './normalize/leadtime'
-export { SEED_VENDORS, guessVendor, type Vendor, type VendorGuessInput } from './vendor'
+export { SEED_VENDORS, guessVendor, migrateVendorRegistry, type Vendor, type VendorGuessInput } from './vendor'
 export { sheetFingerprint } from './fingerprint'
 export { analyzeSheet, pickBestSheet, type AnalyzeOptions } from './analyze'
 export { buildCompare } from './compare'
 export { buildKkWorkbook, type KkExportOptions, type KkExportOutput } from './export/exportKK'
-export { KK_HEADERS, KK_SHEET_NAME, KK_COL } from './export/kkLayout'
+export { KK_HEADERS, KK_LEGACY_HEADERS, KK_SHEET_NAME, KK_COL, KK_VENDOR_COLS, isKkVendorCol } from './export/kkLayout'
 export {
   KK_COL_COUNT,
   MASTER_MAX_ROWS,
   parseMasterWorkbook,
+  parseMasterWorkbookDetailed,
+  migrateMasterLayout,
+  kkColumnMap,
   findMasterSheet,
   isMasterWorkbook,
   isPlaceholderRow,
@@ -27,6 +30,7 @@ export {
   type MasterRow,
   type MasterData,
   type PassthroughSheet,
+  type ParsedMaster,
 } from './master/model'
 export {
   planMerge,

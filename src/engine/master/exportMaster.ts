@@ -50,6 +50,12 @@ async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer):
   const ws = wb.getWorksheet(master.sheetName) ?? wb.worksheets[0]
   if (!ws) throw new Error('原工作簿里找不到汇总 sheet')
   const oldRowCount = ws.actualRowCount
+  // 原表是旧布局时表头也换成当前布局，保证列名和数据对得上
+  const header = ws.getRow(1)
+  KK_HEADERS.forEach((h, i) => {
+    const cell = header.getCell(i + 1)
+    if (cell.value !== h) cell.value = h
+  })
   master.rows.forEach((row, i) => {
     const r = ws.getRow(i + 2)
     for (let c = 0; c < KK_COL_COUNT; c++) {
