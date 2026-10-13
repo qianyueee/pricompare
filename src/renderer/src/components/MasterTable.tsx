@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { KK_COL, KK_VENDOR_COLS, colLetter, isKkVendorCol } from '@engine/index'
 import type { MasterRow } from '@engine/index'
+import { api } from '../api'
 import { useSession } from '../store/session'
 
 /** 34 列的紧凑中文表头（Excel 列字母另行小字显示） */
@@ -79,6 +80,7 @@ interface RowProps {
   selectedCols: Set<number>
   /** 本行落在拖选格区内时的列区间 [c1, c2]；不在格区内为 null */
   rangeCols: [number, number] | null
+  hiddenCols: ReadonlySet<number>
   onFinishEdit: (rowIndex: number, col: number, value: string | null) => void
 }
 
@@ -89,6 +91,7 @@ const MasterRowView = memo(function MasterRowView({
   selected,
   selectedCols,
   rangeCols,
+  hiddenCols,
   onFinishEdit,
 }: RowProps) {
   // 供应商列最低价高亮（≥2 家有数值才标）
@@ -102,6 +105,7 @@ const MasterRowView = memo(function MasterRowView({
       className={`group ${selected ? 'bg-blue-100/70' : 'hover:bg-blue-50/40'}`}
     >
       {row.cells.map((v, c) => {
+        if (hiddenCols.has(c)) return null
         const isSticky = c < STICKY_COUNT
         const isVendor = isKkVendorCol(c)
         const num = isVendor ? parsePriceNum(v) : null
@@ -163,6 +167,10 @@ export interface CellRange {
 export default function MasterTable(props: {
   rows: { row: MasterRow; index: number }[]
   hasMaster: boolean
+  /** 只读账号：单击格子不进入编辑 */
+  readOnly: boolean
+  /** 不显示的列（只读账号隐藏 O、P、Q、S） */
+  hiddenCols: ReadonlySet<number>
   selected: Set<number>
   selectedCols: Set<number>
   range: CellRange | null
@@ -257,20 +265,20 @@ export default function MasterTable(props: {
     }
   }
 
-  const { onToggleRow, onToggleCol } = props
+  const { onToggleRow, onToggleCol, readOnly } = props
   useEffect(() => {
     const onUp = () => {
       const d = drag.current
       drag.current = null
       if (!d || d.moved) return
-      // 未拖动 = 单击：A 格切换选行；表头切换选列；数据格进入编辑（与旧版行为一致）
+      // 未拖动 = 单击：A 格切换选行；表头切换选列；数据格进入编辑（与旧版行为一致；只读账号不编辑）
       if (d.kind === 'col') onToggleCol(d.startC)
       else if (d.kind === 'row') onToggleRow(d.rawRow)
-      else setEditing({ rowIndex: d.rawRow, col: d.startC })
+      else if (!readOnly) setEditing({ rowIndex: d.rawRow, col: d.startC })
     }
     window.addEventListener('mouseup', onUp)
     return () => window.removeEventListener('mouseup', onUp)
-  }, [onToggleRow, onToggleCol])
+  }, [onToggleRow, onToggleCol, readOnly])
 
   return (
     <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -282,28 +290,30 @@ export default function MasterTable(props: {
       >
         <thead className="sticky top-0 z-10">
           <tr>
-            {COL_LABELS.map((label, c) => (
-              <th
-                key={c}
-                onClick={c === 0 ? props.onClearSelection : undefined}
-                {...(c > 0 ? { 'data-colh': c } : {})}
-                title={c === 0 ? '点击清空全部选中' : '点击选中整列，按住拖动选多列（Delete 清空 / Ctrl+C 复制）'}
-                style={{
-                  minWidth: COL_WIDTHS[c],
-                  ...(c < STICKY_COUNT
-                    ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 11 }
-                    : {}),
-                }}
-                className={`cursor-pointer border-r border-b border-slate-200 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap select-none ${
-                  c > 0 && props.selectedCols.has(c)
-                    ? 'bg-blue-200 text-blue-800'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                <span className="mr-1 text-[10px] text-slate-400">{colLetter(c)}</span>
-                {label}
-              </th>
-            ))}
+            {COL_LABELS.map((label, c) =>
+              props.hiddenCols.has(c) ? null : (
+                <th
+                  key={c}
+                  onClick={c === 0 ? props.onClearSelection : undefined}
+                  {...(c > 0 ? { 'data-colh': c } : {})}
+                  title={c === 0 ? '点击清空全部选中' : '点击选中整列，按住拖动选多列（Delete 清空 / Ctrl+C 复制）'}
+                  style={{
+                    minWidth: COL_WIDTHS[c],
+                    ...(c < STICKY_COUNT
+                      ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 11 }
+                      : {}),
+                  }}
+                  className={`cursor-pointer border-r border-b border-slate-200 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap select-none ${
+                    c > 0 && props.selectedCols.has(c)
+                      ? 'bg-blue-200 text-blue-800'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="mr-1 text-[10px] text-slate-400">{colLetter(c)}</span>
+                  {label}
+                </th>
+              ),
+            )}
           </tr>
         </thead>
         <tbody>
@@ -320,21 +330,28 @@ export default function MasterTable(props: {
                   ? [props.range.c1, props.range.c2]
                   : null
               }
+              hiddenCols={props.hiddenCols}
               onFinishEdit={finishEdit}
             />
           ))}
           {props.rows.length === 0 && (
             <tr>
-              <td colSpan={COL_LABELS.length} className="px-4 py-24 text-center">
+              <td colSpan={COL_LABELS.length - props.hiddenCols.size} className="px-4 py-24 text-center">
                 <div className="text-4xl">📥</div>
                 <div className="mt-3 text-base font-medium text-slate-600">
                   {props.hasMaster
                     ? '没有匹配的行'
-                    : '把「KK 询价汇总表」拖到窗口任意位置载入历史数据；也可以直接拖入供应商报价（将新建汇总）'}
+                    : props.readOnly
+                      ? '汇总表还没有导入'
+                      : '把「KK 询价汇总表」拖到窗口任意位置载入历史数据；也可以直接拖入供应商报价（将新建汇总）'}
                 </div>
-                <div className="mt-1.5 text-xs text-slate-400">
-                  支持 .xlsx / .xlsm · 所有数据仅在本机处理，不会上传
-                </div>
+                {!props.readOnly && (
+                  <div className="mt-1.5 text-xs text-slate-400">
+                    {api.server
+                      ? '支持 .xlsx / .xlsm · 汇总表保存在 Mac 上的 pricompare 服务'
+                      : '支持 .xlsx / .xlsm · 所有数据仅在本机处理，不会上传'}
+                  </div>
+                )}
               </td>
             </tr>
           )}

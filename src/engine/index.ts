@@ -70,3 +70,12 @@ export {
 } from './master/nego'
 export { KK_VENDOR_SLOT_HEADERS } from './export/kkLayout'
 export { patchMasterWorkbook, isMacroEnabledWorkbook, type PatchResult } from './master/patchExport'
+export {
+  applyMasterOp,
+  opShiftsRows,
+  describeMasterOp,
+  type MasterOp,
+  type CellChange,
+  type OpResult,
+  type MergeSummary,
+} from './master/ops'

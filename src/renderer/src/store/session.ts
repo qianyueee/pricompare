@@ -1,29 +1,32 @@
 import { create } from 'zustand'
 import {
   AMOUNT_COLS,
+  KK_COL_COUNT,
   SEED_VENDORS,
   analyzeSheet,
-  applyMerge,
+  applyMasterOp,
   buildMasterWorkbook,
   cleanAmountString,
   cleanMasterAmounts,
-  clearMasterCells,
-  deleteMasterRows,
   guessBatchLabel,
   isMasterWorkbook,
   migrateMasterLayout,
   migrateVendorRegistry,
   parseMasterWorkbook,
-  planMerge,
   readWorkbook,
   type AnalyzedSheet,
+  type CellChange,
   type ColumnMapping,
   type MasterData,
+  type MasterOp,
+  type OpResult,
   type ParsedWorkbook,
   type Vendor,
   dedupeNegoLinesByPn,
 } from '@engine/index'
+import type { ServerRole } from '@shared/serverApi'
 import { api } from '../api'
+import { createMasterSync, type MasterSync } from './masterSync'
 
 export interface MappingTemplate {
   sheetName: string
@@ -95,8 +98,14 @@ interface SessionState {
   importing: boolean
   exporting: boolean
   toast: ToastMsg | null
-  /** 最近一次破坏性编辑（单格改/删行/清空）前的 master——单槽撤销；不可变更新下存旧引用零成本 */
-  undoSnapshot: { master: MasterData; label: string } | null
+  /** 最近一次手工编辑（单格改/删行/清空）的反向操作——单槽撤销 */
+  undo: { op: MasterOp; label: string } | null
+  /** editor 可改总表；viewer（网页版只读账号）只能看、比价、导出 */
+  role: ServerRole
+  /** 网页版连着 Mac 上的服务时的登录身份；桌面版为 null */
+  user: string | null
+  /** 本页总表对应的服务端版本（仅网页版连服务时有意义） */
+  masterVersion: number
   negoOpen: boolean
   /** NEGO 比价页行：自由输入的编号 + 下单数量（档位在渲染时按总表解析） */
   negoLines: { id: number; pn: string; qty: number | null }[]
@@ -182,6 +191,62 @@ function emptyMaster(): MasterData {
   }
 }
 
+const READ_ONLY_MSG = '只读账号不能修改总表'
+
+/** 网页版连着 Mac 上的服务时才有：负责把本页的改动发给服务、把别处的改动取回来 */
+let sync: MasterSync | null = null
+
+/**
+ * 总表的所有改动都走这里：先在本页立即生效，再保存——
+ * 桌面版和本地浏览器整表存盘；网页版把这一步操作发给 Mac 上的服务，由服务按顺序应用。
+ * 只读账号返回 null；没有改动时返回结果但不保存。
+ */
+function commitMasterOp(op: MasterOp, patch: (r: OpResult) => Partial<SessionState>): OpResult | null {
+  const s = useSession.getState()
+  if (s.role !== 'editor') {
+    useSession.setState({ toast: { message: READ_ONLY_MSG } })
+    return null
+  }
+  const res = applyMasterOp(s.master ?? emptyMaster(), op)
+  if (res.master === s.master) return res
+  useSession.setState({ master: res.master, masterDirty: true, ...patch(res) })
+  if (sync) sync.push(op)
+  else void api.storeSet('master', res.master) // 编辑即持久化（防抖会在刷新/关闭时丢数据；序列化只要几毫秒）
+  return res
+}
+
+async function initFromServer(): Promise<void> {
+  const server = api.server!
+  const [session, snap, registry, templates] = await Promise.all([
+    server.session(),
+    server.getMaster(),
+    api.storeGet('vendorRegistry'),
+    api.storeGet('mappingTemplates'),
+  ])
+  const savedRegistry = Array.isArray(registry) && registry.length > 0 ? (registry as Vendor[]) : null
+  useSession.setState({
+    ready: true,
+    role: session.role,
+    user: session.user,
+    registry: savedRegistry ? migrateVendorRegistry(savedRegistry).registry : SEED_VENDORS,
+    templates: (templates as Record<string, MappingTemplate> | null) ?? {},
+    master: snap.master,
+    masterVersion: snap.version,
+  })
+  if (sync) return
+  sync = createMasterSync(server, {
+    getMaster: () => useSession.getState().master,
+    getVersion: () => useSession.getState().masterVersion,
+    setVersion: (version) => useSession.setState({ masterVersion: version }),
+    // 别处删行/插行后，本页的撤销步骤行号已对不上，作废
+    applyRemote: (master, version, shifted) =>
+      useSession.setState(shifted ? { master, masterVersion: version, undo: null } : { master, masterVersion: version }),
+    replaceFromServer: (master, version) => useSession.setState({ master, masterVersion: version, undo: null }),
+    notify: (message) => useSession.setState({ toast: { message } }),
+  })
+  sync.start()
+}
+
 export const useSession = create<SessionState>((set, get) => ({
   ready: false,
   files: [],
@@ -195,11 +260,24 @@ export const useSession = create<SessionState>((set, get) => ({
   importing: false,
   exporting: false,
   toast: null,
-  undoSnapshot: null,
+  undo: null,
+  // 网页版在拿到登录身份前先按只读显示，免得只读账号看到一闪而过的导入按钮
+  role: api.server ? 'viewer' : 'editor',
+  user: null,
+  masterVersion: 0,
   negoOpen: false,
   negoLines: [emptyNegoLine()],
 
   async init() {
+    if (api.server) {
+      try {
+        await initFromServer()
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        set({ ready: true, toast: { message: `连不上 pricompare 服务：${reason}` } })
+      }
+      return
+    }
     try {
       const [registry, templates, master, masterFile] = await Promise.all([
         api.storeGet('vendorRegistry'),
@@ -243,6 +321,10 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async addFiles(fileList: File[]) {
+    if (get().role !== 'editor') {
+      set({ toast: { message: READ_ONLY_MSG } })
+      return
+    }
     set({ importing: true })
     const { registry, templates } = get()
     const added: LoadedFile[] = []
@@ -369,6 +451,10 @@ export const useSession = create<SessionState>((set, get) => ({
     const state = get()
     const file = state.files.find((f) => f.id === fileId)
     if (!file?.pw || !file.analysis) return
+    if (state.role !== 'editor') {
+      set({ toast: { message: READ_ONLY_MSG } })
+      return
+    }
     const analysis = await analyzeSheet(file.pw, {
       fileName: file.fileName,
       vendors: state.registry,
@@ -397,15 +483,13 @@ export const useSession = create<SessionState>((set, get) => ({
       }
       void api.storeSet('mappingTemplates', templates)
     }
-    const masterBefore = state.master ?? emptyMaster()
-    const plan = planMerge(masterBefore, analysis.rows, {
-      batch,
-      vendorSlot,
-      vendorId,
-      vendorDisplay: display,
-    })
-    const master = applyMerge(masterBefore, plan)
-    void api.storeSet('master', master)
+    // 并入也是一步总表操作：网页版由服务在最新总表上按同样规则重新规划，不会盖掉后台刚并入的报价
+    const res = commitMasterOp(
+      { kind: 'merge', quotes: analysis.rows, options: { batch, vendorSlot, vendorId, vendorDisplay: display } },
+      () => ({ undo: null }), // 并入后旧撤销作废（撤销只针对手工编辑/删行/清空）
+    )
+    const m = res?.merge
+    if (!m) return
     set((s) => {
       const files = s.files.map((f) =>
         f.id === fileId
@@ -415,13 +499,7 @@ export const useSession = create<SessionState>((set, get) => ({
               vendorId,
               vendorDisplay: display,
               confirmed: true,
-              merged: {
-                fill: plan.fillCount,
-                append: plan.appendCount,
-                revise: plan.reviseCount,
-                skip: plan.skipCount,
-                batch,
-              },
+              merged: { fill: m.fill, append: m.append, revise: m.revise, skip: m.skip, batch },
             }
           : f,
       )
@@ -430,12 +508,9 @@ export const useSession = create<SessionState>((set, get) => ({
         files,
         registry,
         templates,
-        master,
-        masterDirty: true,
-        undoSnapshot: null, // 并入后旧快照作废（撤销只针对手工编辑/删行/清空）
         activeMappingFileId: next?.id ?? null,
         toast: {
-          message: `已并入汇总：更新 ${plan.fillCount} 行，新增 ${plan.appendCount} 行${plan.reviseCount > 0 ? `，修订 ${plan.reviseCount} 行` : ''}${plan.skipCount > 0 ? `，跳过 ${plan.skipCount} 行（已在表内）` : ''}（批次 ${batch}）`,
+          message: `已并入汇总：更新 ${m.fill} 行，新增 ${m.append} 行${m.revise > 0 ? `，修订 ${m.revise} 行` : ''}${m.skip > 0 ? `，跳过 ${m.skip} 行（已在表内）` : ''}（批次 ${batch}）`,
         },
       }
     })
@@ -444,14 +519,24 @@ export const useSession = create<SessionState>((set, get) => ({
   confirmMasterImport() {
     const pending = get().pendingMaster
     if (!pending) return
-    void api.storeSet('master', pending.master)
-    void api.storeSet('masterFile', { name: pending.fileName, b64: pending.b64 })
+    if (get().role !== 'editor') {
+      set({ pendingMaster: null, toast: { message: READ_ONLY_MSG } })
+      return
+    }
+    const file = { name: pending.fileName, b64: pending.b64 }
+    if (sync) {
+      void sync.importMaster({ master: pending.master, file })
+    } else {
+      void api.storeSet('master', pending.master)
+      void api.storeSet('masterFile', file)
+    }
     set({
       master: pending.master,
-      masterOriginalB64: pending.b64,
+      // 网页版的原件存在服务上，导出时再取
+      masterOriginalB64: sync ? null : pending.b64,
       masterDirty: false,
       pendingMaster: null,
-      undoSnapshot: null,
+      undo: null,
       toast: {
         message:
           `汇总表已更新：${pending.fileName}（${pending.dataRows} 行数据）` +
@@ -479,54 +564,42 @@ export const useSession = create<SessionState>((set, get) => ({
       value = Number.isFinite(num) && /^[-+]?[\d.,，]+$/.test(trimmed) ? num : rawInput
     }
     if (row.cells[col] === value) return
-    const rows = [...master.rows]
-    const cells = [...row.cells]
-    cells[col] = value
-    rows[rowIndex] = { cells }
-    const next = { ...master, rows }
-    set({ master: next, masterDirty: true, undoSnapshot: { master, label: '单元格编辑' } })
-    // 编辑即持久化（防抖会在刷新/关闭时丢数据；777 行序列化只有几毫秒）
-    void api.storeSet('master', next)
+    commitMasterOp({ kind: 'setCells', cells: [{ row: rowIndex, col, value }] }, (r) => ({
+      undo: r.inverse ? { op: r.inverse, label: '单元格编辑' } : null,
+    }))
   },
 
   deleteRows(rowIdxs: number[]) {
     const master = get().master
     if (!master || rowIdxs.length === 0) return
-    const next = deleteMasterRows(master, rowIdxs)
-    set({
-      master: next,
-      masterDirty: true,
-      undoSnapshot: { master, label: `删除 ${rowIdxs.length} 行` },
+    commitMasterOp({ kind: 'deleteRows', rows: rowIdxs }, (r) => ({
+      undo: r.inverse ? { op: r.inverse, label: `删除 ${rowIdxs.length} 行` } : null,
       toast: { message: `已删除 ${rowIdxs.length} 行（A 列序号已重排，Ctrl+Z 可撤销）` },
-    })
-    void api.storeSet('master', next)
+    }))
   },
 
   clearCells(targets: { rowIndex: number; cols: number[] }[]) {
     const master = get().master
     if (!master) return
-    const next = clearMasterCells(master, targets)
-    if (next === master) return
+    // Excel Delete 语义：A 列序号不清，越界行/列忽略
+    const cells: CellChange[] = []
+    for (const t of targets) {
+      if (!master.rows[t.rowIndex]) continue
+      for (const c of t.cols) if (c > 0 && c < KK_COL_COUNT) cells.push({ row: t.rowIndex, col: c, value: null })
+    }
+    if (cells.length === 0) return
     const count = targets.reduce((s, t) => s + t.cols.filter((c) => c > 0).length, 0)
-    set({
-      master: next,
-      masterDirty: true,
-      undoSnapshot: { master, label: '清空内容' },
+    commitMasterOp({ kind: 'setCells', cells }, (r) => ({
+      undo: r.inverse ? { op: r.inverse, label: '清空内容' } : null,
       toast: { message: `已清空 ${count} 个单元格（Ctrl+Z 可撤销）` },
-    })
-    void api.storeSet('master', next)
+    }))
   },
 
   undoMasterEdit() {
-    const snap = get().undoSnapshot
-    if (!snap) return
-    set({
-      master: snap.master,
-      masterDirty: true,
-      undoSnapshot: null,
-      toast: { message: `已撤销：${snap.label}` },
-    })
-    void api.storeSet('master', snap.master)
+    const undo = get().undo
+    if (!undo) return
+    commitMasterOp(undo.op, () => ({ undo: null, toast: { message: `已撤销：${undo.label}` } }))
+    if (get().undo === undo) set({ undo: null }) // 没有可撤销的改动（别处已改回）时也清掉这一步
   },
 
   async exportMaster() {
@@ -534,7 +607,9 @@ export const useSession = create<SessionState>((set, get) => ({
     if (!master) return
     set({ exporting: true })
     try {
-      const out = await buildMasterWorkbook(master, masterOriginalB64 ? b64ToBuf(masterOriginalB64) : null)
+      // 网页版的原始 KK 汇总表存在服务上，导出时才取（在它上面打补丁，格式和以前发给 Tony 的一样）
+      const originalB64 = api.server ? ((await api.server.getMasterFile())?.b64 ?? null) : masterOriginalB64
+      const out = await buildMasterWorkbook(master, originalB64 ? b64ToBuf(originalB64) : null)
       const saved = await api.saveXlsx({
         // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
         defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,

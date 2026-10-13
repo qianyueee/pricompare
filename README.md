@@ -65,12 +65,32 @@ npm run dev          # 开发模式启动桌面应用
 npm run dist:win     # 本机打包 → release/询价比价系统-Setup-x.y.z.exe
 ```
 
+## 网页版（Mac 上的 pricompare 服务）
+
+同一套界面也能作为网页使用：Mac 上跑一个 Node 服务保存总表，浏览器打开就是和桌面版一样的汇总大表，
+别处（后台每小时并入、另一个窗口）的改动会实时出现。
+
+```bash
+npm run build:web && npm run build:server   # 产物在 dist-server/：server.mjs、cli.mjs、web/
+node dist-server/server.mjs --data ~/apps/pricompare-data --port 8790   # 只监听 127.0.0.1
+node dist-server/cli.mjs import-master KK询价汇总表.xlsm   # 整表导入（替换总表并保存原件作导出底版）
+node dist-server/cli.mjs status                           # 版本号与最近 10 次改动
+```
+
+- dist-server 不依赖 node_modules，拷到 Mac 上用 Node 22 直接运行；
+- 总表的每次改动都是一步「操作」（改格 / 删行 / 并入 / 整表导入），服务按顺序应用并记历史：
+  后台并入和网页上的手工修改不会互相覆盖；基于旧版本的删行会被拒绝并提示重做；
+- 数据目录：`master.json`（总表 + 版本）、`master-file.json`（导出底版）、`store/`（供应商、映射模板）、
+  `history/YYYY-MM.jsonl`（每步改动：谁、何时、怎么撤销）、`snapshots/`（每天第一次改动前和整表导入前的整表，保留 60 天）；
+- 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Cloudflare Access 来的按登录邮箱查
+  `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列。
+
 ## 无显示器环境验证（CI / 容器）
 
 ```bash
 npm run typecheck    # TypeScript 检查
 npm run test         # vitest 引擎单测（合成固件仿真真实报价/汇总结构）
-npm run e2e          # Playwright 全流程：载汇总→并报价→编辑→导出→持久化
+npm run e2e          # Playwright 全流程：载汇总→并报价→编辑→导出→持久化；网页版连服务、实时刷新、只读账号
 npm run verify       # 以上全部
 npm run dev:web      # 仅浏览器模式起 renderer（无需 Electron 二进制）
 xvfb-run -a npx electron --no-sandbox out/main/index.js --smoke   # Electron 壳冒烟（需先 npm run build）
@@ -106,8 +126,10 @@ src/engine/            纯 TS 引擎（无 Electron 依赖，可单测）
   master/nego.ts         NEGO 比价（数量档提取、各家总额与最优组合、TSV 剪贴板）
   master/exportMaster.ts 以原工作簿为底的导出（zip 级补丁优先，公式/批注/样式字节保真）
   compare.ts / export/   （比价矩阵与 KK 导出的引擎实现，供单测与后续复用）
+  master/ops.ts          总表操作（改格/删行/恢复行/并入/整表替换）及其反向操作，桌面版和服务共用
 src/renderer/          React 界面（汇总大表 / 并入确认弹窗 / 汇总载入弹窗）
 src/main|preload/      Electron 壳（窗口、保存对话框、JSON 持久化、中文菜单）
+src/server/            Mac 上的 pricompare 服务（数据目录、按顺序应用操作、历史与快照、权限、SSE）与命令行
 tests/                 vitest 单测 + 合成固件生成器
 e2e/                   Playwright 全流程测试
 ```

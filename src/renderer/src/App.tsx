@@ -11,11 +11,24 @@ const ACCEPT_RE = /\.(xlsx|xlsm|xls|csv)$/i
 /** 整个窗口都是拖放目标：拖入文件时显示全屏遮罩，松手即导入 */
 function useWindowDrop() {
   const addFiles = useSession((s) => s.addFiles)
+  const readOnly = useSession((s) => s.role !== 'editor')
   const [dragging, setDragging] = useState(false)
   const depth = useRef(0)
 
   useEffect(() => {
     const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false
+    if (readOnly) {
+      // 只读账号不能导入；仍拦下拖放，免得浏览器直接打开文件
+      const block = (e: DragEvent) => {
+        if (hasFiles(e)) e.preventDefault()
+      }
+      window.addEventListener('dragover', block)
+      window.addEventListener('drop', block)
+      return () => {
+        window.removeEventListener('dragover', block)
+        window.removeEventListener('drop', block)
+      }
+    }
     const onEnter = (e: DragEvent) => {
       if (!hasFiles(e)) return
       e.preventDefault()
@@ -48,7 +61,7 @@ function useWindowDrop() {
       window.removeEventListener('dragleave', onLeave)
       window.removeEventListener('drop', onDrop)
     }
-  }, [addFiles])
+  }, [addFiles, readOnly])
 
   return dragging
 }
