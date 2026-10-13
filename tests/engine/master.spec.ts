@@ -86,6 +86,23 @@ describe('合并规则', () => {
     expect(master.rows[0]!.cells[10]).toBeNull()
   })
 
+  it('规格列只填空：后回的一家不覆盖先回那家写的材料、表面处理', async () => {
+    const master = await loadMaster()
+    master.rows[0]!.cells[KK_COL.material] = 'POLYCARBONATE'
+    master.rows[0]!.cells[KK_COL.surfaceFinish] = 'ENGRAVE ARIAL IN 3-4MM HIGH'
+    const quote = {
+      ...makeQuote(FIXTURE_PNS[0]!, { qty: 10, amount: 324, material: '蓝色/黄色PC' }),
+      surfaceFinish: '无',
+      cleaningSpec: 'CLASS 1',
+    }
+    const plan = planMerge(master, [quote], { batch: '20261012 Ivan', vendorSlot: 10, vendorId: 'skw', vendorDisplay: 'SKW' })
+    const row = applyMerge(master, plan).rows[0]!
+    expect(row.cells[10]).toBe(324)
+    expect(row.cells[KK_COL.material]).toBe('POLYCARBONATE')
+    expect(row.cells[KK_COL.surfaceFinish]).toBe('ENGRAVE ARIAL IN 3-4MM HIGH')
+    expect(row.cells[KK_COL.cleaningSpec]).toBe('CLASS 1')
+  })
+
   it('HC 报价：J 列在前 → W 前插；无 Quote(EA) 不动 H/U；批次标签不进 V', async () => {
     const master = await loadMaster()
     // 先造一行只有 SKW 报过的行

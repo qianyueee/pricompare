@@ -11,7 +11,7 @@ import type { QuoteRow } from '../types'
  * - W 交期按供应商列序拼接（HC 在 J、SKW 在 K → "18Days/3 weeks+cleaning"）
  * - V 只收真报价单号（KV202608151 这类），"询价 20260814 Natalie A" 是批次标签不进 V
  * - H 选定价 / U 对客报价：来自带 Quote(EA) 的报价文件（KV 家宏算好的），只填空不覆盖
- * - 材料/表面处理等明细：空则填；SKW 的值可覆盖别家（观察到 KV 中文规格优先）
+ * - 材料/表面处理等明细：只填空，谁先回用谁的，不覆盖（2026-10 起的汇总表都是这样；凯维写「无」会冲掉华臣的刻字要求）
  *
  * 0823/0826/0828 三轮真实汇总补充的规则：
  * - 重复拖入已并入的回单（同批次同件同数量且该家价一致）→ skip，不产生重复行
@@ -206,12 +206,11 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
         )
       }
     }
-    // 明细：空则填；SKW 的规格可覆盖别家（不覆盖备注）
+    // 明细：只填空，不覆盖别家已写的规格
     for (const [col, field] of specFields) {
       const v = q[field]
       if (typeof v !== 'string' || !v) continue
       if (isEmptyCell(cells[col])) set(col, v)
-      else if (opts.vendorId === 'skw' && String(cells[col]).trim() !== v) set(col, v)
     }
     if (q.remark) {
       const existing = String(cells[KK_COL.comment] ?? '').trim()
