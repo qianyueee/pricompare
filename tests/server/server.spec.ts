@@ -194,6 +194,25 @@ describe('pricompare 服务', () => {
     expect((await call('GET', '/', undefined, { 'cf-ray': 'x' })).status).toBe(403)
   })
 
+  it('经 Tailscale Serve：域名列在 hosts、登录名在名单上才放行；Funnel 公网请求拒绝', async () => {
+    const ts = 'mac.tail0000.ts.net'
+    const zane = { host: `${ts}:8443`, 'tailscale-user-login': 'Zane@example.com', origin: `https://${ts}:8443` }
+    // 域名还没列进 hosts：一律拒绝
+    expect((await call('GET', '/api/session', undefined, zane)).status).toBe(403)
+    auth = { ...auth, hosts: [ts] }
+    expect((await call('GET', '/api/session', undefined, zane)).body).toMatchObject({ user: 'zane@example.com', role: 'editor' })
+    const ok = await postOp(1, { kind: 'setCells', cells: [{ row: 0, col: 9, value: 7 }] }, 'ts1', zane)
+    expect(ok.status).toBe(200)
+    const tony = { host: ts, 'tailscale-user-login': 'tony@example.com' }
+    expect((await call('GET', '/api/session', undefined, tony)).body).toMatchObject({ role: 'viewer' })
+    expect((await postOp(2, { kind: 'deleteRows', rows: [0] }, 'ts2', tony)).status).toBe(403)
+    // 名单外的 tailnet 成员、Funnel 公网请求、没有登录名的请求
+    expect((await call('GET', '/api/master', undefined, { host: ts, 'tailscale-user-login': 'who@example.com' })).status).toBe(403)
+    expect((await call('GET', '/api/master', undefined, { ...zane, 'tailscale-funnel-request': '?1' })).status).toBe(403)
+    expect((await call('GET', '/', undefined, { host: ts })).status).toBe(403)
+    expect(store.getVersion()).toBe(2)
+  })
+
   it('本机访问：Host 不是 localhost 拒绝（防 DNS 重绑定）；改动必须带客户端标记', async () => {
     expect((await call('GET', '/api/master', undefined, { host: 'evil.example' })).status).toBe(403)
     const noHeader = await call('POST', '/api/ops', { baseVersion: 1, opId: 'z', op: { kind: 'deleteRows', rows: [0] } }, {
