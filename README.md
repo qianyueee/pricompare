@@ -97,7 +97,9 @@ node dist-server/cli.mjs --help                           # 全部命令
 - 数据目录：`master.json`（总表 + 版本）、`master-file.json`（导出底版）、`store/`（供应商、映射模板）、
   `history/YYYY-MM.jsonl`（每步改动：谁、何时、怎么撤销）、`snapshots/`（每天第一次改动前和整表导入前的整表，保留 60 天）；
 - 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Cloudflare Access 来的按登录邮箱查
-  `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列。
+  `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列；
+- 只给自己的 tailnet 用时可以走 Tailscale Serve（不对公网）：`tailscale serve --bg --https=8443 http://127.0.0.1:8790`，
+  再把本机的 `xxx.ts.net` 名加进 `hosts`、把 Tailscale 登录名加进 `editors` / `viewers`。Funnel（公网）来的请求一律拒绝。
 
 ## 无显示器环境验证（CI / 容器）
 
