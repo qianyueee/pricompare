@@ -9,6 +9,7 @@ import { KK_COL, KK_COL_COUNT, type MasterCell, type MasterData } from '@engine/
 import { DEFAULT_AUTH } from '../../src/server/auth'
 import { runCli } from '../../src/server/cliRun'
 import { createHandler } from '../../src/server/http'
+import { verifyPassword } from '../../src/server/password'
 import { DataStore } from '../../src/server/store'
 import { FILE_B_PRICES, FIXTURE_PNS, makeFileB } from '../fixtures/buildFixtures'
 
@@ -202,5 +203,15 @@ describe('pricompare 命令行', () => {
     expect(r.out).toContain('隐藏列：H')
     expect(r.out).toContain('H(隐)=452')
     expect(r.out).toContain('J=56.7')
+  })
+
+  it('hash-password：从标准输入读密码，输出可核对的哈希', async () => {
+    const lines: string[] = []
+    const code = await runCli(['hash-password'], { out: (s) => lines.push(s), err: () => {}, stdin: async () => 'KVS_test1\n' })
+    expect(code).toBe(0)
+    expect(lines[0]).toMatch(/^scrypt\$/)
+    expect(await verifyPassword('KVS_test1', lines[0]!)).toBe(true)
+    expect(await verifyPassword('KVS_test1\n', lines[0]!)).toBe(false)
+    expect(await runCli(['hash-password'], { out: () => {}, err: () => {}, stdin: async () => '' })).toBe(1)
   })
 })

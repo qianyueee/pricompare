@@ -1,5 +1,6 @@
 // Mac 上的 pricompare 服务：保存总表、按顺序应用改动、记历史，并把网页版发给浏览器。
 // 用法：node server.mjs --data <数据目录> [--port 8790] [--web <dist-web 目录>]
+import { randomBytes } from 'node:crypto'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
@@ -38,6 +39,15 @@ function loadAuth(): AuthConfig {
   return auth
 }
 
+/** 密码登录 cookie 的签名密钥：第一次启动时生成，存在数据目录里，重启后已登录的人不用重输密码 */
+function loadSessionKey(): Buffer {
+  const path = join(dataDir, 'session.key')
+  if (!existsSync(path)) writeFileSync(path, `${randomBytes(32).toString('hex')}\n`, { mode: 0o600 })
+  const key = Buffer.from(readFileSync(path, 'utf8').trim(), 'hex')
+  if (key.length < 32) throw new Error(`${path} 内容不对：删掉它重启服务会重新生成（已登录的人要重输密码）`)
+  return key
+}
+
 const store = new DataStore(dataDir)
 await store.open()
 if (!existsSync(configPath)) writeFileSync(configPath, `${JSON.stringify(DEFAULT_AUTH, null, 2)}\n`)
@@ -46,6 +56,7 @@ loadAuth()
 const { handler, close } = createHandler({
   store,
   auth: loadAuth,
+  sessionKey: loadSessionKey(),
   staticDir: existsSync(join(webDir, 'index.html')) ? webDir : undefined,
 })
 const server = createServer((req, res) => void handler(req, res))

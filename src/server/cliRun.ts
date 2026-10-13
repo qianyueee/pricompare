@@ -25,6 +25,7 @@ import {
   type PostOpResponse,
   type ServerSession,
 } from '../shared/serverApi'
+import { hashPassword } from './password'
 
 const HELP = `用法：node cli.mjs <命令> [参数]
 
@@ -44,6 +45,7 @@ const HELP = `用法：node cli.mjs <命令> [参数]
                                            查总表行（Excel 行号、各家价格、单号、交期、备注）
   set --row R --col C --value V [--expect-pn P] [--append] [--text]
   set --cells <cells.json>                 改格：R 是 Excel 行号，C 是列字母；--append 追加（备注用「; 」连接）
+  hash-password                            从标准输入读密码，输出填进 config.json「password」的哈希（不连服务）
 
 识别参数：--sheet 名称  --header-row N（Excel 行号）  --price-col 列字母  --map 字段=列字母,…
           （字段：pn rev qty price leadTime quoteNo item description material surfaceFinish
@@ -590,9 +592,20 @@ async function status(): Promise<void> {
 }
 
 /** 跑一条命令，返回退出码（0 成功，1 出错，2 用法不对） */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 export async function runCli(
   argv: string[],
-  io: { out?: (s: string) => void; err?: (s: string) => void; env?: NodeJS.ProcessEnv } = {},
+  io: {
+    out?: (s: string) => void
+    err?: (s: string) => void
+    env?: NodeJS.ProcessEnv
+    stdin?: () => Promise<string>
+  } = {},
 ): Promise<number> {
   out = io.out ?? ((s) => process.stdout.write(`${s}\n`))
   const err = io.err ?? ((s) => process.stderr.write(`${s}\n`))
@@ -632,6 +645,11 @@ export async function runCli(
     } else if (cmd === 'batches') await batches()
     else if (cmd === 'rows') await rows()
     else if (cmd === 'set') await setCells()
+    else if (cmd === 'hash-password') {
+      const password = (await (io.stdin ?? readStdin)()).replace(/\r?\n$/, '')
+      if (!password) throw new CliError('没读到密码：用法 printf %s 密码 | node cli.mjs hash-password')
+      out(await hashPassword(password))
+    }
     else {
       out(HELP)
       return 2

@@ -88,6 +88,7 @@ node dist-server/cli.mjs --help                           # 全部命令
 | `merge-rows --rows rows.json --vendor cl --batch …` | 并入邮件正文里的报价（没有附件时） |
 | `batches`、`rows --batch …` | 最近的询价组、各家已填几行；查行（Excel 行号） |
 | `set --row R --col C --value V --expect-pn P` | 改格（如没发询价的那家填「无」、追加备注）；P/N 对不上就拒绝 |
+| `hash-password` | 从标准输入读密码，输出填进 `config.json`「password」的哈希（不连服务） |
 
 供应商只认注册表里的（HC、SKW、CL…），不在表里的一律拒绝；单价列认不出或表头没认准时不并入，要先 `dump` 看原表再指定。
 
@@ -99,7 +100,11 @@ node dist-server/cli.mjs --help                           # 全部命令
 - 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Cloudflare Access 来的按登录邮箱查
   `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列；
 - 只给自己的 tailnet 用时可以走 Tailscale Serve（不对公网）：`tailscale serve --bg --https=8443 http://127.0.0.1:8790`，
-  再把本机的 `xxx.ts.net` 名加进 `hosts`、把 Tailscale 登录名加进 `editors` / `viewers`。Funnel（公网）来的请求一律拒绝。
+  再把本机的 `xxx.ts.net` 名加进 `hosts`、把 Tailscale 登录名加进 `editors` / `viewers`。没配密码时 Funnel（公网）来的请求一律拒绝；
+- 要从没装 Tailscale 的设备打开时，改用 Funnel（公网）加密码：`tailscale funnel --bg --https=8443 http://127.0.0.1:8790`，
+  再把 `printf %s '密码' | node cli.mjs hash-password` 输出的哈希填进 `password`（`config.json` 几秒内生效，不用重启）。
+  名单外的人先看到登录页，输对后拿到 30 天有效的 cookie，角色是 `passwordRole`（默认 viewer）；tailnet 里名单上的人照旧不用密码。
+  全站 10 分钟内最多输错 10 次；换密码后旧 cookie 全部失效。cookie 的签名密钥在数据目录的 `session.key`。
 
 ## 无显示器环境验证（CI / 容器）
 
