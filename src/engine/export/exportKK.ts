@@ -3,7 +3,7 @@ import { formatLeadTime } from '../normalize/leadtime'
 import { letterToIdx } from '../util'
 import type { CompareCell, CompareResult, CompareRow, QuoteRow } from '../types'
 import type { Vendor } from '../vendor'
-import { KK_COL, KK_COL_WIDTHS, KK_HEADERS, KK_SHEET_NAME, KK_STYLE } from './kkLayout'
+import { KK_COL, KK_COL_WIDTHS, KK_HEADERS, KK_SHEET_NAME, KK_STYLE, isKkVendorCol } from './kkLayout'
 
 export interface KkExportOptions {
   /** 写入 B 列 Name 的汇总名称（如 "20260802 询价"） */
@@ -48,7 +48,7 @@ function isUsdVendor(result: CompareResult, vendorId: string): boolean {
 
 /**
  * 供应商落列规划：
- * 已知槽位（registry.kkSlot）落传统列；未知人民币供应商占 I–N 最左空槽并改写表头；
+ * 已知槽位（registry.kkSlot）落传统列（I–N 或 AG）；未知人民币供应商占 I–N 最左空槽并改写表头；
  * 第一家美元供应商落 O 列（保留模板表头）；超员在 N 后插入新列并给出警告。
  */
 export function planSlots(result: CompareResult, opts: KkExportOptions): SlotPlan {
@@ -72,7 +72,7 @@ export function planSlots(result: CompareResult, opts: KkExportOptions): SlotPla
     const reg = opts.registry.find((r) => r.id === vendorId)
     if (!reg?.kkSlot) continue
     const idx = letterToIdx(reg.kkSlot)
-    if (idx >= KK_COL.vendorSlotStart && idx <= KK_COL.vendorSlotEnd && !slotUsed.has(idx)) {
+    if (isKkVendorCol(idx) && !slotUsed.has(idx)) {
       slotUsed.add(idx)
       slotByVendor[vendorId] = idx
     }

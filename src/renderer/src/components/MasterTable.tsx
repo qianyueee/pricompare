@@ -1,26 +1,26 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { KK_COL, colLetter } from '@engine/index'
+import { KK_COL, KK_VENDOR_COLS, colLetter, isKkVendorCol } from '@engine/index'
 import type { MasterRow } from '@engine/index'
 import { useSession } from '../store/session'
 
-/** 33 列的紧凑中文表头（Excel 列字母另行小字显示） */
+/** 34 列的紧凑中文表头（Excel 列字母另行小字显示） */
 const COL_LABELS = [
   'No.', '批次', 'Item', 'P/N', 'Rev', '描述', '数量', '选定价',
-  'Mao', 'HC', 'SKW', 'BY', 'YJ', 'JM', 'US$', 'USD',
+  'Mao', 'HC', 'SKW', 'CL', 'BY', 'JM', 'US$', 'USD',
   'Cleaning', '材料费', '运费+税', 'Cost', '对客价', '报价单号', '交期',
-  '材料', '表面处理', '清洗', '工艺', '尺寸', 'Type', '备注', '备注2', 'Base P/N', 'Base ID',
+  '材料', '表面处理', '清洗', '工艺', '尺寸', 'Type', '备注', '备注2', 'Base P/N', 'YJ', 'Base ID',
 ]
 
 const COL_WIDTHS = [
-  44, 128, 44, 118, 46, 220, 52, 76, 72, 72, 72, 64, 64, 64, 72, 60,
-  62, 66, 70, 60, 68, 108, 150, 110, 130, 82, 82, 92, 60, 170, 80, 92, 72,
+  44, 128, 44, 118, 46, 220, 52, 76, 72, 72, 72, 72, 64, 64, 72, 60,
+  62, 66, 70, 60, 68, 108, 150, 110, 130, 82, 82, 92, 60, 170, 80, 92, 64, 72,
 ]
 
 /** 冻结列（A–D）的累计左偏移 */
 const STICKY_COUNT = 4
 const STICKY_LEFT = [0, 44, 172, 216]
 
-const VENDOR_SLOTS = [8, 9, 10, 11, 12, 13]
+const VENDOR_SLOTS = KK_VENDOR_COLS.map((v) => v.col)
 
 /** 选区蓝色叠加用 inset 阴影实现，避免和最低价绿底/TDB 琥珀底的 bg 类冲突 */
 const SEL_TINT = 'shadow-[inset_0_0_0_999px_rgba(59,130,246,0.16)]'
@@ -103,7 +103,7 @@ const MasterRowView = memo(function MasterRowView({
     >
       {row.cells.map((v, c) => {
         const isSticky = c < STICKY_COUNT
-        const isVendor = c >= 8 && c <= 13
+        const isVendor = isKkVendorCol(c)
         const num = isVendor ? parsePriceNum(v) : null
         const isMin = min !== null && num !== null && num === min
         const isTdb = isVendor && typeof v === 'string' && /tdb|tbd|待定/i.test(v)

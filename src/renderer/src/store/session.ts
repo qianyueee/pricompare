@@ -11,6 +11,8 @@ import {
   deleteMasterRows,
   guessBatchLabel,
   isMasterWorkbook,
+  migrateMasterLayout,
+  migrateVendorRegistry,
   parseMasterWorkbook,
   planMerge,
   readWorkbook,
@@ -207,24 +209,33 @@ export const useSession = create<SessionState>((set, get) => ({
       ])
       let loadedMaster = (master as MasterData | null) ?? null
       let cleanedOnInit = 0
+      let migratedRows = 0
       if (loadedMaster) {
+        // 10-07 之前存下的 33 列总表 → 34 列新布局（CL 列、YJ 挪到 AG）
+        const migrated = migrateMasterLayout(loadedMaster)
+        loadedMaster = migrated.master
+        migratedRows = migrated.migratedRows
         const cleaned = cleanMasterAmounts(loadedMaster)
         loadedMaster = cleaned.master
         cleanedOnInit = cleaned.changed
-        if (cleanedOnInit > 0) void api.storeSet('master', loadedMaster)
+        if (cleanedOnInit > 0 || migratedRows > 0) void api.storeSet('master', loadedMaster)
       }
+      let loadedRegistry = Array.isArray(registry) && registry.length > 0 ? (registry as Vendor[]) : SEED_VENDORS
+      const regMigration = migrateVendorRegistry(loadedRegistry)
+      if (regMigration.migrated) {
+        loadedRegistry = regMigration.registry
+        void api.storeSet('vendorRegistry', loadedRegistry)
+      }
+      const notes: string[] = []
+      if (migratedRows > 0) notes.push(`总表已换成 10-07 新布局（新增 L 列 CL，YJ 挪到 AG），共 ${migratedRows} 行`)
+      if (cleanedOnInit > 0) notes.push(`已自动规范 ${cleanedOnInit} 个文本格式金额（如 ￥1,133.40 → 1133.4）`)
       set({
         ready: true,
-        registry: Array.isArray(registry) && registry.length > 0 ? (registry as Vendor[]) : SEED_VENDORS,
+        registry: loadedRegistry,
         templates: (templates as Record<string, MappingTemplate> | null) ?? {},
         master: loadedMaster,
         masterOriginalB64: (masterFile as { b64?: string } | null)?.b64 ?? null,
-        ...(cleanedOnInit > 0
-          ? {
-              masterDirty: true,
-              toast: { message: `已自动规范 ${cleanedOnInit} 个文本格式金额（如 ￥1,133.40 → 1133.4）` },
-            }
-          : {}),
+        ...(notes.length > 0 ? { masterDirty: true, toast: { message: notes.join('；') } } : {}),
       })
     } catch {
       set({ ready: true })

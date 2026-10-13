@@ -1,4 +1,4 @@
-import { KK_COL } from '../export/kkLayout'
+import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
 import type { MasterCell, MasterData } from './model'
 
 /**
@@ -7,11 +7,11 @@ import type { MasterCell, MasterData } from './model'
  * 备注类文字（"没有图纸"、"做不了"、"无"、"/"）原样保留。
  */
 
-/** 参与清洗的列：G 数量 + H..U 全部金额列（A 序号、V 单号等绝不触碰） */
+/** 参与清洗的列：G 数量 + H..U 全部金额列 + AG 列 YJ（A 序号、V 单号等绝不触碰） */
 export const AMOUNT_COLS: readonly number[] = [
   KK_COL.qty, // G
   KK_COL.quoteEach, // H
-  8, 9, 10, 11, 12, 13, // I..N 供应商
+  ...KK_VENDOR_COLS.map((v) => v.col), // I..N 供应商 + AG YJ
   KK_COL.usVendor, // O
   KK_COL.usd, // P
   16, 17, 18, 19, // Q..T

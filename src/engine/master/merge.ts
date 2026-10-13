@@ -1,6 +1,6 @@
 import { formatLeadTime } from '../normalize/leadtime'
 import { cleanAmountString } from './clean'
-import { KK_COL } from '../export/kkLayout'
+import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
 import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
 import type { QuoteRow } from '../types'
 
@@ -308,8 +308,8 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
         (r, ri) => !claimed.has(ri) && !isPlaceholderRow(r) && rowBatchEq(r) && normPn(r.cells[KK_COL.pn]) === normPn(q.pn),
       )
       if (sameBatchSamePn.length !== 1) continue
-      const otherSlotsBusy = [8, 9, 10, 11, 12, 13].some(
-        (s) => s !== opts.vendorSlot && !isFillableCell(row.cells[s]),
+      const otherSlotsBusy = KK_VENDOR_COLS.some(
+        ({ col }) => col !== opts.vendorSlot && !isFillableCell(row.cells[col]),
       )
       if (otherSlotsBusy) {
         warnings.push(`${q.pn}：数量 ${row.cells[KK_COL.qty]}→${q.qty} 的修订行已有其他家报价，改按新行并入，请人工核对`)
@@ -412,7 +412,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (isPlaceholderRow(row) || rowBatchEq(row)) continue
       if (normPn(row.cells[KK_COL.pn]) !== normPn(a.quote.pn)) continue
       if (!numEq(row.cells[KK_COL.qty] ?? null, a.quote.qty)) continue
-      if (![8, 9, 10, 11, 12, 13].some((s) => !isFillableCell(row.cells[s]))) continue
+      if (!KK_VENDOR_COLS.some(({ col }) => !isFillableCell(row.cells[col]))) continue
       reinquiries.push(`${a.quote.pn}×${a.quote.qty ?? ''}（历史批次「${String(row.cells[KK_COL.name] ?? '').trim()}」）`)
       break
     }

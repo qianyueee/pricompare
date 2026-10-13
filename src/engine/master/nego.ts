@@ -1,4 +1,4 @@
-import { KK_COL, KK_VENDOR_SLOT_HEADERS } from '../export/kkLayout'
+import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
 import { cleanAmountString } from './clean'
 import { isDataRow, type MasterCell, type MasterData } from './model'
 
@@ -8,7 +8,8 @@ import { isDataRow, type MasterCell, type MasterData } from './model'
  * 用于谈"全给某家 vs 最优拆分"的差价。
  */
 
-const VENDOR_SLOTS = [8, 9, 10, 11, 12, 13] as const
+const VENDOR_SLOTS = KK_VENDOR_COLS.map((v) => v.col)
+const SLOT_LABEL = new Map(KK_VENDOR_COLS.map((v) => [v.col, v.header]))
 
 const normPn = (v: MasterCell | string): string => String(v ?? '').trim().toUpperCase()
 
@@ -58,7 +59,7 @@ export interface NegoLine {
   description: string
   /** 下单数量（可与来源档位不同，总价按它算） */
   qty: number | null
-  /** 各供应商槽位（8..13）的单价；TDB/文字/空 → null */
+  /** 各供应商价格列（I..N、AG）的单价；TDB/文字/空 → null */
   unit: Record<number, number | null>
 }
 
@@ -158,7 +159,7 @@ export function buildNegoSummary(lines: NegoLine[]): NegoSummary {
   const usedSlots = VENDOR_SLOTS.filter((slot) => lines.some((l) => l.unit[slot] !== null))
   const vendors: NegoVendor[] = usedSlots.map((slot) => ({
     slot,
-    label: KK_VENDOR_SLOT_HEADERS[slot - 8]!,
+    label: SLOT_LABEL.get(slot)!,
   }))
   const summaryLines: NegoSummaryLine[] = lines.map((l) => {
     const present = usedSlots.map((s) => l.unit[s]).filter((u): u is number => u !== null)
