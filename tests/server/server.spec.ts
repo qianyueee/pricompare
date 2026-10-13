@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promises'
-import { createServer, request, type Server } from 'node:http'
+import { createServer, request, type IncomingHttpHeaders, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { KK_COL_COUNT, type MasterCell, type MasterData, type MasterOp } from '@engine/index'
 import { DEFAULT_AUTH, type AuthConfig } from '../../src/server/auth'
 import { createHandler } from '../../src/server/http'
+import { hashPassword } from '../../src/server/password'
 import { DataStore } from '../../src/server/store'
 import type { OpsSince, PostOpResponse, VersionEvent } from '@shared/serverApi'
 import { makeQuote } from '../fixtures/rows'
@@ -55,11 +56,13 @@ interface Res {
   status: number
   body: unknown
   text: string
+  headers: IncomingHttpHeaders
 }
 
+/** body 是字符串时原样发（登录表单），否则按 JSON 发 */
 function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> {
   return new Promise((resolve, reject) => {
-    const data = body === undefined ? undefined : JSON.stringify(body)
+    const data = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
     const req = request(
       {
         host: '127.0.0.1',
@@ -83,7 +86,7 @@ function call(method: string, path: string, body?: unknown, headers: Record<stri
           } catch {
             parsed = null
           }
-          resolve({ status: res.statusCode ?? 0, body: parsed, text })
+          resolve({ status: res.statusCode ?? 0, body: parsed, text, headers: res.headers })
         })
       },
     )
@@ -211,6 +214,60 @@ describe('pricompare 服务', () => {
     expect((await call('GET', '/api/master', undefined, { ...zane, 'tailscale-funnel-request': '?1' })).status).toBe(403)
     expect((await call('GET', '/', undefined, { host: ts })).status).toBe(403)
     expect(store.getVersion()).toBe(2)
+  })
+
+  it('经 Funnel 公网：配了密码才出登录页；输对拿到只读 cookie；换密码后旧 cookie 失效；错太多次先挡住', async () => {
+    const ts = 'mac.tail0000.ts.net'
+    const pub = { host: `${ts}:8443`, 'tailscale-funnel-request': '?1' }
+    const login = (password: string) =>
+      call('POST', '/login', `password=${encodeURIComponent(password)}`, {
+        ...pub,
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-pri-client': '',
+      })
+    auth = { ...auth, hosts: [ts] }
+    // 没配密码：和以前一样拒绝
+    expect((await call('GET', '/', undefined, pub)).status).toBe(403)
+    expect((await login('KVS_test1')).status).toBe(403)
+
+    auth = { ...auth, password: await hashPassword('KVS_test1') }
+    const page = await call('GET', '/', undefined, pub)
+    expect(page.status).toBe(200)
+    expect(page.text).toContain('action="/login"')
+    expect((await call('GET', '/api/master', undefined, pub)).status).toBe(401)
+    expect((await call('GET', '/robots.txt', undefined, pub)).text).toBe('User-agent: *\nDisallow: /\n')
+    // Funnel 请求自带登录名也不认
+    expect((await call('GET', '/api/master', undefined, { ...pub, 'tailscale-user-login': 'zane@example.com' })).status).toBe(401)
+    // 域名不在 hosts 里：没有登录页
+    expect((await call('GET', '/', undefined, { ...pub, host: 'other.tail0000.ts.net' })).status).toBe(403)
+
+    expect((await login('wrong')).status).toBe(401)
+    const ok = await login('KVS_test1')
+    expect(ok.status).toBe(303)
+    const setCookie = String(ok.headers['set-cookie'])
+    expect(setCookie).toMatch(/HttpOnly; Secure; SameSite=Lax/)
+    const cookie = setCookie.split(';')[0]!
+    const me = { ...pub, cookie, origin: `https://${ts}:8443` }
+    expect((await call('GET', '/api/session', undefined, me)).body).toMatchObject({ user: '密码登录', role: 'viewer' })
+    expect((await call('GET', '/api/master', undefined, me)).status).toBe(200)
+    expect((await call('GET', '/login', undefined, me)).status).toBe(303)
+    expect((await postOp(1, { kind: 'deleteRows', rows: [0] }, 'pw1', me)).status).toBe(403)
+    // 改过签名的 cookie、别的域名带 cookie 都不认
+    const forged = cookie.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'))
+    expect((await call('GET', '/api/master', undefined, { ...pub, cookie: forged })).status).toBe(401)
+    expect((await call('GET', '/api/master', undefined, { ...me, host: 'other.tail0000.ts.net' })).status).toBe(403)
+    // tailnet 里名单上的人照旧按名单（编辑）
+    const zane = { host: ts, 'tailscale-user-login': 'zane@example.com' }
+    expect((await call('GET', '/api/session', undefined, zane)).body).toMatchObject({ role: 'editor' })
+
+    auth = { ...auth, password: await hashPassword('KVS_test2') }
+    expect((await call('GET', '/api/master', undefined, me)).status).toBe(401)
+    // 前面错了 1 次，再错 9 次凑满 10 次：之后密码对了也先挡住
+    for (let i = 0; i < 9; i++) expect((await login(`x${i}`)).status).toBe(401)
+    const locked = await login('KVS_test2')
+    expect(locked.status).toBe(429)
+    expect(locked.headers['set-cookie']).toBeUndefined()
+    expect(store.getVersion()).toBe(1)
   })
 
   it('本机访问：Host 不是 localhost 拒绝（防 DNS 重绑定）；改动必须带客户端标记', async () => {
