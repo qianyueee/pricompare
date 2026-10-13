@@ -75,7 +75,21 @@ npm run build:web && npm run build:server   # 产物在 dist-server/：server.mj
 node dist-server/server.mjs --data ~/apps/pricompare-data --port 8790   # 只监听 127.0.0.1
 node dist-server/cli.mjs import-master KK询价汇总表.xlsm   # 整表导入（替换总表并保存原件作导出底版）
 node dist-server/cli.mjs status                           # 版本号与最近 10 次改动
+node dist-server/cli.mjs --help                           # 全部命令
 ```
+
+命令行也是每小时自动导入（`claude -p` 读邮件后调用）和手工维护的入口，所有改动都经服务按顺序应用、记历史：
+
+| 命令 | 作用 |
+|---|---|
+| `dump <报价.xlsx>` | 逐格打印报价单，标出隐藏列 / 隐藏行 |
+| `analyze <报价.xlsx>` | 按桌面版规则识别（表头、单价列、各字段），输出 JSON；隐藏列当不存在 |
+| `preview` / `merge <报价.xlsx> --vendor hc --batch "20261012 Ivan"` | 预演 / 并入，规则同桌面版「并入」 |
+| `merge-rows --rows rows.json --vendor cl --batch …` | 并入邮件正文里的报价（没有附件时） |
+| `batches`、`rows --batch …` | 最近的询价组、各家已填几行；查行（Excel 行号） |
+| `set --row R --col C --value V --expect-pn P` | 改格（如没发询价的那家填「无」、追加备注）；P/N 对不上就拒绝 |
+
+供应商只认注册表里的（HC、SKW、CL…），不在表里的一律拒绝；单价列认不出或表头没认准时不并入，要先 `dump` 看原表再指定。
 
 - dist-server 不依赖 node_modules，拷到 Mac 上用 Node 22 直接运行；
 - 总表的每次改动都是一步「操作」（改格 / 删行 / 并入 / 整表导入），服务按顺序应用并记历史：

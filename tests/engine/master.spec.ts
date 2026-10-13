@@ -86,6 +86,25 @@ describe('合并规则', () => {
     expect(master.rows[0]!.cells[10]).toBeNull()
   })
 
+  it('规格列：凯维的写法覆盖先回那家的，别家只填空（Zane 2026-10-14 定）', async () => {
+    const master = await loadMaster()
+    master.rows[0]!.cells[KK_COL.material] = 'POLYCARBONATE'
+    const skw = { ...makeQuote(FIXTURE_PNS[0]!, { qty: 10, amount: 324, material: '蓝色/黄色PC' }), cleaningSpec: 'CLASS 1' }
+    const opts = { batch: '20261012 Ivan', vendorSlot: 10, vendorId: 'skw', vendorDisplay: 'SKW' }
+    const row = applyMerge(master, planMerge(master, [skw], opts)).rows[0]!
+    expect(row.cells[10]).toBe(324)
+    expect(row.cells[KK_COL.material]).toBe('蓝色/黄色PC')
+    expect(row.cells[KK_COL.cleaningSpec]).toBe('CLASS 1')
+
+    const m2 = await loadMaster()
+    m2.rows[0]!.cells[KK_COL.material] = '蓝色/黄色PC'
+    m2.rows[0]!.cells[9] = null
+    const hc = makeQuote(FIXTURE_PNS[0]!, { qty: 10, amount: 565, material: 'POLYCARBONATE' })
+    const row2 = applyMerge(m2, planMerge(m2, [hc], { ...opts, vendorSlot: 9, vendorId: 'hc', vendorDisplay: 'HC' })).rows[0]!
+    expect(row2.cells[9]).toBe(565)
+    expect(row2.cells[KK_COL.material]).toBe('蓝色/黄色PC')
+  })
+
   it('HC 报价：J 列在前 → W 前插；无 Quote(EA) 不动 H/U；批次标签不进 V', async () => {
     const master = await loadMaster()
     // 先造一行只有 SKW 报过的行
