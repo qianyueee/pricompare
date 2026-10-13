@@ -1,5 +1,6 @@
 // 主进程 / preload / 渲染进程共用的 IPC 通道名与类型。
 // 渲染进程一律通过 window.api（见 src/preload）访问，纯浏览器环境用 shim 兜底。
+import type { PriServer } from './serverApi'
 
 export const IPC = {
   saveXlsx: 'dialog:save-xlsx',
@@ -38,4 +39,6 @@ export interface PriApi {
   getVersion(): Promise<string>
   /** true = Electron 环境；false = 浏览器 shim */
   isDesktop: boolean
+  /** 网页版连着 Mac 上的服务时才有：总表经服务按操作同步 */
+  server?: PriServer
 }

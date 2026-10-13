@@ -4,6 +4,7 @@ __pycache__/
 node_modules/
 dist/
 dist-web/
+dist-server/
 out/
 release/
 *.log
