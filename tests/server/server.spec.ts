@@ -235,6 +235,7 @@ describe('pricompare 服务', () => {
     expect(page.status).toBe(200)
     expect(page.text).toContain('action="/login"')
     expect((await call('GET', '/api/master', undefined, pub)).status).toBe(401)
+    expect((await call('GET', '/robots.txt', undefined, pub)).text).toBe('User-agent: *\nDisallow: /\n')
     // Funnel 请求自带登录名也不认
     expect((await call('GET', '/api/master', undefined, { ...pub, 'tailscale-user-login': 'zane@example.com' })).status).toBe(401)
     // 域名不在 hosts 里：没有登录页

@@ -256,9 +256,14 @@ export function createHandler(opts: HandlerOptions) {
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      // 公网上能打开登录页：不让搜索引擎收录
+      if (url.pathname === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache' })
+        return void res.end('User-agent: *\nDisallow: /\n')
+      }
       const cfg = opts.auth()
       const caller = identify(req, cfg, sessionKey)
-      const url = new URL(req.url ?? '/', 'http://localhost')
       const gate = passwordGate(req, cfg)
       if (url.pathname === '/login' && gate) return await login(req, res, cfg, caller)
       if (!caller) {
