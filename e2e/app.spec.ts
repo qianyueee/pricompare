@@ -141,10 +141,13 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.getByTestId('nego-copy-btn').click()
   await expect(page.getByTestId('toast')).toContainText('复制')
 
-  // 导出表格：NEGO 布局 xlsx（RMB 表头、数量在描述后）
-  const negoDlPromise = page.waitForEvent('download')
+  // 导出表格 → 下拉选「比价表」：NEGO 布局 xlsx（RMB 表头、数量在描述后）
   await page.getByTestId('nego-export-btn').click()
+  await expect(page.getByTestId('nego-export-menu')).toBeVisible()
+  const negoDlPromise = page.waitForEvent('download')
+  await page.getByTestId('nego-export-nego').click()
   const negoDl = await negoDlPromise
+  await expect(page.getByTestId('nego-export-menu')).toBeHidden()
   expect(negoDl.suggestedFilename()).toMatch(/^NEGO_\d{8}\.xlsx$/)
   const negoOutPath = join(TMP, 'nego-out.xlsx')
   await negoDl.saveAs(negoOutPath)
@@ -155,9 +158,41 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   expect(negoWs.getCell('D1').value).toBe("Q'ty")
   expect(negoWs.getCell('E1').value).toBe('HC Unit (RMB)')
 
-  // Esc 返回汇总；再次 Ctrl+B 内容仍在（页面工作区不清空）
+  // 导出表格 → 「总表格式」：每个零件取价的那一行，汇总表的列，只有汇总这一张 sheet
+  await page.getByTestId('nego-export-btn').click()
+  const masterFmtPromise = page.waitForEvent('download')
+  await page.getByTestId('nego-export-master').click()
+  const masterFmtPath = join(TMP, 'nego-master-format.xlsx')
+  await (await masterFmtPromise).saveAs(masterFmtPath)
+  const mfWb = new ExcelJS.Workbook()
+  await mfWb.xlsx.load(readFileSync(masterFmtPath) as unknown as ArrayBuffer)
+  expect(mfWb.worksheets.map((w) => w.name)).toEqual(['KK询价汇总'])
+  const mfWs = mfWb.getWorksheet('KK询价汇总')!
+  expect(mfWs.getCell('D1').value).toBe('P/N')
+  expect([2, 3, 4, 5, 6].map((r) => mfWs.getCell(`D${r}`).value)).toEqual([
+    FIXTURE_PNS[0],
+    '0900001-000',
+    FIXTURE_PNS[1],
+    FIXTURE_PNS[2],
+    FIXTURE_PNS[3],
+  ])
+  expect(mfWs.getCell('G4').value).toBe(10) // 下单 20 个时取价的是 10 档那一行
+  expect(mfWs.getCell('J2').value).toBe(60)
+  expect(mfWs.getCell('D7').value).toBeNull()
+
+  // 下拉开着时 Esc 只收起下拉；再按 Esc 返回汇总，汇总里选中的行还在
+  await page.getByTestId('nego-export-btn').click()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('nego-export-menu')).toBeHidden()
+  await expect(nego).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(nego).toBeHidden()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2 行')
+  // 汇总页 Esc：取消全部选中
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('selected-count')).toHaveCount(0)
+  await expect(page.locator('[data-cell="0:0"]')).not.toHaveText('✓')
+  // 再次 Ctrl+B 内容仍在（页面工作区不清空）
   await page.keyboard.press('Control+b')
   await expect(nego).toBeVisible()
   await expect(page.getByTestId('nego-line')).toHaveCount(6)
@@ -287,6 +322,26 @@ test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一
   await page.keyboard.press('Control+c')
   await expect(page.getByTestId('toast')).toContainText('已复制 2 行')
 
+  // 导出所选：只有这 2 行，列和样式同汇总表，只有汇总这一张 sheet（NEGO 不带）
+  const selDl = page.waitForEvent('download')
+  await page.getByTestId('export-selected-btn').click()
+  const selPath = join(TMP, 'selected-rows.xlsx')
+  await (await selDl).saveAs(selPath)
+  await expect(page.getByTestId('toast')).toContainText('已导出 2 行')
+  const selWb = new ExcelJS.Workbook()
+  await selWb.xlsx.load(readFileSync(selPath) as unknown as ArrayBuffer)
+  expect(selWb.worksheets.map((w) => w.name)).toEqual(['KK询价汇总'])
+  const selWs = selWb.getWorksheet('KK询价汇总')!
+  expect(selWs.getCell('D2').value).toBe(FIXTURE_PNS[0])
+  expect(selWs.getCell('D3').value).toBe('0900001-000')
+  expect(selWs.getCell('J3').value).toBe(100)
+  expect(selWs.getCell('A4').value).toBeNull() // 预编号空行不带
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2 行') // 导出后选中不变
+
+  // Esc 取消全部选中
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('selected-count')).toHaveCount(0)
+
   // 列拖选：表头 J 按住拖到 K → 已选 2 列 → Delete 清空可见行 → Ctrl+Z 撤销
   await page.locator('th[data-colh="9"]').hover()
   await page.mouse.down()
@@ -311,10 +366,11 @@ test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一
   await page.keyboard.press('Control+z')
   await expect(page.locator('[data-cell="1:9"]')).toHaveText('100')
 
-  // 回归：单击格仍进入编辑
+  // 回归：单击格仍进入编辑；编辑中按 Esc 只取消编辑
   await page.locator('[data-cell="0:9"]').click()
   await expect(page.getByTestId('cell-editor')).toBeVisible()
   await page.keyboard.press('Escape')
+  await expect(page.getByTestId('cell-editor')).toHaveCount(0)
 
   // 删除行：单击 A 选 1 行 → 「删除行」→ 行数-1、后行上移、A 重排 → Ctrl+Z 恢复
   await page.locator('[data-cell="0:0"]').click()
