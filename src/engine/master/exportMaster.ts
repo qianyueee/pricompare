@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs'
 import { KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
 import { KK_COL_COUNT, type MasterCell, type MasterData } from './model'
 import { isMacroEnabledWorkbook, patchMasterWorkbook } from './patchExport'
+import { subsetMasterWorkbook } from './subsetExport'
 
 export interface MasterExportOutput {
   buffer: ArrayBuffer
@@ -42,6 +43,39 @@ export async function buildMasterWorkbook(
     }
   }
   return { buffer: await buildFresh(master), extension: 'xlsx', mode: 'fresh' }
+}
+
+export interface MasterSubsetExportOutput {
+  buffer: ArrayBuffer
+  /** 新生成的工作簿不带宏，一律 .xlsx */
+  extension: 'xlsx'
+  /** template=以原汇总表为模板（表头/列宽/隐藏列/样式/表格同原表）；fresh=从零重建 */
+  mode: 'template' | 'fresh'
+  /** 实际导出的行数（去重、去掉越界行之后） */
+  rowCount: number
+}
+
+/**
+ * 只导出总表里的指定行（按给定顺序，重复的只留第一次）：汇总表同样的列和样式，
+ * 只有这一张 sheet——NEGO、历史报价等其他 sheet 不带。
+ */
+export async function buildMasterSubsetWorkbook(
+  master: MasterData,
+  rowIdxs: readonly number[],
+  originalBuffer: ArrayBuffer | null,
+): Promise<MasterSubsetExportOutput> {
+  const picked = [...new Set(rowIdxs)].filter((i) => master.rows[i] !== undefined)
+  if (picked.length === 0) throw new Error('没有可导出的行')
+  if (originalBuffer) {
+    try {
+      const buffer = subsetMasterWorkbook(master, picked, originalBuffer)
+      if (buffer) return { buffer, extension: 'xlsx', mode: 'template', rowCount: picked.length }
+    } catch {
+      // 原表结构认不出 → 从零重建
+    }
+  }
+  const subset: MasterData = { ...master, rows: picked.map((i) => master.rows[i]!), passthrough: [] }
+  return { buffer: await buildFresh(subset), extension: 'xlsx', mode: 'fresh', rowCount: picked.length }
 }
 
 async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer): Promise<ArrayBuffer> {

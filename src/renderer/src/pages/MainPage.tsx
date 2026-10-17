@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { KK_COL_COUNT, isDataRow } from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable, { type CellRange } from '../components/MasterTable'
-import { useSession } from '../store/session'
+import { todayBatch, useSession } from '../store/session'
 import { copyText } from '../utils/clipboard'
 
 const ALL_EDIT_COLS = Array.from({ length: KK_COL_COUNT - 1 }, (_, i) => i + 1) // B..AH（A 列序号不参与清空）
@@ -19,6 +19,7 @@ export default function MainPage() {
   const exporting = useSession((s) => s.exporting)
   const addFiles = useSession((s) => s.addFiles)
   const exportMaster = useSession((s) => s.exportMaster)
+  const exportMasterRows = useSession((s) => s.exportMasterRows)
   const openNego = useSession((s) => s.openNego)
   const deleteRowsAction = useSession((s) => s.deleteRows)
   const clearCellsAction = useSession((s) => s.clearCells)
@@ -221,7 +222,14 @@ export default function MainPage() {
     if (selected.size > 0) deleteRowsAction([...selected])
   }, [selected, deleteRowsAction])
 
-  // Ctrl+C 复制选区 / Delete 清空内容 / Ctrl+Z 撤销（输入框聚焦或比价页打开时不抢）
+  // 只导出选中的行：和「导出汇总表」同样的列和样式，按原表顺序
+  const exportSelectedRows = useCallback(() => {
+    if (selected.size === 0) return
+    const rowIdxs = [...selected].sort((a, b) => a - b)
+    void exportMasterRows(rowIdxs, `KK询价汇总表${todayBatch()}_选中${rowIdxs.length}行`)
+  }, [selected, exportMasterRows])
+
+  // Ctrl+C 复制选区 / Delete 清空内容 / Ctrl+Z 撤销 / Esc 取消全部选中（输入框聚焦、比价页或弹窗打开时不抢）
   useEffect(() => {
     const isTyping = () => {
       const el = document.activeElement
@@ -233,6 +241,15 @@ export default function MainPage() {
     const onKey = (e: KeyboardEvent) => {
       if (useSession.getState().negoOpen || isTyping()) return
       const mod = e.ctrlKey || e.metaKey
+      if (e.key === 'Escape') {
+        // 比价页按 Esc 返回时会先处理掉这次按键（defaultPrevented），返回后选中的行照旧保留
+        const st = useSession.getState()
+        if (!e.defaultPrevented && selKind && !st.pendingMaster && !st.activeMappingFileId) {
+          e.preventDefault()
+          clearSelection()
+        }
+        return
+      }
       if (mod && e.key.toLowerCase() === 'z') {
         if (useSession.getState().undo) {
           e.preventDefault()
@@ -254,7 +271,7 @@ export default function MainPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selKind, copySelection, clearSelectionCells, undoMasterEdit, readOnly])
+  }, [selKind, copySelection, clearSelectionCells, clearSelection, undoMasterEdit, readOnly])
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2.5 p-3">
@@ -366,12 +383,14 @@ export default function MainPage() {
         {readOnly ? (
           <>
             最新批次显示在最上（导出仍按原顺序）· 按住拖动选多格 · A 列选行、表头选列（都可拖选多个）→ Ctrl+C 复制 ·
+            选行后可「导出所选」单独导出这几行 · Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 新报价会自动出现在表里
           </>
         ) : (
           <>
             最新批次显示在最上（导出仍按原顺序）· 单击格子编辑（Enter 保存 / Esc 取消），按住拖动选多格 ·
-            A 列选行、表头选列（都可拖选多个）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / Ctrl+Z 撤销 ·
+            A 列选行、表头选列（都可拖选多个）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / 导出所选 / Ctrl+Z 撤销 /
+            Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 拖入报价按规则并入，拖入 KK 汇总表整表更新
           </>
         )}
@@ -408,6 +427,18 @@ export default function MainPage() {
                   清空内容
                 </button>
               )}
+              {selKind === 'rows' && (
+                <button
+                  type="button"
+                  data-testid="export-selected-btn"
+                  disabled={exporting}
+                  onClick={exportSelectedRows}
+                  title="只把选中的这几行导出成 Excel，列和样式同「导出汇总表」"
+                  className="rounded-full border border-green-300 bg-white px-2.5 py-1 text-xs text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exporting ? '导出中…' : '导出所选'}
+                </button>
+              )}
               {selKind === 'rows' && !readOnly && (
                 <button
                   type="button"
@@ -421,8 +452,9 @@ export default function MainPage() {
               )}
               <button
                 type="button"
+                data-testid="clear-selection-btn"
                 onClick={clearSelection}
-                title="取消选择"
+                title="取消选择（Esc）"
                 className="rounded-full px-1.5 py-1 text-xs text-slate-400 hover:bg-slate-100"
               >
                 ✕

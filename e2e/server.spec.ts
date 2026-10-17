@@ -108,6 +108,23 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   expect(ws.getCell('L4').value).toBe(321)
   expect(wb.getWorksheet('NEGO')?.getCell('A2').value).toBe('marker')
 
+  // Tony 也能只导出选中的行（只读账号照样可以导出）
+  await tony.locator('[data-cell="1:0"]').click()
+  await expect(tony.getByTestId('selected-count')).toHaveText('已选 1 行')
+  await expect(tony.getByTestId('delete-rows-btn')).toHaveCount(0)
+  const selDownload = tony.waitForEvent('download')
+  await tony.getByTestId('export-selected-btn').click()
+  const selPath = join(TMP, 'server-export-selected.xlsx')
+  await (await selDownload).saveAs(selPath)
+  const selWb = new ExcelJS.Workbook()
+  await selWb.xlsx.load(readFileSync(selPath) as unknown as ArrayBuffer)
+  expect(selWb.worksheets.map((w) => w.name)).toEqual(['KK询价汇总'])
+  const selWs = selWb.getWorksheet('KK询价汇总')!
+  expect(selWs.getCell('J2').value).toBe(95) // 第 2 行（Zane 刚改的那一行）
+  expect(selWs.getCell('D3').value).toBeNull()
+  await tony.keyboard.press('Escape')
+  await expect(tony.getByTestId('selected-count')).toHaveCount(0)
+
   // Tony 直接调接口改表也会被拒
   const denied = await tonyCtx.request.post(`${SERVER}/api/ops`, {
     headers: { 'x-pri-client': '1' },

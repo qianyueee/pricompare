@@ -5,6 +5,7 @@ import {
   SEED_VENDORS,
   analyzeSheet,
   applyMasterOp,
+  buildMasterSubsetWorkbook,
   buildMasterWorkbook,
   cleanAmountString,
   cleanMasterAmounts,
@@ -134,6 +135,8 @@ interface SessionState {
   clearCells(targets: { rowIndex: number; cols: number[] }[]): void
   undoMasterEdit(): void
   exportMaster(): Promise<void>
+  /** 只导出总表里的这几行（汇总表同样的列和样式，只有汇总这一张 sheet）；fileName 不含扩展名 */
+  exportMasterRows(rowIdxs: number[], fileName: string): Promise<void>
   showToast(toast: ToastMsg | null): void
   openNego(rowIdxs: number[]): void
   closeNego(): void
@@ -213,6 +216,17 @@ function commitMasterOp(op: MasterOp, patch: (r: OpResult) => Partial<SessionSta
   if (sync) sync.push(op)
   else void api.storeSet('master', res.master) // 编辑即持久化（防抖会在刷新/关闭时丢数据；序列化只要几毫秒）
   return res
+}
+
+/**
+ * 导出用的原始 KK 汇总表（在它上面打补丁 / 当模板，格式和以前发给 Tony 的一样）：
+ * 网页版存在服务上，导出时才取；桌面版和本地浏览器在本机存着。
+ */
+async function loadMasterOriginal(): Promise<ArrayBuffer | null> {
+  const b64 = api.server
+    ? ((await api.server.getMasterFile())?.b64 ?? null)
+    : useSession.getState().masterOriginalB64
+  return b64 ? b64ToBuf(b64) : null
 }
 
 async function initFromServer(): Promise<void> {
@@ -603,13 +617,11 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async exportMaster() {
-    const { master, masterOriginalB64 } = get()
+    const { master } = get()
     if (!master) return
     set({ exporting: true })
     try {
-      // 网页版的原始 KK 汇总表存在服务上，导出时才取（在它上面打补丁，格式和以前发给 Tony 的一样）
-      const originalB64 = api.server ? ((await api.server.getMasterFile())?.b64 ?? null) : masterOriginalB64
-      const out = await buildMasterWorkbook(master, originalB64 ? b64ToBuf(originalB64) : null)
+      const out = await buildMasterWorkbook(master, await loadMasterOriginal())
       const saved = await api.saveXlsx({
         // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
         defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,
@@ -627,6 +639,22 @@ export const useSession = create<SessionState>((set, get) => ({
           },
         })
       }
+    } catch (err) {
+      set({ toast: { message: `导出失败：${err instanceof Error ? err.message : String(err)}` } })
+    } finally {
+      set({ exporting: false })
+    }
+  },
+
+  async exportMasterRows(rowIdxs: number[], fileName: string) {
+    const { master } = get()
+    if (!master || rowIdxs.length === 0) return
+    set({ exporting: true })
+    try {
+      const out = await buildMasterSubsetWorkbook(master, rowIdxs, await loadMasterOriginal())
+      const saved = await api.saveXlsx({ defaultFileName: `${fileName}.${out.extension}`, data: out.buffer })
+      // 只导出了一部分，「有未导出的更改」照旧保留
+      if (saved.saved) set({ toast: { message: `已导出 ${out.rowCount} 行（汇总表格式）`, path: saved.path } })
     } catch (err) {
       set({ toast: { message: `导出失败：${err instanceof Error ? err.message : String(err)}` } })
     } finally {
