@@ -29,7 +29,12 @@ export default function NegoPage() {
   const removeNegoLine = useSession((s) => s.removeNegoLine)
   const pasteNego = useSession((s) => s.pasteNego)
   const showToast = useSession((s) => s.showToast)
+  const exportMasterRows = useSession((s) => s.exportMasterRows)
+  const exportingMaster = useSession((s) => s.exporting)
   const [exportingNego, setExportingNego] = useState(false)
+  /** 「导出表格」下拉：比价表 / 总表格式 */
+  const [exportMenu, setExportMenu] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
   /** 数量 Tab 继承：最近一次明确输入/继承的数量，跳过没有该档的行后仍沿用 */
   const carryRef = useRef<number | null>(null)
 
@@ -66,11 +71,25 @@ export default function NegoPage() {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeNego()
+      if (e.key !== 'Escape') return
+      // 汇总页也监听 Esc（取消选中）：这里先处理掉，返回汇总时选中的行保留
+      e.preventDefault()
+      if (exportMenu) setExportMenu(false)
+      else closeNego()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, closeNego])
+  }, [open, closeNego, exportMenu])
+
+  // 下拉菜单点别处收起
+  useEffect(() => {
+    if (!exportMenu) return
+    const onDown = (e: MouseEvent) => {
+      if (!exportMenuRef.current?.contains(e.target as Node)) setExportMenu(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [exportMenu])
 
   const view = useMemo(() => {
     const rows = negoLines.map((l) => {
@@ -110,6 +129,7 @@ export default function NegoPage() {
   }
 
   const onExport = async () => {
+    setExportMenu(false)
     setExportingNego(true)
     try {
       const buffer = await buildNegoWorkbook(summary)
@@ -122,6 +142,14 @@ export default function NegoPage() {
     }
   }
 
+  // 总表格式：每个零件导出它取价的那一行（汇总表里的整行，按比价页的顺序）
+  const onExportMasterFormat = () => {
+    setExportMenu(false)
+    const rowIdxs = rows.flatMap(({ res }) => (res?.line && res.usedTier ? [res.usedTier.rowIndex] : []))
+    void exportMasterRows(rowIdxs, `NEGO_${todayBatch()}_总表格式`)
+  }
+
+  const exportBusy = exportingNego || exportingMaster
   const colCount = 5 + vendors.length * 2 + 2 + 1
 
   return (
@@ -149,15 +177,49 @@ export default function NegoPage() {
         >
           复制为表格
         </button>
-        <button
-          type="button"
-          data-testid="nego-export-btn"
-          onClick={() => void onExport()}
-          disabled={view.validCount === 0 || exportingNego}
-          className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-        >
-          {exportingNego ? '导出中…' : '导出表格'}
-        </button>
+        <div ref={exportMenuRef} className="relative">
+          <button
+            type="button"
+            data-testid="nego-export-btn"
+            onClick={() => setExportMenu((v) => !v)}
+            disabled={view.validCount === 0 || exportBusy}
+            aria-haspopup="menu"
+            aria-expanded={exportMenu}
+            className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {exportBusy ? '导出中…' : '导出表格'} <span className="ml-0.5 text-[10px]">▾</span>
+          </button>
+          {exportMenu && (
+            <div
+              role="menu"
+              data-testid="nego-export-menu"
+              className="absolute right-0 z-50 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-left shadow-xl"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="nego-export-nego"
+                onClick={() => void onExport()}
+                className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <div className="text-xs font-medium text-slate-700">比价表</div>
+                <div className="mt-0.5 text-[11px] text-slate-400">就是这页：各家单价、总价并排，带合计行</div>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="nego-export-master"
+                onClick={onExportMasterFormat}
+                className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <div className="text-xs font-medium text-slate-700">总表格式</div>
+                <div className="mt-0.5 text-[11px] text-slate-400">
+                  这些零件在汇总表里取价的那一行，列和样式同「导出汇总表」
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
         <button
           type="button"
           data-testid="nego-clear-btn"
@@ -374,7 +436,8 @@ export default function NegoPage() {
 
       <div className="border-t border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
         各家总价 = 该家单价 × 下单数量；最优总价 = 每行取最低单价 · 绿色 = 本行最低 ·
-        「复制为表格」后可直接粘贴进 Excel 的 NEGO sheet · 汇总表选行后 Ctrl+B 也会把行带进来
+        「复制为表格」后可直接粘贴进 Excel 的 NEGO sheet · 「导出表格」可选比价表或总表格式 ·
+        汇总表选行后 Ctrl+B 也会把行带进来
       </div>
     </div>
   )

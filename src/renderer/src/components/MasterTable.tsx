@@ -65,7 +65,10 @@ function CellEditor(props: { initial: string; onDone: (value: string | null) => 
       onBlur={() => finish(true)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') finish(true)
-        else if (e.key === 'Escape') finish(false)
+        else if (e.key === 'Escape') {
+          e.preventDefault() // 只取消编辑，不连带取消表里的选中
+          finish(false)
+        }
       }}
       className="h-full w-full border-2 border-blue-500 bg-white px-1 py-0.5 text-xs select-text outline-none"
     />

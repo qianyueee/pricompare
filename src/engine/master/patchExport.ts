@@ -13,7 +13,7 @@ import { KK_COL_COUNT, isDataRow, parseMasterWorkbookDetailed, type MasterCell, 
 const dec = new TextDecoder()
 const enc = new TextEncoder()
 
-function xmlEscape(s: string): string {
+export function xmlEscape(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -30,13 +30,13 @@ function xmlUnescape(s: string): string {
     .replace(/&amp;/g, '&')
 }
 
-function attrOf(tag: string, name: string): string | null {
+export function attrOf(tag: string, name: string): string | null {
   const m = tag.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`))
   return m ? m[1]! : null
 }
 
 /** 在 workbook.xml + rels 里找到汇总 sheet 对应的 part 路径 */
-function findSheetPath(files: Record<string, Uint8Array>, sheetName: string): string | null {
+export function findSheetPath(files: Record<string, Uint8Array>, sheetName: string): string | null {
   const wb = files['xl/workbook.xml']
   const rels = files['xl/_rels/workbook.xml.rels']
   if (!wb || !rels) return null
@@ -60,7 +60,7 @@ function findSheetPath(files: Record<string, Uint8Array>, sheetName: string): st
   return null
 }
 
-function buildCellXml(ref: string, s: string | null, v: MasterCell): string {
+export function buildCellXml(ref: string, s: string | null, v: MasterCell): string {
   const sAttr = s ? ` s="${s}"` : ''
   if (v === null) return `<c r="${ref}"${sAttr}/>`
   if (typeof v === 'number' && Number.isFinite(v)) return `<c r="${ref}"${sAttr}><v>${v}</v></c>`
@@ -79,7 +79,7 @@ function colIdxOfRef(ref: string): number {
 const CELL_RE = /<c\b[^>]*?r="[A-Z]+\d+"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g
 
 /** 取某一行现有单元格的 col → 完整 XML 映射 */
-function parseRowCells(rowXml: string): Map<number, string> {
+export function parseRowCells(rowXml: string): Map<number, string> {
   const out = new Map<number, string>()
   for (const m of rowXml.matchAll(CELL_RE)) {
     const ref = attrOf(m[0].slice(0, m[0].indexOf('>') + 1), 'r') ?? ''
