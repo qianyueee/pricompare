@@ -10,7 +10,9 @@ import { makeQuote } from '../tests/fixtures/rows'
 const SERVER = 'http://127.0.0.1:5180'
 const TMP = join(dirname(fileURLToPath(import.meta.url)), '.tmp')
 const MASTER_PATH = join(TMP, 'KKMasterServer.xlsx')
-const TONY = { 'cf-access-authenticated-user-email': 'tony@example.com', 'cf-ray': 'e2e' }
+// Cloudflare 通道端口（scripts/e2e-server.mjs 里的 --tunnel-port）：公司域名经 cloudflared 接到这里，一律输密码只读
+const TUNNEL = 'http://127.0.0.1:5181'
+const TONY_PASSWORD = 'KVS_e2e'
 
 test.use({ baseURL: SERVER })
 
@@ -55,10 +57,12 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await expect(page.locator('[data-cell="0:11"]')).toHaveText('')
   await expect.poll(async () => (await serverMaster(request)).master?.rows[0]?.cells[11]).toBeNull()
 
-  // Tony 经 Cloudflare 打开：只读，看不到 O、P、Q、S 列
-  const tonyCtx = await browser.newContext({ baseURL: SERVER, extraHTTPHeaders: TONY })
+  // Tony 经公司域名（Cloudflare 通道端口）打开：先输密码，进去只读，看不到 O、P、Q、S 列
+  const tonyCtx = await browser.newContext({ baseURL: TUNNEL })
   const tony = await tonyCtx.newPage()
   await tony.goto('/')
+  await tony.locator('input[name=password]').fill(TONY_PASSWORD)
+  await tony.locator('button[type=submit]').click()
   await expect(tony.getByTestId('read-only-badge')).toBeVisible()
   await expect(tony.getByTestId('add-files-btn')).toHaveCount(0)
   await expect(tony.getByTestId('master-row')).toHaveCount(2)
@@ -125,11 +129,15 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await tony.keyboard.press('Escape')
   await expect(tony.getByTestId('selected-count')).toHaveCount(0)
 
-  // Tony 直接调接口改表也会被拒
-  const denied = await tonyCtx.request.post(`${SERVER}/api/ops`, {
-    headers: { 'x-pri-client': '1' },
-    data: { baseVersion: 0, opId: 'tony', op: { kind: 'deleteRows', rows: [0] } },
+  // Tony 直接调接口改表也会被拒（在他的页面里发，带着他的登录 cookie）
+  const denied = await tony.evaluate(async () => {
+    const res = await fetch('/api/ops', {
+      method: 'POST',
+      headers: { 'x-pri-client': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ baseVersion: 0, opId: 'tony', op: { kind: 'deleteRows', rows: [0] } }),
+    })
+    return res.status
   })
-  expect(denied.status()).toBe(403)
+  expect(denied).toBe(403)
   await tonyCtx.close()
 })
