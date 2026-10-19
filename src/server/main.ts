@@ -1,5 +1,6 @@
 // Mac 上的 pricompare 服务：保存总表、按顺序应用改动、记历史，并把网页版发给浏览器。
-// 用法：node server.mjs --data <数据目录> [--port 8790] [--web <dist-web 目录>]
+// 用法：node server.mjs --data <数据目录> [--port 8790] [--tunnel-port 8791] [--web <dist-web 目录>]
+// --tunnel-port：另开一个只给 cloudflared 连的端口（公司域名经 Cloudflare 通道进来），这个端口上一律密码登录
 import { randomBytes } from 'node:crypto'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -14,12 +15,17 @@ const { values } = parseArgs({
   options: {
     data: { type: 'string' },
     port: { type: 'string', default: process.env.PRICOMPARE_PORT ?? '8790' },
+    'tunnel-port': { type: 'string', default: process.env.PRICOMPARE_TUNNEL_PORT ?? '' },
     web: { type: 'string' },
   },
 })
 
 const dataDir = resolve(values.data ?? process.env.PRICOMPARE_DATA ?? 'pricompare-data')
 const port = Number(values.port)
+const tunnelPort = values['tunnel-port'] ? Number(values['tunnel-port']) : undefined
+if (tunnelPort !== undefined && (!Number.isInteger(tunnelPort) || tunnelPort <= 0 || tunnelPort === port)) {
+  throw new Error(`--tunnel-port 不对：${values['tunnel-port']}（要和 --port 不同）`)
+}
 const here = dirname(fileURLToPath(import.meta.url))
 const webDir = resolve(values.web ?? join(here, 'web'))
 
@@ -59,15 +65,21 @@ const { handler, close } = createHandler({
   sessionKey: loadSessionKey(),
   staticDir: existsSync(join(webDir, 'index.html')) ? webDir : undefined,
 })
-const server = createServer((req, res) => void handler(req, res))
-server.listen(port, '127.0.0.1', () => {
+const servers = [createServer((req, res) => void handler(req, res, 'direct'))]
+servers[0].listen(port, '127.0.0.1', () => {
   console.log(`pricompare 服务已启动：http://127.0.0.1:${port}  数据目录 ${dataDir}  总表版本 ${store.getVersion()}`)
 })
+if (tunnelPort !== undefined) {
+  const tunnel = createServer((req, res) => void handler(req, res, 'tunnel'))
+  tunnel.listen(tunnelPort, '127.0.0.1', () => console.log(`Cloudflare 通道入口：http://127.0.0.1:${tunnelPort}（只给 cloudflared 连）`))
+  servers.push(tunnel)
+}
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     close()
-    server.close(() => process.exit(0))
+    let open = servers.length
+    for (const s of servers) s.close(() => --open === 0 && process.exit(0))
     setTimeout(() => process.exit(0), 3_000).unref()
   })
 }

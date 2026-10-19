@@ -12,7 +12,7 @@ import {
   type ServerSession,
   type ServerStoreKey,
 } from '../shared/serverApi'
-import { identify, passwordGate, type AuthConfig, type Caller } from './auth'
+import { identify, passwordGate, type AuthConfig, type Caller, type Channel } from './auth'
 import { loginPage, makeSession, sessionCookie, verifyPassword } from './password'
 import type { DataStore } from './store'
 
@@ -28,7 +28,7 @@ export interface HandlerOptions {
 /** 总表 JSON 一千多行约 1–2 MB；导入时连原始 xlsm 的 base64 一起上来 */
 const MAX_BODY = 64 * 1024 * 1024
 const SSE_PING_MS = 25_000
-/** 密码试错：10 分钟内全站最多错 10 次（经 Funnel 进来的请求都来自 127.0.0.1，分不出是谁） */
+/** 密码试错：10 分钟内全站最多错 10 次（经 Cloudflare 通道、Funnel 进来的请求都来自 127.0.0.1，分不出是谁） */
 const LOGIN_WINDOW_MS = 10 * 60_000
 const LOGIN_MAX_FAILURES = 10
 
@@ -248,13 +248,15 @@ export function createHandler(opts: HandlerOptions) {
     if (file.endsWith('index.html')) data = injectServerMarker(data.toString('utf8'))
     res.writeHead(200, {
       'content-type': MIME[ext] ?? 'application/octet-stream',
-      'cache-control': rel.startsWith('assets') ? 'public, max-age=31536000, immutable' : 'no-cache',
+      // private：只让浏览器缓存，Cloudflare 不在边缘缓存（否则没登录的人也能从边缘取到）
+      'cache-control': rel.startsWith('assets') ? 'private, max-age=31536000, immutable' : 'no-cache',
       'x-content-type-options': 'nosniff',
     })
     res.end(data)
   }
 
-  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+  /** channel：请求从哪个端口进来（主端口 / cloudflared 专用的通道端口），由 main 按监听的端口传入 */
+  const handler = async (req: IncomingMessage, res: ServerResponse, channel: Channel = 'direct'): Promise<void> => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
       // 公网上能打开登录页：不让搜索引擎收录
@@ -263,8 +265,8 @@ export function createHandler(opts: HandlerOptions) {
         return void res.end('User-agent: *\nDisallow: /\n')
       }
       const cfg = opts.auth()
-      const caller = identify(req, cfg, sessionKey)
-      const gate = passwordGate(req, cfg)
+      const caller = identify(req, cfg, sessionKey, channel)
+      const gate = passwordGate(req, cfg, channel)
       if (url.pathname === '/login' && gate) return await login(req, res, cfg, caller)
       if (!caller) {
         if (!gate) throw new HttpError(403, '没有访问权限')

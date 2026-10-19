@@ -101,7 +101,7 @@ node dist-server/cli.mjs --help                           # 全部命令
   后台并入和网页上的手工修改不会互相覆盖；基于旧版本的删行会被拒绝并提示重做；
 - 数据目录：`master.json`（总表 + 版本）、`master-file.json`（导出底版）、`store/`（供应商、映射模板）、
   `history/YYYY-MM.jsonl`（每步改动：谁、何时、怎么撤销）、`snapshots/`（每天第一次改动前和整表导入前的整表，保留 60 天）；
-- 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Cloudflare Access 来的按登录邮箱查
+- 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Tailscale Serve 来的按登录名查
   `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列；
 - 只给自己的 tailnet 用时可以走 Tailscale Serve（不对公网）：`tailscale serve --bg --https=8443 http://127.0.0.1:8790`，
   再把本机的 `xxx.ts.net` 名加进 `hosts`、把 Tailscale 登录名加进 `editors` / `viewers`。没配密码时 Funnel（公网）来的请求一律拒绝；
@@ -109,6 +109,10 @@ node dist-server/cli.mjs --help                           # 全部命令
   再把 `printf %s '密码' | node cli.mjs hash-password` 输出的哈希填进 `password`（`config.json` 几秒内生效，不用重启）。
   名单外的人先看到登录页，输对后拿到 30 天有效的 cookie，角色是 `passwordRole`（默认 viewer）；tailnet 里名单上的人照旧不用密码。
   全站 10 分钟内最多输错 10 次；换密码后旧 cookie 全部失效。cookie 的签名密钥在数据目录的 `session.key`。
+- 挂到自己的域名上（如 `quote.kvstek.com`）用 Cloudflare 通道：服务加 `--tunnel-port 8791` 另开一个只给 cloudflared
+  连的端口，cloudflared 的 ingress 指向 `http://127.0.0.1:8791`，再把域名加进 `hosts`。这个端口上一律输密码（角色 `passwordRole`），
+  不认 Cf-Access-*、Tailscale-* 等请求头；主端口上带 Cloudflare 头的请求一律拒绝（cloudflared 别接到主端口上）。
+  网页静态资源发 `cache-control: private`，Cloudflare 不在边缘缓存。
 
 ## 无显示器环境验证（CI / 容器）
 

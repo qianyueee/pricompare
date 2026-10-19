@@ -30,6 +30,8 @@ let dir: string
 let store: DataStore
 let server: Server
 let port: number
+let tunnelServer: Server
+let tunnelPort: number
 let auth: AuthConfig
 let closeHandler: () => void
 
@@ -45,11 +47,15 @@ async function start() {
   server = createServer((req, res) => void h.handler(req, res))
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   port = (server.address() as AddressInfo).port
+  tunnelServer = createServer((req, res) => void h.handler(req, res, 'tunnel'))
+  await new Promise<void>((r) => tunnelServer.listen(0, '127.0.0.1', r))
+  tunnelPort = (tunnelServer.address() as AddressInfo).port
 }
 
 async function stop() {
   closeHandler()
   await new Promise<void>((r) => server.close(() => r()))
+  await new Promise<void>((r) => tunnelServer.close(() => r()))
 }
 
 interface Res {
@@ -59,14 +65,20 @@ interface Res {
   headers: IncomingHttpHeaders
 }
 
-/** body 是字符串时原样发（登录表单），否则按 JSON 发 */
-function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> {
+/** body 是字符串时原样发（登录表单），否则按 JSON 发；via = 'tunnel' 时发到 cloudflared 专用的通道端口 */
+function call(
+  method: string,
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+  via: 'direct' | 'tunnel' = 'direct',
+): Promise<Res> {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
     const req = request(
       {
         host: '127.0.0.1',
-        port,
+        port: via === 'tunnel' ? tunnelPort : port,
         method,
         path,
         headers: {
@@ -182,19 +194,59 @@ describe('pricompare 服务', () => {
     expect(r.body).toMatchObject({ applied: false, reason: 'unchanged', version: 1 })
   })
 
-  it('经 Cloudflare：Tony 只读，Zane 可改，名单外和没登录的拒绝', async () => {
-    const tony = { 'cf-access-authenticated-user-email': 'tony@example.com', 'cf-ray': 'x' }
-    const s = await call('GET', '/api/session', undefined, tony)
-    expect(s.body).toMatchObject({ user: 'tony@example.com', role: 'viewer' })
-    expect((await call('GET', '/api/master', undefined, tony)).status).toBe(200)
-    const denied = await postOp(1, { kind: 'setCells', cells: [{ row: 0, col: 9, value: 1 }] }, 'x', tony)
-    expect(denied.status).toBe(403)
-    const zane = { 'cf-access-authenticated-user-email': 'Zane@example.com', 'cf-ray': 'x' }
-    const ok = await postOp(1, { kind: 'setCells', cells: [{ row: 0, col: 9, value: 1 }] }, 'y', zane)
-    expect(ok.status).toBe(200)
-    const stranger = { 'cf-access-authenticated-user-email': 'who@example.com', 'cf-ray': 'x' }
-    expect((await call('GET', '/api/master', undefined, stranger)).status).toBe(403)
-    expect((await call('GET', '/', undefined, { 'cf-ray': 'x' })).status).toBe(403)
+  it('主端口上带 Cloudflare 的头一律拒绝：经 Funnel 伪造 Access 邮箱拿不到编辑权', async () => {
+    const ts = 'mac.tail0000.ts.net'
+    auth = { ...auth, hosts: [ts], password: await hashPassword('KVS_test1') }
+    const forged = { host: ts, 'tailscale-funnel-request': '?1', 'cf-access-authenticated-user-email': 'zane@example.com' }
+    expect((await call('GET', '/api/session', undefined, forged)).status).toBe(403)
+    expect((await postOp(1, { kind: 'deleteRows', rows: [0] }, 'f1', forged)).status).toBe(403)
+    expect((await call('GET', '/', undefined, { ...forged, 'cf-access-authenticated-user-email': '', 'cf-ray': 'x' })).status).toBe(403)
+    expect((await call('GET', '/api/master', undefined, { 'cf-access-authenticated-user-email': 'zane@example.com', 'cf-ray': 'x' })).status).toBe(403)
+    expect(store.getVersion()).toBe(1)
+  })
+
+  it('经 Cloudflare 通道端口：域名在 hosts、配了密码才出登录页；输对只读；Access 头不认；本机也不当本机', async () => {
+    const domain = 'quote.example.com'
+    const cf = { host: domain, 'cf-ray': 'x', 'cf-connecting-ip': '203.0.113.9' }
+    const via = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
+      call(method, path, body, { ...cf, ...headers }, 'tunnel')
+    const login = (password: string) =>
+      via('POST', '/login', `password=${encodeURIComponent(password)}`, {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-pri-client': '',
+      })
+    // 没配密码、域名没列进 hosts：都拒绝
+    expect((await via('GET', '/')).status).toBe(403)
+    auth = { ...auth, password: await hashPassword('KVS_test1') }
+    expect((await via('GET', '/')).status).toBe(403)
+    expect((await login('KVS_test1')).status).toBe(403)
+
+    auth = { ...auth, hosts: [domain] }
+    const page = await via('GET', '/')
+    expect(page.status).toBe(200)
+    expect(page.text).toContain('action="/login"')
+    expect((await via('GET', '/api/master')).status).toBe(401)
+    expect((await via('GET', '/assets/a.js')).text).toContain('action="/login"')
+    // Access 邮箱头、Tailscale 登录名、localhost 都不认
+    expect((await via('GET', '/api/master', undefined, { 'cf-access-authenticated-user-email': 'zane@example.com' })).status).toBe(401)
+    expect((await via('GET', '/api/master', undefined, { 'tailscale-user-login': 'zane@example.com' })).status).toBe(401)
+    expect((await call('GET', '/api/master', undefined, {}, 'tunnel')).status).toBe(403)
+
+    const ok = await login('KVS_test1')
+    expect(ok.status).toBe(303)
+    const cookie = String(ok.headers['set-cookie']).split(';')[0]!
+    const me = { cookie, origin: `https://${domain}` }
+    expect((await via('GET', '/api/session', undefined, me)).body).toMatchObject({ user: '密码登录', role: 'viewer' })
+    expect((await via('GET', '/api/master', undefined, me)).status).toBe(200)
+    const asset = await via('GET', '/assets/a.js', undefined, me)
+    expect(asset.text).toBe('console.log(1)')
+    expect(asset.headers['cache-control']).toMatch(/^private/)
+    const del = await via('POST', '/api/ops', { baseVersion: 1, opId: 'cf1', op: { kind: 'deleteRows', rows: [0] } }, me)
+    expect(del.status).toBe(403)
+    expect(del.body).toMatchObject({ error: '只读账号不能修改总表' })
+    // 同一个 cookie 换个没列的域名不认
+    expect((await via('GET', '/api/master', undefined, { ...me, host: 'other.example.com' })).status).toBe(403)
+    expect(store.getVersion()).toBe(1)
   })
 
   it('经 Tailscale Serve：域名列在 hosts、登录名在名单上才放行；Funnel 公网请求拒绝', async () => {
