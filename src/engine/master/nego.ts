@@ -1,5 +1,6 @@
 import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
 import { cleanAmountString } from './clean'
+import { toExcelTsv } from './copy'
 import { isDataRow, type MasterCell, type MasterData } from './model'
 
 /**
@@ -218,5 +219,5 @@ export function negoToTsv(summary: NegoSummary): string {
     ...summary.perVendor.map((v) => v.sum),
     summary.optimalSum,
   ]
-  return [head, ...rows, totalRow].map((r) => r.join('\t')).join('\n')
+  return toExcelTsv([head, ...rows, totalRow])
 }

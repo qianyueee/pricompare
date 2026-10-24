@@ -84,3 +84,4 @@ export {
   type OpResult,
   type MergeSummary,
 } from './master/ops'
+export { copyColumns, copyRowCells, tsvCell, toExcelTsv } from './master/copy'

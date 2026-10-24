@@ -58,7 +58,7 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await expect.poll(async () => (await serverMaster(request)).master?.rows[0]?.cells[11]).toBeNull()
 
   // Tony 经公司域名（Cloudflare 通道端口）打开：先输密码，进去只读，看不到 O、P、Q、S 列
-  const tonyCtx = await browser.newContext({ baseURL: TUNNEL })
+  const tonyCtx = await browser.newContext({ baseURL: TUNNEL, permissions: ['clipboard-read', 'clipboard-write'] })
   const tony = await tonyCtx.newPage()
   await tony.goto('/')
   await tony.locator('input[name=password]').fill(TONY_PASSWORD)
@@ -96,6 +96,25 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await page.getByTestId('cell-editor').fill('95')
   await page.getByTestId('cell-editor').press('Enter')
   await expect(tony.locator('[data-cell="1:9"]')).toHaveText('95')
+
+  // Tony 复制整行贴进汇总表 Excel：看不到的 O、P、Q、S 照样占一列（内容留空），后面的列不左移
+  await page.locator('[data-cell="1:15"]').click()
+  await page.getByTestId('cell-editor').fill('12.3') // P USD：Tony 看不到，也不该复制给他
+  await page.getByTestId('cell-editor').press('Enter')
+  await page.locator('[data-cell="1:22"]').click()
+  await page.getByTestId('cell-editor').fill('15Days')
+  await page.getByTestId('cell-editor').press('Enter')
+  await expect(tony.locator('[data-cell="1:22"]')).toHaveText('15Days')
+  await tony.locator('[data-cell="1:0"]').click()
+  await tony.keyboard.press('Control+c')
+  await expect(tony.getByTestId('toast')).toContainText('已复制 1 行')
+  const copied = (await tony.evaluate(() => navigator.clipboard.readText())).split('\t')
+  expect(copied).toHaveLength(34)
+  expect(copied[3]).toBe('0900001-000')
+  expect(copied[9]).toBe('95')
+  expect([copied[14], copied[15], copied[16], copied[18]]).toEqual(['', '', '', ''])
+  expect(copied[22]).toBe('15Days') // W 交期还在 W
+  await tony.keyboard.press('Escape')
 
   // Tony 可以导出：在服务上的原件上打补丁，含刚才的改动和后台并入的报价
   // （容器里的 Chromium 不认中文下载名，这里不查文件名）
