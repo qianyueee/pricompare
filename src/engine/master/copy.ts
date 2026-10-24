@@ -1,4 +1,4 @@
-import type { MasterCell } from './model'
+import { KK_COL_COUNT, type MasterCell, type MasterRow } from './model'
 
 /**
  * 复制成表格贴进 Excel：列位置要和汇总表一一对上。
@@ -8,6 +8,9 @@ import type { MasterCell } from './model'
  * - 格子里的换行（描述、表面处理里很常见）原样写出去，Excel 会把一行拆成几行；
  *   按 Excel 自己复制时的写法，有换行的格子用双引号包起来。
  */
+
+/** 只读账号（Tony）看不到的列：和发给他的 Excel 一样隐藏 O、P、Q、S */
+export const VIEWER_HIDDEN_COLS: ReadonlySet<number> = new Set([14, 15, 16, 18])
 
 /**
  * 要复制的列（0 基、升序）：选中的可见列，加上左右最近的可见列都选中的隐藏列。
@@ -56,4 +59,10 @@ export function tsvCell(v: unknown): string {
 /** 二维表 → 剪贴板 TSV（列用制表符、行用换行分隔），可直接粘贴进 Excel */
 export function toExcelTsv(rows: readonly (readonly unknown[])[]): string {
   return rows.map((r) => r.map(tsvCell).join('\t')).join('\n')
+}
+
+/** 汇总表整行 → 剪贴板 TSV：34 列位置不变，隐藏列留空（主表选行复制、比价页「总表格式」复制共用） */
+export function masterRowsToTsv(rows: readonly MasterRow[], hiddenCols: ReadonlySet<number>): string {
+  const cols = copyColumns(() => true, hiddenCols, KK_COL_COUNT)
+  return toExcelTsv(rows.map((r) => copyRowCells(r.cells, cols, hiddenCols)))
 }

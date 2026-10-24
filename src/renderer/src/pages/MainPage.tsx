@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { KK_COL_COUNT, copyColumns, copyRowCells, isDataRow, toExcelTsv } from '@engine/index'
+import {
+  KK_COL_COUNT,
+  VIEWER_HIDDEN_COLS,
+  copyColumns,
+  copyRowCells,
+  isDataRow,
+  masterRowsToTsv,
+  toExcelTsv,
+} from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable, { type CellRange } from '../components/MasterTable'
 import { todayBatch, useSession } from '../store/session'
@@ -7,8 +15,6 @@ import { copyText } from '../utils/clipboard'
 
 const ALL_EDIT_COLS = Array.from({ length: KK_COL_COUNT - 1 }, (_, i) => i + 1) // B..AH（A 列序号不参与清空）
 
-/** 只读账号（Tony）看不到的列：和发给他的 Excel 一样隐藏 O、P、Q、S */
-const VIEWER_HIDDEN_COLS: ReadonlySet<number> = new Set([14, 15, 16, 18])
 const NO_HIDDEN_COLS: ReadonlySet<number> = new Set()
 
 export default function MainPage() {
@@ -175,7 +181,7 @@ export default function MainPage() {
     let desc = ''
     if (selected.size > 0) {
       const picked = vis.filter((it) => selected.has(it.index))
-      tsv = toExcelTsv(matrix(picked, () => true))
+      tsv = masterRowsToTsv(picked.map((it) => it.row), hiddenCols)
       desc = `${picked.length} 行`
     } else if (selCols.size > 0) {
       tsv = toExcelTsv(matrix(vis, (c) => selCols.has(c)))

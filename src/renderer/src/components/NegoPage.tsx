@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { buildNegoSummary, buildNegoWorkbook, carryQtyFor, negoToTsv, resolveNegoInput } from '@engine/index'
+import {
+  VIEWER_HIDDEN_COLS,
+  buildNegoSummary,
+  buildNegoWorkbook,
+  carryQtyFor,
+  masterRowsToTsv,
+  negoToTsv,
+  resolveNegoInput,
+} from '@engine/index'
 import type { NegoSummaryLine, PnResolution } from '@engine/index'
 import { api } from '../api'
 import { todayBatch, useSession } from '../store/session'
@@ -31,9 +39,11 @@ export default function NegoPage() {
   const showToast = useSession((s) => s.showToast)
   const exportMasterRows = useSession((s) => s.exportMasterRows)
   const exportingMaster = useSession((s) => s.exporting)
+  const readOnly = useSession((s) => s.role !== 'editor')
   const [exportingNego, setExportingNego] = useState(false)
-  /** 「导出表格」下拉：比价表 / 总表格式 */
-  const [exportMenu, setExportMenu] = useState(false)
+  /** 「复制为表格」「导出表格」两个下拉（都是比价表 / 总表格式），同时只开一个 */
+  const [menu, setMenu] = useState<'copy' | 'export' | null>(null)
+  const copyMenuRef = useRef<HTMLDivElement>(null)
   const exportMenuRef = useRef<HTMLDivElement>(null)
   /** 数量 Tab 继承：最近一次明确输入/继承的数量，跳过没有该档的行后仍沿用 */
   const carryRef = useRef<number | null>(null)
@@ -74,22 +84,23 @@ export default function NegoPage() {
       if (e.key !== 'Escape') return
       // 汇总页也监听 Esc（取消选中）：这里先处理掉，返回汇总时选中的行保留
       e.preventDefault()
-      if (exportMenu) setExportMenu(false)
+      if (menu) setMenu(null)
       else closeNego()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, closeNego, exportMenu])
+  }, [open, closeNego, menu])
 
   // 下拉菜单点别处收起
   useEffect(() => {
-    if (!exportMenu) return
+    if (!menu) return
+    const box = menu === 'copy' ? copyMenuRef : exportMenuRef
     const onDown = (e: MouseEvent) => {
-      if (!exportMenuRef.current?.contains(e.target as Node)) setExportMenu(false)
+      if (!box.current?.contains(e.target as Node)) setMenu(null)
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
-  }, [exportMenu])
+  }, [menu])
 
   const view = useMemo(() => {
     const rows = negoLines.map((l) => {
@@ -119,7 +130,13 @@ export default function NegoPage() {
     pasteNego(index, col, grid)
   }
 
+  /** 每个零件在汇总表里取价的那一行（按比价页的顺序），「总表格式」复制和导出共用 */
+  const pricedRowIdxs = (): number[] => [
+    ...new Set(rows.flatMap(({ res }) => (res?.line && res.usedTier ? [res.usedTier.rowIndex] : []))),
+  ]
+
   const onCopy = async () => {
+    setMenu(null)
     const ok = await copyText(negoToTsv(summary))
     showToast(
       ok
@@ -128,8 +145,22 @@ export default function NegoPage() {
     )
   }
 
+  // 总表格式复制：汇总表整行、34 列位置不变（只读账号看不到的 O、P、Q、S 留空），直接贴进汇总表 Excel 列对得上
+  const onCopyMasterFormat = async () => {
+    setMenu(null)
+    if (!master) return
+    const picked = pricedRowIdxs().flatMap((i) => (master.rows[i] ? [master.rows[i]] : []))
+    if (picked.length === 0) return
+    const ok = await copyText(masterRowsToTsv(picked, readOnly ? VIEWER_HIDDEN_COLS : new Set<number>()))
+    showToast(
+      ok
+        ? { message: `已复制 ${picked.length} 行（汇总表格式），可直接粘贴进汇总表` }
+        : { message: '复制失败，请重试' },
+    )
+  }
+
   const onExport = async () => {
-    setExportMenu(false)
+    setMenu(null)
     setExportingNego(true)
     try {
       const buffer = await buildNegoWorkbook(summary)
@@ -144,9 +175,8 @@ export default function NegoPage() {
 
   // 总表格式：每个零件导出它取价的那一行（汇总表里的整行，按比价页的顺序）
   const onExportMasterFormat = () => {
-    setExportMenu(false)
-    const rowIdxs = rows.flatMap(({ res }) => (res?.line && res.usedTier ? [res.usedTier.rowIndex] : []))
-    void exportMasterRows(rowIdxs, `NEGO_${todayBatch()}_总表格式`)
+    setMenu(null)
+    void exportMasterRows(pricedRowIdxs(), `NEGO_${todayBatch()}_总表格式`)
   }
 
   const exportBusy = exportingNego || exportingMaster
@@ -168,28 +198,62 @@ export default function NegoPage() {
           {view.validCount} 个零件 · 各家总价按下单数量计算
         </span>
         <div className="flex-1" />
-        <button
-          type="button"
-          data-testid="nego-copy-btn"
-          onClick={() => void onCopy()}
-          disabled={view.validCount === 0}
-          className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-        >
-          复制为表格
-        </button>
+        <div ref={copyMenuRef} className="relative">
+          <button
+            type="button"
+            data-testid="nego-copy-btn"
+            onClick={() => setMenu((m) => (m === 'copy' ? null : 'copy'))}
+            disabled={view.validCount === 0}
+            aria-haspopup="menu"
+            aria-expanded={menu === 'copy'}
+            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            复制为表格 <span className="ml-0.5 text-[10px]">▾</span>
+          </button>
+          {menu === 'copy' && (
+            <div
+              role="menu"
+              data-testid="nego-copy-menu"
+              className="absolute right-0 z-50 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-left shadow-xl"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="nego-copy-nego"
+                onClick={() => void onCopy()}
+                className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <div className="text-xs font-medium text-slate-700">比价表</div>
+                <div className="mt-0.5 text-[11px] text-slate-400">就是这页，带合计行，粘贴进 Excel 的 NEGO sheet</div>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="nego-copy-master"
+                onClick={() => void onCopyMasterFormat()}
+                className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <div className="text-xs font-medium text-slate-700">总表格式</div>
+                <div className="mt-0.5 text-[11px] text-slate-400">
+                  这些零件在汇总表里取价的那一行，整行 34 列，直接粘贴进汇总表列对得上
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
         <div ref={exportMenuRef} className="relative">
           <button
             type="button"
             data-testid="nego-export-btn"
-            onClick={() => setExportMenu((v) => !v)}
+            onClick={() => setMenu((m) => (m === 'export' ? null : 'export'))}
             disabled={view.validCount === 0 || exportBusy}
             aria-haspopup="menu"
-            aria-expanded={exportMenu}
+            aria-expanded={menu === 'export'}
             className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {exportBusy ? '导出中…' : '导出表格'} <span className="ml-0.5 text-[10px]">▾</span>
           </button>
-          {exportMenu && (
+          {menu === 'export' && (
             <div
               role="menu"
               data-testid="nego-export-menu"
@@ -436,7 +500,7 @@ export default function NegoPage() {
 
       <div className="border-t border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
         各家总价 = 该家单价 × 下单数量；最优总价 = 每行取最低单价 · 绿色 = 本行最低 ·
-        「复制为表格」后可直接粘贴进 Excel 的 NEGO sheet · 「导出表格」可选比价表或总表格式 ·
+        「复制为表格」「导出表格」都可选比价表或总表格式（总表格式直接粘贴进汇总表列对得上）·
         汇总表选行后 Ctrl+B 也会把行带进来
       </div>
     </div>

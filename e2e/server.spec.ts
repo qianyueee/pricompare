@@ -114,6 +114,17 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   expect(copied[9]).toBe('95')
   expect([copied[14], copied[15], copied[16], copied[18]]).toEqual(['', '', '', ''])
   expect(copied[22]).toBe('15Days') // W 交期还在 W
+
+  // 比价页「复制为表格 → 总表格式」：同样是汇总表整行 34 列，O、P、Q、S 留空
+  await tony.keyboard.press('Control+b')
+  await expect(tony.getByTestId('nego-page')).toBeVisible()
+  await tony.getByTestId('nego-copy-btn').click()
+  await tony.getByTestId('nego-copy-master').click()
+  await expect(tony.getByTestId('toast')).toContainText('已复制 1 行（汇总表格式）')
+  const negoCopied = (await tony.evaluate(() => navigator.clipboard.readText())).split('\t')
+  expect(negoCopied).toEqual(copied)
+  await tony.keyboard.press('Escape') // 返回汇总，选中的行保留
+  await expect(tony.getByTestId('nego-page')).toBeHidden()
   await tony.keyboard.press('Escape')
 
   // Tony 可以导出：在服务上的原件上打补丁，含刚才的改动和后台并入的报价
