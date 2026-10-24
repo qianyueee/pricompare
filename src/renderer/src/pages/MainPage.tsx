@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { KK_COL_COUNT, isDataRow } from '@engine/index'
+import { KK_COL_COUNT, copyColumns, copyRowCells, isDataRow, toExcelTsv } from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable, { type CellRange } from '../components/MasterTable'
 import { todayBatch, useSession } from '../store/session'
@@ -166,34 +166,25 @@ export default function MainPage() {
 
   const copySelection = useCallback(async () => {
     const vis = visibleRef.current
+    // 隐藏列（只读账号的 O、P、Q、S）夹在选中列中间时照样占一列、内容留空：贴进汇总表 Excel 时列对得上
+    const matrix = (rowsToCopy: typeof vis, isSelected: (c: number) => boolean) => {
+      const cols = copyColumns(isSelected, hiddenCols, KK_COL_COUNT)
+      return rowsToCopy.map((it) => copyRowCells(it.row.cells, cols, hiddenCols))
+    }
     let tsv = ''
     let desc = ''
     if (selected.size > 0) {
       const picked = vis.filter((it) => selected.has(it.index))
-      tsv = picked
-        .map((it) =>
-          it.row.cells
-            .filter((_, c) => !hiddenCols.has(c))
-            .map((c) => c ?? '')
-            .join('\t'),
-        )
-        .join('\n')
+      tsv = toExcelTsv(matrix(picked, () => true))
       desc = `${picked.length} 行`
     } else if (selCols.size > 0) {
-      const cols = [...selCols].filter((c) => !hiddenCols.has(c)).sort((a, b) => a - b)
-      tsv = vis.map((it) => cols.map((c) => it.row.cells[c] ?? '').join('\t')).join('\n')
-      desc = `${cols.length} 列（${vis.length} 行）`
+      tsv = toExcelTsv(matrix(vis, (c) => selCols.has(c)))
+      const shown = [...selCols].filter((c) => !hiddenCols.has(c)).length
+      desc = `${shown} 列（${vis.length} 行）`
     } else if (selRange) {
-      const lines: string[] = []
-      for (let v = selRange.v1; v <= selRange.v2; v++) {
-        const it = vis[v]
-        if (!it) continue
-        const cells: (string | number)[] = []
-        for (let c = selRange.c1; c <= selRange.c2; c++) if (!hiddenCols.has(c)) cells.push(it.row.cells[c] ?? '')
-        lines.push(cells.join('\t'))
-      }
-      tsv = lines.join('\n')
-      desc = `${selRange.v2 - selRange.v1 + 1}×${selRange.c2 - selRange.c1 + 1} 格`
+      const { c1, c2 } = selRange
+      tsv = toExcelTsv(matrix(vis.slice(selRange.v1, selRange.v2 + 1), (c) => c >= c1 && c <= c2))
+      desc = `${selRange.v2 - selRange.v1 + 1}×${c2 - c1 + 1} 格`
     } else return
     const ok = await copyText(tsv)
     showToast({ message: ok ? `已复制 ${desc}，可直接粘贴进 Excel` : '复制失败，请重试' })
