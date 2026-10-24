@@ -137,9 +137,24 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(page.getByTestId('nego-qty').nth(3)).toHaveValue('10')
   await expect(page.getByTestId('nego-sum-optimal')).toHaveText('8750') // 5900 + 225×10 + 60×10
 
-  // 复制为表格（剪贴板 TSV）→ toast 提示
+  // 复制为表格 → 下拉选「比价表」（剪贴板 TSV，NEGO 布局）
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.getByTestId('nego-copy-btn').click()
-  await expect(page.getByTestId('toast')).toContainText('复制')
+  await expect(page.getByTestId('nego-copy-menu')).toBeVisible()
+  await page.getByTestId('nego-copy-nego').click()
+  await expect(page.getByTestId('nego-copy-menu')).toBeHidden()
+  await expect(page.getByTestId('toast')).toContainText('已复制为表格')
+  expect((await page.evaluate(() => navigator.clipboard.readText())).split('\n')[0]).toMatch(/^P\/N\tRev\tDescription/)
+
+  // 复制为表格 → 「总表格式」：每个零件取价的那一行，汇总表整行 34 列，按比价页的顺序
+  await page.getByTestId('nego-copy-btn').click()
+  await page.getByTestId('nego-copy-master').click()
+  await expect(page.getByTestId('toast')).toContainText('已复制 5 行（汇总表格式）')
+  const mfRows = (await page.evaluate(() => navigator.clipboard.readText())).split('\n').map((l) => l.split('\t'))
+  expect(mfRows.map((r) => r.length)).toEqual([34, 34, 34, 34, 34])
+  expect(mfRows.map((r) => r[3])).toEqual([FIXTURE_PNS[0], '0900001-000', FIXTURE_PNS[1], FIXTURE_PNS[2], FIXTURE_PNS[3]])
+  expect(mfRows[2]![6]).toBe('10') // 下单 20 个时取价的是 10 档那一行
+  expect(mfRows[0]![9]).toBe('60') // J 列 HC 价还在 J
 
   // 导出表格 → 下拉选「比价表」：NEGO 布局 xlsx（RMB 表头、数量在描述后）
   await page.getByTestId('nego-export-btn').click()

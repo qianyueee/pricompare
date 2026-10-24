@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
 import ExcelJS from 'exceljs'
-import { KK_COL_COUNT, copyColumns, copyRowCells, toExcelTsv, tsvCell, type MasterCell } from '@engine/index'
+import {
+  KK_COL_COUNT,
+  VIEWER_HIDDEN_COLS,
+  copyColumns,
+  copyRowCells,
+  masterRowsToTsv,
+  toExcelTsv,
+  tsvCell,
+  type MasterCell,
+  type MasterRow,
+} from '@engine/index'
 
-/** 只读账号看不到的列：O、P、Q、S（和 MainPage 一致） */
-const VIEWER_HIDDEN = new Set([14, 15, 16, 18])
+const VIEWER_HIDDEN = VIEWER_HIDDEN_COLS
 const NONE = new Set<number>()
 
 /** 用 exceljs 的 CSV 读取（制表符分隔、双引号包裹）把剪贴板文本读回二维表，模拟贴进表格软件 */
@@ -81,6 +90,21 @@ describe('复制成表格：贴进汇总表 Excel 时列对得上', () => {
       expect(r[25]).toBe('905-610019-001 ')
       expect(r[29]).toBe('CLAMP 1/2" OD')
     }
+  })
+
+  it('汇总表整行（比价页「总表格式」复制）：Cost 在 T 列，只读账号的 O、P、Q、S 留空', async () => {
+    const row = fullRow((c) => `v${c}`)
+    row[5] = 'BRACKET,\nAPO'
+    const rows: MasterRow[] = [{ cells: row }, { cells: fullRow((c) => (c === 19 ? 88 : null)) }]
+    const viewer = await parseLikeExcel(masterRowsToTsv(rows, VIEWER_HIDDEN_COLS))
+    expect(viewer).toHaveLength(2)
+    expect(viewer[0]).toHaveLength(KK_COL_COUNT)
+    expect(viewer[0]![19]).toBe('v19') // T Cost
+    expect(viewer[1]![19]).toBe('88')
+    expect([14, 15, 16, 18].map((c) => viewer[0]![c])).toEqual(['', '', '', ''])
+    expect(viewer[0]![5]).toBe('BRACKET,\nAPO')
+    const editor = await parseLikeExcel(masterRowsToTsv(rows, NONE))
+    expect(editor[0]![15]).toBe('v15')
   })
 
   it('单格写法：和 Excel 自己复制出来的一样', () => {
