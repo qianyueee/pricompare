@@ -226,6 +226,25 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(page.getByTestId('nego-line')).toHaveCount(7) // 6 行数据 + 1 空行
   await expect(page.getByTestId('nego-pn').nth(5)).toHaveValue(FIXTURE_PNS[4]!)
 
+  // 点进数量格：下方列出总表里该件的数量档（第 6 行 PNS[4] 只有 10 档），没填时提示 Tab 取最小
+  await page.getByTestId('nego-qty').nth(5).focus()
+  const pop = page.getByTestId('nego-qty-pop')
+  await expect(pop).toBeVisible()
+  await expect(pop).toContainText('不填直接 Tab 取最小 10')
+  await expect(pop.getByTestId('nego-qty-opt')).toHaveText(['10'])
+  // 点选数量档 → 填入、格子不失焦、该档标为取价档
+  await pop.getByTestId('nego-qty-opt').first().click()
+  await expect(page.getByTestId('nego-qty').nth(5)).toHaveValue('10')
+  await expect(page.getByTestId('nego-qty').nth(5)).toBeFocused()
+  await expect(pop.getByTestId('nego-qty-opt').first()).toHaveAttribute('data-used', '1')
+  // ↑↓ 切换数量档：清空后按 ↓ 取最小档
+  await page.getByTestId('nego-qty').nth(5).fill('')
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByTestId('nego-qty').nth(5)).toHaveValue('10')
+  await page.getByTestId('nego-qty').nth(5).fill('')
+  await page.getByTestId('nego-qty').nth(4).click() // 鼠标点到别格：浮层跟着换行
+  await expect(pop).toHaveCount(1)
+
   // 数量 Tab 继承：第 5 行数量 10 → Tab → 第 6 行（PNS[4] 有 10 档）自动填 10 并聚焦
   await page.getByTestId('nego-qty').nth(4).focus()
   await page.keyboard.press('Tab')
@@ -241,7 +260,8 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.keyboard.press('Tab')
   await expect(page.getByTestId('nego-qty').nth(6)).toBeFocused()
   await expect(page.getByTestId('nego-qty').nth(6)).toHaveValue('') // 7 不在档上 → 不填
-  await page.keyboard.press('Tab') // 再 Tab 继续处理下一行（末尾空行 → 编号格）
+  await page.keyboard.press('Tab') // 没填直接 Tab → 取该件最小档 10，再跳下一行（末尾空行 → 编号格）
+  await expect(page.getByTestId('nego-qty').nth(6)).toHaveValue('10')
   await expect(page.getByTestId('nego-pn').nth(7)).toBeFocused()
 
   // 手输重复零件号：末尾空行输入已存在的 PNS[4] 回车 → 合并提示、行数不变

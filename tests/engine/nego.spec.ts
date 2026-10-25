@@ -7,9 +7,12 @@ import {
   buildNegoWorkbook,
   carryQtyFor,
   dedupeNegoLinesByPn,
+  minQtyFor,
   negoToTsv,
   pnTiers,
   resolveNegoInput,
+  stepQtyTier,
+  tierQtys,
 } from '@engine/index'
 import type { MasterCell, MasterData, MasterRow } from '@engine/index'
 
@@ -243,5 +246,36 @@ describe('比价页：同零件号合并与数量 Tab 继承', () => {
     expect(carryQtyFor(master, 'M-1', 3)).toBe(3)
     expect(carryQtyFor(master, 'NOPE', 3)).toBeNull()
     expect(carryQtyFor(master, 'L-1', null)).toBeNull()
+  })
+
+  it('minQtyFor：没填直接 Tab 取最小数量档；数量为空的档不算；查不到 → null', () => {
+    const master = mkMaster([
+      row({ 3: 'L-1', 6: 6, 9: 8 }),
+      row({ 3: 'L-1', 6: 3, 9: 9 }),
+      row({ 3: 'L-1', 9: 7 }), // 数量空的档
+      row({ 3: 'Q-1', 9: 5 }), // 只有数量空的档
+    ])
+    expect(tierQtys(master, 'l-1 ')).toEqual([3, 6])
+    expect(minQtyFor(master, 'L-1')).toBe(3)
+    expect(minQtyFor(master, 'Q-1')).toBeNull()
+    expect(minQtyFor(master, 'NOPE')).toBeNull()
+  })
+
+  it('stepQtyTier：↑ 大一档、↓ 小一档，到头停住；没填取最小档；不在档上就近取', () => {
+    const master = mkMaster([
+      row({ 3: 'L-1', 6: 1, 9: 10 }),
+      row({ 3: 'L-1', 6: 3, 9: 9 }),
+      row({ 3: 'L-1', 6: 6, 9: 8 }),
+    ])
+    expect(stepQtyTier(master, 'L-1', null, 1)).toBe(1)
+    expect(stepQtyTier(master, 'L-1', null, -1)).toBe(1)
+    expect(stepQtyTier(master, 'L-1', 1, 1)).toBe(3)
+    expect(stepQtyTier(master, 'L-1', 3, 1)).toBe(6)
+    expect(stepQtyTier(master, 'L-1', 6, 1)).toBe(6)
+    expect(stepQtyTier(master, 'L-1', 6, -1)).toBe(3)
+    expect(stepQtyTier(master, 'L-1', 1, -1)).toBe(1)
+    expect(stepQtyTier(master, 'L-1', 4, 1)).toBe(6)
+    expect(stepQtyTier(master, 'L-1', 4, -1)).toBe(3)
+    expect(stepQtyTier(master, 'NOPE', null, 1)).toBeNull()
   })
 })

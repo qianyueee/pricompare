@@ -137,6 +137,31 @@ export function carryQtyFor(master: MasterData, pn: string, carry: number | null
   return pnTiers(master, pn).some((t) => t.qty === carry) ? carry : null
 }
 
+/** 某件总表里的有效数量（数字档，升序；数量为空的档不算） */
+export function tierQtys(master: MasterData, pn: string): number[] {
+  return pnTiers(master, pn).flatMap((t) => (t.qty === null ? [] : [t.qty]))
+}
+
+/**
+ * 数量格没填直接按 Tab：取该件在总表里的最小数量档；查不到或只有空数量档 → null（留空）。
+ */
+export function minQtyFor(master: MasterData, pn: string): number | null {
+  return tierQtys(master, pn)[0] ?? null
+}
+
+/**
+ * 数量格 ↑/↓ 在总表数量档之间切换：↑ 取比当前大的下一档、↓ 取比当前小的上一档，到头停在两端；
+ * 没填时取最小档。没有数字档 → null。
+ */
+export function stepQtyTier(master: MasterData, pn: string, cur: number | null, dir: 1 | -1): number | null {
+  const qs = tierQtys(master, pn)
+  if (qs.length === 0) return null
+  if (cur === null) return qs[0]!
+  if (dir > 0) return qs.find((q) => q > cur) ?? qs[qs.length - 1]!
+  const below = qs.filter((q) => q < cur)
+  return below.length > 0 ? below[below.length - 1]! : qs[0]!
+}
+
 export interface NegoVendor {
   slot: number
   label: string
