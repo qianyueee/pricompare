@@ -5,8 +5,10 @@ import {
   buildNegoWorkbook,
   carryQtyFor,
   masterRowsToTsv,
+  minQtyFor,
   negoToTsv,
   resolveNegoInput,
+  stepQtyTier,
 } from '@engine/index'
 import type { NegoSummaryLine, PnResolution } from '@engine/index'
 import { api } from '../api'
@@ -23,7 +25,8 @@ const focusCell = (index: number, col: 'pn' | 'qty') => {
 
 /**
  * NEGO 比价页（全窗页面）：编号/数量两列像 Excel 一样直接输入或整列粘贴，
- * 编号填入后数量格以「1/3/6」灰字提示总表里的有效数量档；其余列按总表解析自动算。
+ * 编号填入后数量格以「1/3/6」灰字提示总表里的有效数量档，点进数量格时下方列出这些档可直接选；
+ * 数量不填直接 Tab 取最小档；其余列按总表解析自动算。
  */
 export default function NegoPage() {
   const open = useSession((s) => s.negoOpen)
@@ -47,6 +50,19 @@ export default function NegoPage() {
   const exportMenuRef = useRef<HTMLDivElement>(null)
   /** 数量 Tab 继承：最近一次明确输入/继承的数量，跳过没有该档的行后仍沿用 */
   const carryRef = useRef<number | null>(null)
+  /** 这次数量格获得焦点是不是 Tab 跳过来的（鼠标点进来就重新开始，不沿用上次的继承数量） */
+  const tabNavRef = useRef(false)
+  /** 正在输入的数量格：下方（贴近底边时上方）列出该件在总表里的数量档 */
+  const [qtyPop, setQtyPop] = useState<{ index: number; above: boolean } | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const tabToQty = (index: number) => {
+    tabNavRef.current = true
+    requestAnimationFrame(() => {
+      focusCell(index, 'qty')
+      tabNavRef.current = false
+    })
+  }
 
   // 零件号输入提交（失焦/回车）：同零件号只保留先出现的一行
   const commitPn = (i: number): number => {
@@ -57,16 +73,23 @@ export default function NegoPage() {
     return r.index
   }
 
-  // 数量格 Tab：跳到下一行数量格；下一行该件恰有此数量档则自动填入，否则留空手填
+  // 数量格 Tab：没填就取该件在总表里的最小数量档；然后跳到下一行数量格——
+  // 下一行该件恰有继承的数量档则自动填入，否则留空（再 Tab 同样取最小档）
   const tabFromQty = (i: number, shift: boolean): boolean => {
     if (shift) {
       if (i === 0) return false
-      focusCell(i - 1, 'qty')
+      tabToQty(i - 1)
       return true
+    }
+    const line = negoLines[i]
+    const cur = line?.qty ?? null
+    if (cur === null && line && master) {
+      // 取的最小档不算手输的数量，不往下继承
+      const min = minQtyFor(master, line.pn)
+      if (min !== null) setNegoQty(i, min)
     }
     const next = negoLines[i + 1]
     if (!next) return false
-    const cur = negoLines[i]?.qty ?? null
     const carry = cur ?? carryRef.current
     carryRef.current = carry
     if (next.pn.trim() === '') {
@@ -74,8 +97,31 @@ export default function NegoPage() {
       return true
     }
     if (next.qty === null && master && carryQtyFor(master, next.pn, carry) !== null) setNegoQty(i + 1, carry)
-    requestAnimationFrame(() => focusCell(i + 1, 'qty'))
+    tabToQty(i + 1)
     return true
+  }
+
+  // 数量格选定一个数量档（点选或 ↑↓）：文字保持选中，接着打字就是改
+  const pickQty = (i: number, qty: number) => {
+    setNegoQty(i, qty)
+    requestAnimationFrame(() => focusCell(i, 'qty'))
+  }
+
+  // 数量格 ↑/↓：在总表数量档之间切换（↑ 大一档、↓ 小一档）
+  const stepQty = (i: number, dir: 1 | -1): boolean => {
+    const line = negoLines[i]
+    if (!line || !master) return false
+    const q = stepQtyTier(master, line.pn, line.qty, dir)
+    if (q === null) return false
+    pickQty(i, q)
+    return true
+  }
+
+  const onQtyFocus = (e: React.FocusEvent<HTMLInputElement>, i: number) => {
+    if (!tabNavRef.current) carryRef.current = null
+    const r = e.currentTarget.getBoundingClientRect()
+    const box = scrollRef.current?.getBoundingClientRect()
+    setQtyPop({ index: i, above: !!box && r.bottom + 72 > box.bottom })
   }
 
   useEffect(() => {
@@ -296,11 +342,11 @@ export default function NegoPage() {
 
       <div className="border-b border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
         编号、数量两格可直接输入，也可从 Excel 整列复制粘贴（编号+数量两列一起粘也行）·
-        编号填入后数量格灰字显示总表里的有效数量档「1/3/6」· 数量不在档上时按 ≤数量 的最大档取单价 ·
-        Enter 跳到下一格
+        编号填入后数量格灰字显示总表里的有效数量档「1/3/6」，点进数量格可直接点选或 ↑↓ 切换 ·
+        数量不填直接 Tab 取最小档 · 数量不在档上时按 ≤数量 的最大档取单价 · Enter 跳到下一格
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-4">
         <table className="w-full border-separate border-spacing-0 rounded-xl bg-white text-xs shadow-sm">
           <thead className="sticky top-0 z-10">
             <tr>
@@ -348,6 +394,9 @@ export default function NegoPage() {
                   : ''
               const tierMismatch =
                 res?.usedTier && l.qty !== null && res.usedTier.qty !== null && res.usedTier.qty !== l.qty
+              const showPop = qtyPop?.index === i && res !== null && res.tiers.length > 0
+              const minQty = res?.tiers.find((t) => t.qty !== null)?.qty ?? null
+              const typed = l.qty === null ? '' : String(l.qty)
               return (
                 <tr key={l.id} data-testid="nego-line" className="group hover:bg-blue-50/30">
                   <td className="border-b border-slate-100 px-2 py-1 text-center text-slate-300">{i + 1}</td>
@@ -381,7 +430,7 @@ export default function NegoPage() {
                     {notFound ? '总表中未找到该编号' : (res?.line?.description ?? '')}
                   </td>
                   <td className="border-b border-slate-100 p-0.5">
-                    <div className="flex items-center gap-1">
+                    <div className="relative flex items-center gap-1">
                       <input
                         data-testid="nego-qty"
                         data-ni={`${i}:qty`}
@@ -394,18 +443,64 @@ export default function NegoPage() {
                           if (Number.isFinite(n)) setNegoQty(i, n)
                         }}
                         onPaste={(e) => onPaste(e, i, 'qty')}
+                        onFocus={(e) => onQtyFocus(e, i)}
+                        onBlur={() => setQtyPop((p) => (p?.index === i ? null : p))}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') focusCell(i + 1, 'pn')
                           else if (e.key === 'Tab' && tabFromQty(i, e.shiftKey)) e.preventDefault()
+                          else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && stepQty(i, e.key === 'ArrowUp' ? 1 : -1))
+                            e.preventDefault()
                         }}
                         placeholder={tierHint || undefined}
-                        title={tierHint ? `总表里的有效数量档：${tierHint}（输入其一或任意数量）` : undefined}
+                        title={
+                          tierHint ? `总表里的有效数量档：${tierHint}（输入其一或任意数量；不填直接 Tab 取最小 ${minQty ?? '档'}）` : undefined
+                        }
                         className={`w-full rounded border px-1.5 py-1 text-right outline-none ${
                           tierHint
                             ? 'border-blue-200 bg-blue-50/50 placeholder:text-blue-500/80 placeholder:font-medium'
                             : 'border-transparent hover:border-slate-200 focus:border-blue-400'
                         }`}
                       />
+                      {showPop && (
+                        <div
+                          data-testid="nego-qty-pop"
+                          onMouseDown={(e) => e.preventDefault()} // 点选时数量格不失焦
+                          className={`absolute left-0 z-20 w-max max-w-72 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-left shadow-lg ${
+                            qtyPop.above ? 'bottom-full mb-1' : 'top-full mt-1'
+                          }`}
+                        >
+                          <div className="mb-1 text-[10px] whitespace-nowrap text-slate-400">
+                            总表数量档
+                            {l.qty === null && minQty !== null ? ` · 不填直接 Tab 取最小 ${minQty}` : ''} · ↑↓ 切换
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {res.tiers.map((t) => {
+                              const used = res.usedTier?.rowIndex === t.rowIndex
+                              const match = !used && typed !== '' && t.qty !== null && String(t.qty).startsWith(typed)
+                              return (
+                                <button
+                                  key={t.rowIndex}
+                                  type="button"
+                                  data-testid="nego-qty-opt"
+                                  data-used={used ? '1' : undefined}
+                                  disabled={t.qty === null}
+                                  onClick={() => t.qty !== null && pickQty(i, t.qty)}
+                                  title={`汇总表第 ${t.excelRow} 行${t.batch ? ` · ${t.batch}` : ''}${t.qty === null ? ' · 数量为空' : ''}`}
+                                  className={`min-w-8 rounded border px-1.5 py-0.5 text-xs font-medium ${
+                                    used
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : match
+                                        ? 'border-blue-400 bg-blue-50 text-blue-700'
+                                        : 'border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50'
+                                  } disabled:cursor-default disabled:text-slate-300 disabled:hover:border-slate-200 disabled:hover:bg-white`}
+                                >
+                                  {t.qty ?? '?'}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
                       {tierMismatch && (
                         <span
                           data-testid="nego-tier-badge"
