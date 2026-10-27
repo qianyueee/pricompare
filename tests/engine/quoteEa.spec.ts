@@ -5,6 +5,7 @@ import {
   KK_COL,
   KK_HEADERS,
   buildMasterSubsetWorkbook,
+  buildMasterWorkbook,
   parseCleaningGrade,
   parseMasterWorkbook,
   quoteEaFor,
@@ -136,7 +137,7 @@ function parse(buffer: ArrayBuffer): MasterData {
   return m!
 }
 
-describe('比价页「总表格式」导出：U 列写公式', () => {
+describe('导出所选 / 比价页「总表格式」导出：U 列写公式', () => {
   it('以原表为模板：U 列每行都是公式，H 有数的带算好的值', async () => {
     const original = await makeMaster()
     const master = parse(original)
@@ -164,7 +165,7 @@ describe('比价页「总表格式」导出：U 列写公式', () => {
     expect(sheet).toContain('MOD(CEILING(ROUND(H2/6.7*4.2,6),10),100)&lt;=10') // XML 转义
   })
 
-  it('不开这个选项（主表「导出所选」）：U 列照总表原值', async () => {
+  it('不开这个选项：U 列照总表原值', async () => {
     const original = await makeMaster()
     const master = parse(original)
     const out = await buildMasterSubsetWorkbook(master, [0, 1], original)
@@ -184,5 +185,46 @@ describe('比价页「总表格式」导出：U 列写公式', () => {
     expect(ws.getCell('U3').value).toEqual({ formula: quoteEaFormula('H3', 4.2), result: 320 })
     expect(ws.getCell('H4').value).toBeNull()
     expect((ws.getCell('U4').value as { formula: string }).formula).toBe(quoteEaFormula('H4', 4.5))
+  })
+})
+
+describe('整表「导出汇总表」：U 列写公式', () => {
+  it('补丁导出：每个数据行的 U 都是公式，其余格子不动，预编号空行不碰', async () => {
+    const wb0 = new ExcelJS.Workbook()
+    const ws0 = wb0.addWorksheet('KK询价汇总')
+    ws0.getRow(1).values = [...KK_HEADERS]
+    const rows: MasterCell[][] = [
+      [1050, '30级', 658],
+      [null, 'LEVEL 20', null],
+    ].map(([h, z, u], i) => {
+      const row: MasterCell[] = KK_HEADERS.map(() => null)
+      row[0] = i + 1
+      row[3] = `09${String(i).padStart(5, '0')}-000`
+      row[KK_COL.quoteEach] = h as MasterCell
+      row[KK_COL.cleaningSpec] = z as MasterCell
+      row[KK_COL.quoteEa] = u as MasterCell
+      return row
+    })
+    rows.forEach((r, i) => (ws0.getRow(i + 2).values = r))
+    ws0.getCell('A4').value = 3 // 预编号空行
+    ws0.getCell('W2').value = '15Days'
+    const original = (await wb0.xlsx.writeBuffer()) as ArrayBuffer
+    const master = parse(original)
+
+    const out = await buildMasterWorkbook(master, original, { quoteEaFormula: true })
+    expect(out.mode).toBe('patch')
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(out.buffer)
+    const ws = wb.getWorksheet('KK询价汇总')!
+    expect(ws.getCell('U2').value).toEqual({ formula: quoteEaFormula('H2', 4.2), result: 660 })
+    expect(ws.getCell('U3').value).toEqual({ formula: quoteEaFormula('H3', 4.5) })
+    expect(ws.getCell('U4').value).toBeNull()
+    expect(ws.getCell('A4').value).toBe(3)
+    expect(ws.getCell('W2').value).toBe('15Days')
+    expect(ws.getCell('H3').value).toBeNull()
+
+    // 不开选项：和原来一样，没改过就原样返回
+    const plain = await buildMasterWorkbook(master, original)
+    expect(parse(plain.buffer).rows[0]!.cells[KK_COL.quoteEa]).toBe(658)
   })
 })

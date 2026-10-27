@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs'
 import { KK_COL, KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
-import { KK_COL_COUNT, type MasterCell, type MasterData } from './model'
+import { KK_COL_COUNT, isDataRow, type MasterCell, type MasterData } from './model'
 import { isMacroEnabledWorkbook, patchMasterWorkbook } from './patchExport'
 import { quoteEaFor, quoteEaFormula } from './quoteEa'
 import { subsetMasterWorkbook, type SubsetExportOptions } from './subsetExport'
@@ -14,7 +14,7 @@ export interface MasterExportOutput {
 }
 
 /**
- * 导出汇总。优先级：
+ * 导出汇总（opts.quoteEaFormula：U 列每个数据行写美元报价公式，见 quoteEa.ts）。优先级：
  * 1) zip 级补丁（原文件字节级保真：公式/批注/样式/customXml 全保留，只改动过的单元格）
  * 2) exceljs 以原工作簿为底整本重写（兜底，会丢部分样式与公式）
  * 3) 从零重建（无原文件时）
@@ -22,10 +22,11 @@ export interface MasterExportOutput {
 export async function buildMasterWorkbook(
   master: MasterData,
   originalBuffer: ArrayBuffer | null,
+  opts: SubsetExportOptions = {},
 ): Promise<MasterExportOutput> {
   if (originalBuffer) {
     try {
-      const patched = patchMasterWorkbook(master, originalBuffer)
+      const patched = patchMasterWorkbook(master, originalBuffer, opts)
       if (patched) {
         return {
           buffer: patched.buffer,
@@ -38,12 +39,16 @@ export async function buildMasterWorkbook(
     }
     try {
       // exceljs 重写生成的是标准 xlsx 内容类型
-      return { buffer: await rewriteOriginal(master, originalBuffer), extension: 'xlsx', mode: 'rewrite' }
+      return {
+        buffer: await rewriteOriginal(master, originalBuffer, opts.quoteEaFormula === true),
+        extension: 'xlsx',
+        mode: 'rewrite',
+      }
     } catch {
       // 原文件加载失败 → 退化为从零重建
     }
   }
-  return { buffer: await buildFresh(master), extension: 'xlsx', mode: 'fresh' }
+  return { buffer: await buildFresh(master, opts.quoteEaFormula === true), extension: 'xlsx', mode: 'fresh' }
 }
 
 export interface MasterSubsetExportOutput {
@@ -59,7 +64,7 @@ export interface MasterSubsetExportOutput {
 /**
  * 只导出总表里的指定行（按给定顺序，重复的只留第一次）：汇总表同样的列和样式，
  * 只有这一张 sheet——NEGO、历史报价等其他 sheet 不带。
- * opts.quoteEaFormula：U 列写对客美元报价公式（比价页导出用，见 quoteEa.ts）。
+ * opts.quoteEaFormula：U 列写对客美元报价公式（见 quoteEa.ts）。
  */
 export async function buildMasterSubsetWorkbook(
   master: MasterData,
@@ -86,7 +91,11 @@ export async function buildMasterSubsetWorkbook(
   }
 }
 
-async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer): Promise<ArrayBuffer> {
+async function rewriteOriginal(
+  master: MasterData,
+  originalBuffer: ArrayBuffer,
+  quoteEaFormulas = false,
+): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.load(originalBuffer)
   const ws = wb.getWorksheet(master.sheetName) ?? wb.worksheets[0]
@@ -105,6 +114,13 @@ async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer):
       const v = row.cells[c] ?? null
       // 保留原样式，仅更新值
       cell.value = v
+    }
+    if (quoteEaFormulas && isDataRow(row)) {
+      const quoteEa = quoteEaFor(row.cells)
+      r.getCell(KK_COL.quoteEa + 1).value = {
+        formula: quoteEaFormula(`H${i + 2}`, quoteEa.multiplier),
+        result: quoteEa.value ?? '',
+      }
     }
   })
   // 清掉比当前数据多出来的旧行值（例如删过行后）
@@ -146,7 +162,7 @@ async function buildFresh(master: MasterData, quoteEaFormulas = false): Promise<
     row.cells.forEach((v, c) => {
       if (v !== null) r.getCell(c + 1).value = v
     })
-    if (quoteEaFormulas) {
+    if (quoteEaFormulas && isDataRow(row)) {
       const quoteEa = quoteEaFor(row.cells)
       r.getCell(KK_COL.quoteEa + 1).value = {
         formula: quoteEaFormula(`H${i + 2}`, quoteEa.multiplier),

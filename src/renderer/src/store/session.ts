@@ -137,7 +137,7 @@ interface SessionState {
   undoMasterEdit(): void
   exportMaster(): Promise<void>
   /** 只导出总表里的这几行（汇总表同样的列和样式，只有汇总这一张 sheet）；fileName 不含扩展名 */
-  /** opts.quoteEaFormula：U 列写对客美元报价公式（比价页导出） */
+  /** opts.quoteEaFormula：U 列写对客美元报价公式 */
   exportMasterRows(rowIdxs: number[], fileName: string, opts?: SubsetExportOptions): Promise<void>
   showToast(toast: ToastMsg | null): void
   openNego(rowIdxs: number[]): void
@@ -623,7 +623,8 @@ export const useSession = create<SessionState>((set, get) => ({
     if (!master) return
     set({ exporting: true })
     try {
-      const out = await buildMasterWorkbook(master, await loadMasterOriginal())
+      // U 列 Quote (EA) 写美元报价公式（和「导出所选」、比价页总表格式一样）
+      const out = await buildMasterWorkbook(master, await loadMasterOriginal(), { quoteEaFormula: true })
       const saved = await api.saveXlsx({
         // 扩展名必须跟随内容类型（.xlsm 原表导出仍为 .xlsm），否则 Excel 拒绝打开
         defaultFileName: `KK询价汇总表${todayBatch()}.${out.extension}`,

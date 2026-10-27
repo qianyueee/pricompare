@@ -1,8 +1,9 @@
 import { KK_COL } from '../export/kkLayout'
 import type { MasterCell } from './model'
+import { xmlEscape } from './patchExport'
 
 /**
- * 对客美元报价 U 列「Quote (EA)」的公式（比价页「导出表格 → 总表格式」用）：
+ * 对客美元报价 U 列「Quote (EA)」的公式（「导出汇总表」「导出所选」、比价页「导出表格 → 总表格式」都用）：
  * H 列 Quote (each)（人民币）÷ 6.7 换成美元，按 Z 列清洗等级乘系数（30 级 ×4.2、20 级 ×4.5、10 级 ×4.8，没写等级按 ×4.2），
  * 再向上取整到十位；取整后落在整百附近（尾数 00 或 10，如 300、310）的归到下面的 90（290）。
  * 例：658.2 → 660；296 → 300 → 290；304 → 310 → 290；1005 → 1010 → 990；95 → 100 → 90；8 → 10。
@@ -67,4 +68,14 @@ export function quoteEaFor(cells: readonly MasterCell[]): { value: number | null
 export function quoteEaFormula(hRef: string, multiplier: number): string {
   const t = `CEILING(ROUND(${hRef}/${QUOTE_EA_RATE}*${multiplier},6),10)`
   return `IF(ISNUMBER(${hRef}),${t}-IF(AND(${t}>=100,MOD(${t},100)<=10),MOD(${t},100)+10,0),"")`
+}
+
+/** U 列公式单元格的 XML：公式 + 算好的值（H 空着时缓存结果为空串），不重算的查看器里也有数 */
+export function quoteEaCellXml(ref: string, s: string | null, hRef: string, cells: readonly MasterCell[]): string {
+  const q = quoteEaFor(cells)
+  const sAttr = s ? ` s="${s}"` : ''
+  const f = xmlEscape(quoteEaFormula(hRef, q.multiplier))
+  return q.value === null
+    ? `<c r="${ref}"${sAttr} t="str"><f>${f}</f><v></v></c>`
+    : `<c r="${ref}"${sAttr}><f>${f}</f><v>${q.value}</v></c>`
 }

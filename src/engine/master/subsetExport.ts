@@ -3,14 +3,14 @@ import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
 import { KK_COL_COUNT, isDataRow, parseMasterWorkbookDetailed, type MasterData } from './model'
 import { attrOf, buildCellXml, findSheetPath, parseRowCells, xmlEscape } from './patchExport'
-import { quoteEaFor, quoteEaFormula } from './quoteEa'
+import { quoteEaCellXml } from './quoteEa'
 import { KK_COL } from '../export/kkLayout'
 
 /**
  * 只导出总表里的若干行（主表「导出所选」、比价页「总表格式」）：
  * 以原 KK 汇总表为模板生成一个**只含汇总 sheet** 的新工作簿——
  * 表头行、列宽、隐藏列（O/P/Q/S）、冻结首行、单元格样式、表格（蓝白斑马纹 + 筛选）都沿用原表，
- * 数据只有选中的这几行（值，不带公式：A 列序号等保留总表里的值，方便和总表对照；比价页导出时 U 列例外，见下）。
+ * 数据只有选中的这几行（值，不带公式：A 列序号等保留总表里的值，方便和总表对照；U 列可写公式，见下）。
  * NEGO、历史报价等其他 sheet 不带，批注/图片也不带（它们挂在原表的固定单元格上）。
  *
  * 原表结构认不出（没有表头行、旧布局缺列等）时返回 null，由调用方改用从零重建。
@@ -18,7 +18,7 @@ import { KK_COL } from '../export/kkLayout'
 
 export interface SubsetExportOptions {
   /**
-   * U 列 Quote (EA) 每行都写成按 H 列和清洗等级算美元报价的公式（比价页导出用，见 quoteEa.ts）；
+   * U 列 Quote (EA) 每个数据行都写成按 H 列和清洗等级算美元报价的公式（三种导出都用，见 quoteEa.ts）；
    * H 空着的行公式结果为空，导出后在 Excel 里填上 H 就算出来
    */
   quoteEaFormula?: boolean
@@ -157,7 +157,6 @@ export function subsetMasterWorkbook(
     const excelRow = k + 2
     const src = rowIndex < origRows.length ? rowXmlByNum.get(rowIndex + 2) : undefined
     const srcCells = src ? parseRowCells(src) : new Map<number, string>()
-    const quoteEa = opts.quoteEaFormula ? quoteEaFor(row.cells) : null
     let body = ''
     for (const [c, p] of order) {
       const v = row.cells[c] ?? null
@@ -165,14 +164,8 @@ export function subsetMasterWorkbook(
       // 原表这格存在就照它的样式（没有 s 即默认样式）；不存在才按列兜底
       const s = existing ? attrOf(existing.slice(0, existing.indexOf('>') + 1), 's') : (colStyle.get(p) ?? null)
       const ref = `${colLetter(p)}${excelRow}`
-      if (quoteEa && c === KK_COL.quoteEa) {
-        // 公式 + 算好的值（不重算的查看器里也显示得出来）
-        const f = quoteEaFormula(`${colLetter(physCol[KK_COL.quoteEach]!)}${excelRow}`, quoteEa.multiplier)
-        const sAttr = s ? ` s="${s}"` : ''
-        body +=
-          quoteEa.value === null
-            ? `<c r="${ref}"${sAttr} t="str"><f>${xmlEscape(f)}</f><v></v></c>` // H 空着：公式结果为空
-            : `<c r="${ref}"${sAttr}><f>${xmlEscape(f)}</f><v>${quoteEa.value}</v></c>`
+      if (opts.quoteEaFormula && c === KK_COL.quoteEa && isDataRow(row)) {
+        body += quoteEaCellXml(ref, s, `${colLetter(physCol[KK_COL.quoteEach]!)}${excelRow}`, row.cells)
         continue
       }
       if (v === null && s === null) continue
