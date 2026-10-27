@@ -55,6 +55,17 @@ export {
   type MasterExportOutput,
   type MasterSubsetExportOutput,
 } from './master/exportMaster'
+export { type SubsetExportOptions } from './master/subsetExport'
+export {
+  QUOTE_EA_RATE,
+  QUOTE_EA_MULTIPLIERS,
+  QUOTE_EA_DEFAULT_MULTIPLIER,
+  parseCleaningGrade,
+  roundQuoteEa,
+  quoteEaFor,
+  quoteEaFormula,
+  type CleaningGrade,
+} from './master/quoteEa'
 export { buildNegoWorkbook } from './export/exportNego'
 export { cleanMasterAmounts, cleanAmountString, AMOUNT_COLS, type CleanResult } from './master/clean'
 export { deleteMasterRows, clearMasterCells } from './master/edit'

@@ -22,6 +22,7 @@ import {
   type MasterOp,
   type OpResult,
   type ParsedWorkbook,
+  type SubsetExportOptions,
   type Vendor,
   dedupeNegoLinesByPn,
 } from '@engine/index'
@@ -136,7 +137,8 @@ interface SessionState {
   undoMasterEdit(): void
   exportMaster(): Promise<void>
   /** 只导出总表里的这几行（汇总表同样的列和样式，只有汇总这一张 sheet）；fileName 不含扩展名 */
-  exportMasterRows(rowIdxs: number[], fileName: string): Promise<void>
+  /** opts.quoteEaFormula：U 列写对客美元报价公式（比价页导出） */
+  exportMasterRows(rowIdxs: number[], fileName: string, opts?: SubsetExportOptions): Promise<void>
   showToast(toast: ToastMsg | null): void
   openNego(rowIdxs: number[]): void
   closeNego(): void
@@ -646,12 +648,12 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
-  async exportMasterRows(rowIdxs: number[], fileName: string) {
+  async exportMasterRows(rowIdxs: number[], fileName: string, opts?: SubsetExportOptions) {
     const { master } = get()
     if (!master || rowIdxs.length === 0) return
     set({ exporting: true })
     try {
-      const out = await buildMasterSubsetWorkbook(master, rowIdxs, await loadMasterOriginal())
+      const out = await buildMasterSubsetWorkbook(master, rowIdxs, await loadMasterOriginal(), opts)
       const saved = await api.saveXlsx({ defaultFileName: `${fileName}.${out.extension}`, data: out.buffer })
       // 只导出了一部分，「有未导出的更改」照旧保留
       if (saved.saved) set({ toast: { message: `已导出 ${out.rowCount} 行（汇总表格式）`, path: saved.path } })

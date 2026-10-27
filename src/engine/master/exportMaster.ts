@@ -1,8 +1,9 @@
 import ExcelJS from 'exceljs'
-import { KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
+import { KK_COL, KK_COL_WIDTHS, KK_HEADERS, KK_STYLE } from '../export/kkLayout'
 import { KK_COL_COUNT, type MasterCell, type MasterData } from './model'
 import { isMacroEnabledWorkbook, patchMasterWorkbook } from './patchExport'
-import { subsetMasterWorkbook } from './subsetExport'
+import { quoteEaFor, quoteEaFormula } from './quoteEa'
+import { subsetMasterWorkbook, type SubsetExportOptions } from './subsetExport'
 
 export interface MasterExportOutput {
   buffer: ArrayBuffer
@@ -58,24 +59,31 @@ export interface MasterSubsetExportOutput {
 /**
  * 只导出总表里的指定行（按给定顺序，重复的只留第一次）：汇总表同样的列和样式，
  * 只有这一张 sheet——NEGO、历史报价等其他 sheet 不带。
+ * opts.quoteEaFormula：U 列写对客美元报价公式（比价页导出用，见 quoteEa.ts）。
  */
 export async function buildMasterSubsetWorkbook(
   master: MasterData,
   rowIdxs: readonly number[],
   originalBuffer: ArrayBuffer | null,
+  opts: SubsetExportOptions = {},
 ): Promise<MasterSubsetExportOutput> {
   const picked = [...new Set(rowIdxs)].filter((i) => master.rows[i] !== undefined)
   if (picked.length === 0) throw new Error('没有可导出的行')
   if (originalBuffer) {
     try {
-      const buffer = subsetMasterWorkbook(master, picked, originalBuffer)
+      const buffer = subsetMasterWorkbook(master, picked, originalBuffer, opts)
       if (buffer) return { buffer, extension: 'xlsx', mode: 'template', rowCount: picked.length }
     } catch {
       // 原表结构认不出 → 从零重建
     }
   }
   const subset: MasterData = { ...master, rows: picked.map((i) => master.rows[i]!), passthrough: [] }
-  return { buffer: await buildFresh(subset), extension: 'xlsx', mode: 'fresh', rowCount: picked.length }
+  return {
+    buffer: await buildFresh(subset, opts.quoteEaFormula === true),
+    extension: 'xlsx',
+    mode: 'fresh',
+    rowCount: picked.length,
+  }
 }
 
 async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer): Promise<ArrayBuffer> {
@@ -109,7 +117,7 @@ async function rewriteOriginal(master: MasterData, originalBuffer: ArrayBuffer):
   return (await wb.xlsx.writeBuffer()) as ArrayBuffer
 }
 
-async function buildFresh(master: MasterData): Promise<ArrayBuffer> {
+async function buildFresh(master: MasterData, quoteEaFormulas = false): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet(master.sheetName || 'KK询价汇总', {
     views: [{ state: 'frozen', ySplit: 1 }],
@@ -138,6 +146,13 @@ async function buildFresh(master: MasterData): Promise<ArrayBuffer> {
     row.cells.forEach((v, c) => {
       if (v !== null) r.getCell(c + 1).value = v
     })
+    const quoteEa = quoteEaFormulas ? quoteEaFor(row.cells) : null
+    if (quoteEa) {
+      r.getCell(KK_COL.quoteEa + 1).value = {
+        formula: quoteEaFormula(`H${i + 2}`, quoteEa.multiplier),
+        result: quoteEa.value,
+      }
+    }
   })
   for (const sheet of master.passthrough) {
     const pws = wb.addWorksheet(sheet.name)
