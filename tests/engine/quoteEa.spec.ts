@@ -136,7 +136,7 @@ function parse(buffer: ArrayBuffer): MasterData {
   return m!
 }
 
-describe('比价页「总表格式」导出：U 列写公式', () => {
+describe('导出所选 / 比价页「总表格式」导出：U 列写公式', () => {
   it('以原表为模板：U 列每行都是公式，H 有数的带算好的值', async () => {
     const original = await makeMaster()
     const master = parse(original)
@@ -164,7 +164,7 @@ describe('比价页「总表格式」导出：U 列写公式', () => {
     expect(sheet).toContain('MOD(CEILING(ROUND(H2/6.7*4.2,6),10),100)&lt;=10') // XML 转义
   })
 
-  it('不开这个选项（主表「导出所选」）：U 列照总表原值', async () => {
+  it('不开这个选项：U 列照总表原值', async () => {
     const original = await makeMaster()
     const master = parse(original)
     const out = await buildMasterSubsetWorkbook(master, [0, 1], original)

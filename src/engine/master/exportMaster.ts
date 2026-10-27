@@ -59,7 +59,7 @@ export interface MasterSubsetExportOutput {
 /**
  * 只导出总表里的指定行（按给定顺序，重复的只留第一次）：汇总表同样的列和样式，
  * 只有这一张 sheet——NEGO、历史报价等其他 sheet 不带。
- * opts.quoteEaFormula：U 列写对客美元报价公式（比价页导出用，见 quoteEa.ts）。
+ * opts.quoteEaFormula：U 列写对客美元报价公式（主表「导出所选」、比价页总表格式导出用，见 quoteEa.ts）。
  */
 export async function buildMasterSubsetWorkbook(
   master: MasterData,

@@ -219,11 +219,12 @@ export default function MainPage() {
     if (selected.size > 0) deleteRowsAction([...selected])
   }, [selected, deleteRowsAction])
 
-  // 只导出选中的行：和「导出汇总表」同样的列和样式，按原表顺序
+  // 只导出选中的行：和「导出汇总表」同样的列和样式，按原表顺序；
+  // U 列 Quote (EA) 写成按 H 列 ÷6.7 × 清洗等级系数算美元报价的公式（和比价页总表格式导出一样）
   const exportSelectedRows = useCallback(() => {
     if (selected.size === 0) return
     const rowIdxs = [...selected].sort((a, b) => a - b)
-    void exportMasterRows(rowIdxs, `KK询价汇总表${todayBatch()}_选中${rowIdxs.length}行`)
+    void exportMasterRows(rowIdxs, `KK询价汇总表${todayBatch()}_选中${rowIdxs.length}行`, { quoteEaFormula: true })
   }, [selected, exportMasterRows])
 
   // Ctrl+C 复制选区 / Delete 清空内容 / Ctrl+Z 撤销 / Esc 取消全部选中（输入框聚焦、比价页或弹窗打开时不抢）

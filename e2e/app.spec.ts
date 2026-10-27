@@ -370,6 +370,10 @@ test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一
   expect(selWs.getCell('D2').value).toBe(FIXTURE_PNS[0])
   expect(selWs.getCell('D3').value).toBe('0900001-000')
   expect(selWs.getCell('J3').value).toBe(100)
+  // U 列 Quote (EA) 是美元报价公式：H 90 ÷ 6.7 × 4.2（没写清洗等级）= 56.4 → 60；H 空着的行公式照写、结果为空
+  expect(selWs.getCell('U3').value).toMatchObject({ result: 60 })
+  expect((selWs.getCell('U3').value as { formula: string }).formula).toContain('H3/6.7*4.2')
+  expect((selWs.getCell('U2').value as { formula: string }).formula).toContain('H2/6.7*4.2')
   expect(selWs.getCell('A4').value).toBeNull() // 预编号空行不带
   await expect(page.getByTestId('selected-count')).toHaveText('已选 2 行') // 导出后选中不变
 
