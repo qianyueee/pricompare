@@ -146,11 +146,11 @@ async function buildFresh(master: MasterData, quoteEaFormulas = false): Promise<
     row.cells.forEach((v, c) => {
       if (v !== null) r.getCell(c + 1).value = v
     })
-    const quoteEa = quoteEaFormulas ? quoteEaFor(row.cells) : null
-    if (quoteEa) {
+    if (quoteEaFormulas) {
+      const quoteEa = quoteEaFor(row.cells)
       r.getCell(KK_COL.quoteEa + 1).value = {
         formula: quoteEaFormula(`H${i + 2}`, quoteEa.multiplier),
-        result: quoteEa.value,
+        result: quoteEa.value ?? '',
       }
     }
   })

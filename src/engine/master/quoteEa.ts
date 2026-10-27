@@ -47,18 +47,22 @@ export function roundQuoteEa(usd: number): number {
   return t >= 100 && m <= 10 ? t - m - 10 : t
 }
 
-/** 一行的对客报价：H 是正数才算，否则 null（U 列保持原样）；清洗等级认不出按 30 级 */
-export function quoteEaFor(cells: readonly MasterCell[]): { value: number; multiplier: number } | null {
+/**
+ * 一行的对客报价：系数按清洗等级（认不出按 30 级）；value 是 H 为数字时算好的美元价，
+ * H 空着或写的是文字时为 null——公式照样写，导出后在 Excel 里填上 H 就自动算出来
+ */
+export function quoteEaFor(cells: readonly MasterCell[]): { value: number | null; multiplier: number } {
   const h = cells[KK_COL.quoteEach]
-  if (typeof h !== 'number' || !Number.isFinite(h) || h <= 0) return null
   const grade = parseCleaningGrade(cells[KK_COL.cleaningSpec] ?? null)
   const multiplier = grade === null ? QUOTE_EA_DEFAULT_MULTIPLIER : QUOTE_EA_MULTIPLIERS[grade]
-  return { value: roundQuoteEa((h / QUOTE_EA_RATE) * multiplier), multiplier }
+  const value =
+    typeof h === 'number' && Number.isFinite(h) && h > 0 ? roundQuoteEa((h / QUOTE_EA_RATE) * multiplier) : null
+  return { value, multiplier }
 }
 
 /**
  * U 列的 Excel 公式（不带等号）。只用 Excel 2010 起都有的函数（不用 LET），WPS / Numbers 也能算；
- * 汇率和系数直接写在公式里，打开就看得到；H 改成文字（如 TDB）时显示为空而不是 #VALUE!。
+ * 汇率和系数直接写在公式里，打开就看得到；H 空着或是文字（如 TDB）时显示为空而不是 #VALUE!。
  */
 export function quoteEaFormula(hRef: string, multiplier: number): string {
   const t = `CEILING(ROUND(${hRef}/${QUOTE_EA_RATE}*${multiplier},6),10)`

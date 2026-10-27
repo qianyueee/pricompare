@@ -84,10 +84,10 @@ describe('一行的对客报价', () => {
     expect(quoteEaFor(rowWith(480, '30级'))).toEqual({ value: 290, multiplier: 4.2 }) // 300.9 → 310 → 290
   })
 
-  it('H 不是正数：不算', () => {
-    expect(quoteEaFor(rowWith('TDB', '30级'))).toBeNull()
-    expect(quoteEaFor(rowWith(null, '30级'))).toBeNull()
-    expect(quoteEaFor(rowWith(0, '30级'))).toBeNull()
+  it('H 空着或不是正数：没有值，系数照给（公式照写）', () => {
+    expect(quoteEaFor(rowWith('TDB', '30级'))).toEqual({ value: null, multiplier: 4.2 })
+    expect(quoteEaFor(rowWith(null, '10级'))).toEqual({ value: null, multiplier: 4.8 })
+    expect(quoteEaFor(rowWith(0, 'LEVEL 20'))).toEqual({ value: null, multiplier: 4.5 })
   })
 
   it('等级没写或认不出：按 30 级 ×4.2', () => {
@@ -114,7 +114,8 @@ async function makeMaster(): Promise<ArrayBuffer> {
     [480, 'SPEC # 0577777-000 LEVEL 30', null],
     [1600, '10级', null],
     [500, '不详', 333], // 认不出等级：按 4.2 算
-    ['TDB', '20级', null], // H 不是数字：不写公式
+    ['TDB', '20级', null], // H 不是数字：公式照写，结果为空
+    [null, 'LEVEL 20', null], // H 空着（每小时导入的新件）：同上，填上 H 就算
   ]
   ws.getRow(1).values = [...KK_HEADERS]
   specs.forEach(([h, z, u], i) => {
@@ -136,10 +137,10 @@ function parse(buffer: ArrayBuffer): MasterData {
 }
 
 describe('比价页「总表格式」导出：U 列写公式', () => {
-  it('以原表为模板：U 列是公式加算好的值，H 不是数字的行照原样', async () => {
+  it('以原表为模板：U 列每行都是公式，H 有数的带算好的值', async () => {
     const original = await makeMaster()
     const master = parse(original)
-    const out = await buildMasterSubsetWorkbook(master, [1, 0, 2, 3, 4], original, { quoteEaFormula: true })
+    const out = await buildMasterSubsetWorkbook(master, [1, 0, 2, 3, 4, 5], original, { quoteEaFormula: true })
     expect(out.mode).toBe('template')
 
     const wb = new ExcelJS.Workbook()
@@ -150,7 +151,11 @@ describe('比价页「总表格式」导出：U 列写公式', () => {
     expect(u(3)).toEqual({ formula: quoteEaFormula('H3', 4.2), result: 660 })
     expect(u(4)).toEqual({ formula: quoteEaFormula('H4', 4.8), result: 1150 })
     expect(u(5)).toEqual({ formula: quoteEaFormula('H5', 4.2), result: 320 })
-    expect(u(6)).toBeNull()
+    // H 不是数字：只有公式，缓存结果为空串（exceljs 读出来不带 result）
+    expect(u(6)).toEqual({ formula: quoteEaFormula('H6', 4.5) })
+    expect(u(7)).toEqual({ formula: quoteEaFormula('H7', 4.5) })
+    expect(ws.getCell('H6').value).toBe('TDB')
+    expect(ws.getCell('H7').value).toBeNull() // H 空着就空着
     // 其余列不动
     expect(ws.getCell('H3').value).toBe(1050)
     expect(ws.getCell('Z2').value).toBe('SPEC # 0577777-000 LEVEL 30')
@@ -170,12 +175,14 @@ describe('比价页「总表格式」导出：U 列写公式', () => {
 
   it('没有原文件、从零重建时也写公式', async () => {
     const master = parse(await makeMaster())
-    const out = await buildMasterSubsetWorkbook(master, [2, 3], null, { quoteEaFormula: true })
+    const out = await buildMasterSubsetWorkbook(master, [2, 3, 5], null, { quoteEaFormula: true })
     expect(out.mode).toBe('fresh')
     const wb = new ExcelJS.Workbook()
     await wb.xlsx.load(out.buffer)
     const ws = wb.worksheets[0]!
     expect(ws.getCell('U2').value).toEqual({ formula: quoteEaFormula('H2', 4.8), result: 1150 })
     expect(ws.getCell('U3').value).toEqual({ formula: quoteEaFormula('H3', 4.2), result: 320 })
+    expect(ws.getCell('H4').value).toBeNull()
+    expect((ws.getCell('U4').value as { formula: string }).formula).toBe(quoteEaFormula('H4', 4.5))
   })
 })
