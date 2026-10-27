@@ -19,7 +19,7 @@ import { KK_COL } from '../export/kkLayout'
 export interface SubsetExportOptions {
   /**
    * U 列 Quote (EA) 写成按 H 列和清洗等级算美元报价的公式（比价页导出用，见 quoteEa.ts）；
-   * 算不出的行（H 不是数字、清洗等级认不出）U 列照总表原样
+   * H 不是数字的行 U 列照总表原样
    */
   quoteEaFormula?: boolean
 }

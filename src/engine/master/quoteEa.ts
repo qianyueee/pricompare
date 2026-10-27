@@ -3,7 +3,7 @@ import type { MasterCell } from './model'
 
 /**
  * 对客美元报价 U 列「Quote (EA)」的公式（比价页「导出表格 → 总表格式」用）：
- * H 列 Quote (each)（人民币）÷ 6.7 换成美元，按 Z 列清洗等级乘系数（30 级 ×4.2、20 级 ×4.5、10 级 ×4.8），
+ * H 列 Quote (each)（人民币）÷ 6.7 换成美元，按 Z 列清洗等级乘系数（30 级 ×4.2、20 级 ×4.5、10 级 ×4.8，没写等级按 ×4.2），
  * 再向上取整到十位；取整后落在整百附近（尾数 00 或 10，如 300、310）的归到下面的 90（290）。
  * 例：658.2 → 660；296 → 300 → 290；304 → 310 → 290；1005 → 1010 → 990；95 → 100 → 90；8 → 10。
  */
@@ -11,6 +11,9 @@ export const QUOTE_EA_RATE = 6.7
 
 /** 清洗等级 → 系数 */
 export const QUOTE_EA_MULTIPLIERS: Readonly<Record<CleaningGrade, number>> = { 30: 4.2, 20: 4.5, 10: 4.8 }
+
+/** 清洗要求里没写 10/20/30 级（不详、0099999、CLASS GP、空着等）时的系数：按 30 级算（Zane 2026-10-27） */
+export const QUOTE_EA_DEFAULT_MULTIPLIER = QUOTE_EA_MULTIPLIERS[30]
 
 export type CleaningGrade = 10 | 20 | 30
 
@@ -44,13 +47,12 @@ export function roundQuoteEa(usd: number): number {
   return t >= 100 && m <= 10 ? t - m - 10 : t
 }
 
-/** 一行能算出的对客报价：H 是正数、清洗等级认得出才算，否则 null（U 列保持原样） */
+/** 一行的对客报价：H 是正数才算，否则 null（U 列保持原样）；清洗等级认不出按 30 级 */
 export function quoteEaFor(cells: readonly MasterCell[]): { value: number; multiplier: number } | null {
   const h = cells[KK_COL.quoteEach]
   if (typeof h !== 'number' || !Number.isFinite(h) || h <= 0) return null
   const grade = parseCleaningGrade(cells[KK_COL.cleaningSpec] ?? null)
-  if (grade === null) return null
-  const multiplier = QUOTE_EA_MULTIPLIERS[grade]
+  const multiplier = grade === null ? QUOTE_EA_DEFAULT_MULTIPLIER : QUOTE_EA_MULTIPLIERS[grade]
   return { value: roundQuoteEa((h / QUOTE_EA_RATE) * multiplier), multiplier }
 }
 

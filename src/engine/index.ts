@@ -59,6 +59,7 @@ export { type SubsetExportOptions } from './master/subsetExport'
 export {
   QUOTE_EA_RATE,
   QUOTE_EA_MULTIPLIERS,
+  QUOTE_EA_DEFAULT_MULTIPLIER,
   parseCleaningGrade,
   roundQuoteEa,
   quoteEaFor,
