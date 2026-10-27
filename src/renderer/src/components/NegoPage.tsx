@@ -219,10 +219,11 @@ export default function NegoPage() {
     }
   }
 
-  // 总表格式：每个零件导出它取价的那一行（汇总表里的整行，按比价页的顺序）
+  // 总表格式：每个零件导出它取价的那一行（汇总表里的整行，按比价页的顺序）；
+  // U 列 Quote (EA) 写成按 H 列 ÷6.7 × 清洗等级系数算美元报价的公式
   const onExportMasterFormat = () => {
     setMenu(null)
-    void exportMasterRows(pricedRowIdxs(), `NEGO_${todayBatch()}_总表格式`)
+    void exportMasterRows(pricedRowIdxs(), `NEGO_${todayBatch()}_总表格式`, { quoteEaFormula: true })
   }
 
   const exportBusy = exportingNego || exportingMaster
