@@ -23,7 +23,7 @@
    「导出表格」可选**比价表**（就是这页的 NEGO 布局）或**总表格式**（每个零件取价的那一行，列和样式同汇总表；
    U 列 Quote (EA) 写成美元报价公式：H ÷ 6.7 × 清洗等级系数（30 级 4.2、20 级 4.5、10 级 4.8），向上取到十位，
    尾数 00、10 的归到下面的 90，如 304 → 310 → 290；Z 列没写 10/20/30 级的按 4.2；
-   每行都写公式，H 空着时 U 显示为空，在 Excel 里填上 H 就算出来）
+   每行都写公式，H 空着时 U 显示为空，在 Excel 里填上 H 就算出来；网页和桌面版的表格里不显示 U 列，复制时 U 列留空占位）
 5. **导出**：「导出汇总表」→ 以你上传的原工作簿为底，只更新汇总数据区——NEGO 等 sheet、
    列宽样式原样保留，可直接替换你现有的汇总文件；
    只导出几行（「导出所选」、比价页「总表格式」）时生成只有汇总这一张 sheet 的新 .xlsx：
@@ -108,7 +108,7 @@ node dist-server/cli.mjs --help                           # 全部命令
 - 数据目录：`master.json`（总表 + 版本）、`master-file.json`（导出底版）、`store/`（供应商、映射模板）、
   `history/YYYY-MM.jsonl`（每步改动：谁、何时、怎么撤销）、`snapshots/`（每天第一次改动前和整表导入前的整表，保留 60 天）；
 - 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Tailscale Serve 来的按登录名查
-  `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列；
+  `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列（U 列对客价谁都不显示）；
 - 只给自己的 tailnet 用时可以走 Tailscale Serve（不对公网）：`tailscale serve --bg --https=8443 http://127.0.0.1:8790`，
   再把本机的 `xxx.ts.net` 名加进 `hosts`、把 Tailscale 登录名加进 `editors` / `viewers`。没配密码时 Funnel（公网）来的请求一律拒绝；
 - 要从没装 Tailscale 的设备打开时，改用 Funnel（公网）加密码：`tailscale funnel --bg --https=8443 http://127.0.0.1:8790`，

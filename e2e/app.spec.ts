@@ -56,7 +56,10 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(page.locator('[data-cell="0:10"]')).toHaveText('45')
   await expect(page.locator('[data-cell="0:22"]')).toHaveText('22Days/3 weeks+cleaning')
   await expect(page.locator('[data-cell="0:7"]')).toHaveText('45')
-  await expect(page.locator('[data-cell="0:20"]')).toHaveText('31')
+  // U 列对客价表格里不显示（只在导出的 Excel 里按公式算）
+  await expect(page.locator('[data-cell="0:20"]')).toHaveCount(0)
+  await expect(page.locator('th[data-colh="20"]')).toHaveCount(0)
+  await expect(page.locator('th[data-colh="19"]')).toHaveCount(1)
   // 新增行落在预编号空行（批次写入 B 列）
   await expect(page.locator('[data-cell="2:3"]')).toHaveText(FIXTURE_PNS[1]!)
   await expect(page.locator('[data-cell="2:1"]')).toHaveText('20260816 Test')

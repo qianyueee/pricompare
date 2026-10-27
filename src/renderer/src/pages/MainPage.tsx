@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   KK_COL_COUNT,
-  VIEWER_HIDDEN_COLS,
   copyColumns,
   copyRowCells,
+  hiddenColsFor,
   isDataRow,
   masterRowsToTsv,
   toExcelTsv,
@@ -14,8 +14,6 @@ import { todayBatch, useSession } from '../store/session'
 import { copyText } from '../utils/clipboard'
 
 const ALL_EDIT_COLS = Array.from({ length: KK_COL_COUNT - 1 }, (_, i) => i + 1) // B..AH（A 列序号不参与清空）
-
-const NO_HIDDEN_COLS: ReadonlySet<number> = new Set()
 
 export default function MainPage() {
   const files = useSession((s) => s.files)
@@ -34,7 +32,7 @@ export default function MainPage() {
   const showToast = useSession((s) => s.showToast)
   const ready = useSession((s) => s.ready)
   const readOnly = useSession((s) => s.role !== 'editor')
-  const hiddenCols = readOnly ? VIEWER_HIDDEN_COLS : NO_HIDDEN_COLS
+  const hiddenCols = hiddenColsFor(readOnly) // U 列对客价谁都不显示；只读账号再藏 O、P、Q、S
   const inputRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   const [batchFilter, setBatchFilter] = useState('')
@@ -172,7 +170,7 @@ export default function MainPage() {
 
   const copySelection = useCallback(async () => {
     const vis = visibleRef.current
-    // 隐藏列（只读账号的 O、P、Q、S）夹在选中列中间时照样占一列、内容留空：贴进汇总表 Excel 时列对得上
+    // 隐藏列（U 列对客价、只读账号的 O、P、Q、S）夹在选中列中间时照样占一列、内容留空：贴进汇总表 Excel 时列对得上
     const matrix = (rowsToCopy: typeof vis, isSelected: (c: number) => boolean) => {
       const cols = copyColumns(isSelected, hiddenCols, KK_COL_COUNT)
       return rowsToCopy.map((it) => copyRowCells(it.row.cells, cols, hiddenCols))

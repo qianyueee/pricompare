@@ -69,6 +69,7 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await expect(tony.locator('[data-cell="0:14"]')).toHaveCount(0) // O
   await expect(tony.locator('[data-cell="0:18"]')).toHaveCount(0) // S
   await expect(tony.locator('[data-cell="0:17"]')).toHaveCount(1) // R 材料费照常显示
+  await expect(tony.locator('[data-cell="0:20"]')).toHaveCount(0) // U 对客价谁都不显示
   await tony.locator('[data-cell="0:10"]').click()
   await expect(tony.getByTestId('cell-editor')).toHaveCount(0)
 

@@ -98,4 +98,13 @@ export {
   type OpResult,
   type MergeSummary,
 } from './master/ops'
-export { VIEWER_HIDDEN_COLS, copyColumns, copyRowCells, masterRowsToTsv, tsvCell, toExcelTsv } from './master/copy'
+export {
+  ALWAYS_HIDDEN_COLS,
+  VIEWER_HIDDEN_COLS,
+  copyColumns,
+  copyRowCells,
+  hiddenColsFor,
+  masterRowsToTsv,
+  tsvCell,
+  toExcelTsv,
+} from './master/copy'
