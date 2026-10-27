@@ -1,3 +1,4 @@
+import { KK_COL } from '../export/kkLayout'
 import { KK_COL_COUNT, type MasterCell, type MasterRow } from './model'
 
 /**
@@ -11,6 +12,19 @@ import { KK_COL_COUNT, type MasterCell, type MasterRow } from './model'
 
 /** 只读账号（Tony）看不到的列：和发给他的 Excel 一样隐藏 O、P、Q、S */
 export const VIEWER_HIDDEN_COLS: ReadonlySet<number> = new Set([14, 15, 16, 18])
+
+/**
+ * 表格里谁都看不到的列：U 列对客价 Quote (EA)。这一列只在导出的 Excel 里按 H 列和清洗等级写公式算，
+ * 网页上存的旧值不再对，所以不显示（Zane 2026-10-27）；复制时同样留空占位。
+ */
+export const ALWAYS_HIDDEN_COLS: ReadonlySet<number> = new Set([KK_COL.quoteEa])
+
+const VIEWER_ALL_HIDDEN: ReadonlySet<number> = new Set([...VIEWER_HIDDEN_COLS, ...ALWAYS_HIDDEN_COLS])
+
+/** 表格不显示的列：只读账号再加上 O、P、Q、S */
+export function hiddenColsFor(readOnly: boolean): ReadonlySet<number> {
+  return readOnly ? VIEWER_ALL_HIDDEN : ALWAYS_HIDDEN_COLS
+}
 
 /**
  * 要复制的列（0 基、升序）：选中的可见列，加上左右最近的可见列都选中的隐藏列。

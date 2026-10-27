@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  VIEWER_HIDDEN_COLS,
   buildNegoSummary,
   buildNegoWorkbook,
   carryQtyFor,
+  hiddenColsFor,
   masterRowsToTsv,
   minQtyFor,
   negoToTsv,
@@ -191,13 +191,13 @@ export default function NegoPage() {
     )
   }
 
-  // 总表格式复制：汇总表整行、34 列位置不变（只读账号看不到的 O、P、Q、S 留空），直接贴进汇总表 Excel 列对得上
+  // 总表格式复制：汇总表整行、34 列位置不变（表格里不显示的 U 列对客价、只读账号的 O、P、Q、S 留空），直接贴进汇总表 Excel 列对得上
   const onCopyMasterFormat = async () => {
     setMenu(null)
     if (!master) return
     const picked = pricedRowIdxs().flatMap((i) => (master.rows[i] ? [master.rows[i]] : []))
     if (picked.length === 0) return
-    const ok = await copyText(masterRowsToTsv(picked, readOnly ? VIEWER_HIDDEN_COLS : new Set<number>()))
+    const ok = await copyText(masterRowsToTsv(picked, hiddenColsFor(readOnly)))
     showToast(
       ok
         ? { message: `已复制 ${picked.length} 行（汇总表格式），可直接粘贴进汇总表` }

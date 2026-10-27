@@ -6,6 +6,7 @@ import {
   VIEWER_HIDDEN_COLS,
   copyColumns,
   copyRowCells,
+  hiddenColsFor,
   masterRowsToTsv,
   toExcelTsv,
   tsvCell,
@@ -105,6 +106,21 @@ describe('复制成表格：贴进汇总表 Excel 时列对得上', () => {
     expect(viewer[0]![5]).toBe('BRACKET,\nAPO')
     const editor = await parseLikeExcel(masterRowsToTsv(rows, NONE))
     expect(editor[0]![15]).toBe('v15')
+  })
+
+  it('U 列对客价表格里谁都不显示：复制时留空占位，其余列照常', async () => {
+    expect([...hiddenColsFor(false)]).toEqual([20])
+    expect([...hiddenColsFor(true)].sort((a, b) => a - b)).toEqual([14, 15, 16, 18, 20])
+    const rows: MasterRow[] = [{ cells: fullRow((c) => `v${c}`) }]
+    const editor = await parseLikeExcel(masterRowsToTsv(rows, hiddenColsFor(false)))
+    expect(editor[0]).toHaveLength(KK_COL_COUNT)
+    expect(editor[0]![20]).toBe('')
+    expect([15, 19, 21].map((c) => editor[0]![c])).toEqual(['v15', 'v19', 'v21'])
+    const viewer = await parseLikeExcel(masterRowsToTsv(rows, hiddenColsFor(true)))
+    expect([14, 15, 16, 18, 20].map((c) => viewer[0]![c])).toEqual(['', '', '', '', ''])
+    expect(viewer[0]![19]).toBe('v19')
+    // 框选 T..V：中间的 U 占位留空
+    expect(copyColumns((c) => c >= 19 && c <= 21, hiddenColsFor(false), KK_COL_COUNT)).toEqual([19, 20, 21])
   })
 
   it('单格写法：和 Excel 自己复制出来的一样', () => {
