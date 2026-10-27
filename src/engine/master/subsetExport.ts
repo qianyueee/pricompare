@@ -18,8 +18,8 @@ import { KK_COL } from '../export/kkLayout'
 
 export interface SubsetExportOptions {
   /**
-   * U 列 Quote (EA) 写成按 H 列和清洗等级算美元报价的公式（比价页导出用，见 quoteEa.ts）；
-   * H 不是数字的行 U 列照总表原样
+   * U 列 Quote (EA) 每行都写成按 H 列和清洗等级算美元报价的公式（比价页导出用，见 quoteEa.ts）；
+   * H 空着的行公式结果为空，导出后在 Excel 里填上 H 就算出来
    */
   quoteEaFormula?: boolean
 }
@@ -168,7 +168,11 @@ export function subsetMasterWorkbook(
       if (quoteEa && c === KK_COL.quoteEa) {
         // 公式 + 算好的值（不重算的查看器里也显示得出来）
         const f = quoteEaFormula(`${colLetter(physCol[KK_COL.quoteEach]!)}${excelRow}`, quoteEa.multiplier)
-        body += `<c r="${ref}"${s ? ` s="${s}"` : ''}><f>${xmlEscape(f)}</f><v>${quoteEa.value}</v></c>`
+        const sAttr = s ? ` s="${s}"` : ''
+        body +=
+          quoteEa.value === null
+            ? `<c r="${ref}"${sAttr} t="str"><f>${xmlEscape(f)}</f><v></v></c>` // H 空着：公式结果为空
+            : `<c r="${ref}"${sAttr}><f>${xmlEscape(f)}</f><v>${quoteEa.value}</v></c>`
         continue
       }
       if (v === null && s === null) continue
