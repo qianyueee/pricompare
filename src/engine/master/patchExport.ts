@@ -1,7 +1,9 @@
 import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
+import { KK_COL } from '../export/kkLayout'
 import { KK_COL_COUNT, isDataRow, parseMasterWorkbookDetailed, type MasterCell, type MasterData } from './model'
+import { quoteEaCellXml } from './quoteEa'
 
 /**
  * zip 级"外科手术"导出：原工作簿每个字节原样保留，只把【确实改过的单元格】
@@ -108,7 +110,21 @@ export function isMacroEnabledWorkbook(buffer: ArrayBuffer): boolean {
   }
 }
 
-export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuffer): PatchResult | null {
+export interface PatchOptions {
+  /** U 列 Quote (EA) 每个数据行都写成美元报价公式（见 quoteEa.ts） */
+  quoteEaFormula?: boolean
+}
+
+/** 要写进补丁的单元格：普通值，或 U 列公式（带上这一行的值，算缓存结果用） */
+type PatchValue = MasterCell | { quoteEaOf: readonly MasterCell[]; hRef: string }
+
+const ROW_RE = /<row\b[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g
+
+export function patchMasterWorkbook(
+  master: MasterData,
+  originalBuffer: ArrayBuffer,
+  opts: PatchOptions = {},
+): PatchResult | null {
   const files = unzipSync(new Uint8Array(originalBuffer))
   const sheetPath = findSheetPath(files, master.sheetName)
   if (!sheetPath || !files[sheetPath]) return null
@@ -121,13 +137,28 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
   // 变更集（与导入时同一条解析管线比对，未动的单元格绝不触碰）
   const norm = (v: MasterCell | undefined): MasterCell =>
     v === undefined || v === null || (typeof v === 'string' && v.trim() === '') ? null : v
-  const changes = new Map<number, Map<number, MasterCell>>()
+  const changes = new Map<number, Map<number, PatchValue>>()
   let changedCells = 0
   const maxLen = Math.max(master.rows.length, origRows.length)
+  const quoteEaPhys = physCol[KK_COL.quoteEa]
+  const quoteEachPhys = physCol[KK_COL.quoteEach]
+  if (opts.quoteEaFormula && (quoteEaPhys == null || quoteEachPhys == null)) return null
   for (let i = 0; i < maxLen; i++) {
     const cur = master.rows[i]
     const orig = origRows[i]
+    // U 列公式：每个数据行都写（不管值变没变）
+    const withFormula = opts.quoteEaFormula === true && cur !== undefined && isDataRow(cur)
+    if (withFormula) {
+      let rowMap = changes.get(i + 2)
+      if (!rowMap) {
+        rowMap = new Map()
+        changes.set(i + 2, rowMap)
+      }
+      rowMap.set(quoteEaPhys!, { quoteEaOf: cur.cells, hRef: `${colLetter(quoteEachPhys!)}${i + 2}` })
+      changedCells++
+    }
     for (let c = 0; c < KK_COL_COUNT; c++) {
+      if (withFormula && c === KK_COL.quoteEa) continue
       const a = norm(orig?.cells[c])
       const b = norm(cur?.cells[c])
       if (a === b) continue
@@ -176,38 +207,45 @@ export function patchMasterWorkbook(master: MasterData, originalBuffer: ArrayBuf
     }
   }
 
+  const cellXml = (ref: string, s: string | null, val: PatchValue): string =>
+    val !== null && typeof val === 'object'
+      ? quoteEaCellXml(ref, s, val.hRef, val.quoteEaOf)
+      : buildCellXml(ref, s, val)
+
+  // 一遍扫完所有行，只改有变更的行（整表写 U 列公式时上千行要改，逐行全文查找太慢）
   let formulaCellsReplaced = 0
-  const sortedRows = [...changes.entries()].sort((x, y) => x[0] - y[0])
-  const appendRows: string[] = []
-  for (const [excelRow, rowMap] of sortedRows) {
-    const rowRe = new RegExp(`<row r="${excelRow}"[^>]*(?:/>|>[\\s\\S]*?</row>)`)
-    const m = xml.match(rowRe)
-    if (m) {
-      const rowXml = m[0]
-      const selfClosing = /\/>$/.test(rowXml) && !rowXml.includes('</row>')
-      let openTag = rowXml.match(/^<row\b[^>]*?\/?>/)![0]
-      if (selfClosing) openTag = `${openTag.slice(0, -2)}>`
-      const cells = selfClosing ? new Map<number, string>() : parseRowCells(rowXml)
-      for (const [col, val] of rowMap) {
-        const ref = `${colLetter(col)}${excelRow}`
-        const existing = cells.get(col)
-        let s: string | null = colStyle.get(col) ?? null
-        if (existing) {
-          const cellOpen = existing.slice(0, existing.indexOf('>') + 1)
-          s = attrOf(cellOpen, 's') ?? s
-          if (/<f[\s>/]/.test(existing)) formulaCellsReplaced++
-        }
-        cells.set(col, buildCellXml(ref, s, val))
+  const pending = new Map(changes)
+  xml = xml.replace(ROW_RE, (rowXml) => {
+    let openTag = rowXml.match(/^<row\b[^>]*?\/?>/)![0]
+    const excelRow = Number(attrOf(openTag, 'r'))
+    const rowMap = pending.get(excelRow)
+    if (!rowMap) return rowXml
+    pending.delete(excelRow)
+    const selfClosing = /\/>$/.test(rowXml) && !rowXml.includes('</row>')
+    if (selfClosing) openTag = `${openTag.slice(0, -2)}>`
+    const cells = selfClosing ? new Map<number, string>() : parseRowCells(rowXml)
+    for (const [col, val] of rowMap) {
+      const ref = `${colLetter(col)}${excelRow}`
+      const existing = cells.get(col)
+      let s: string | null = colStyle.get(col) ?? null
+      if (existing) {
+        const cellOpen = existing.slice(0, existing.indexOf('>') + 1)
+        s = attrOf(cellOpen, 's') ?? s
+        if (/<f[\s>/]/.test(existing)) formulaCellsReplaced++
       }
-      const body = [...cells.entries()].sort((x, y) => x[0] - y[0]).map(([, c]) => c).join('')
-      xml = xml.replace(rowXml, `${openTag}${body}</row>`)
-    } else {
-      const body = [...rowMap.entries()]
-        .sort((x, y) => x[0] - y[0])
-        .map(([col, val]) => buildCellXml(`${colLetter(col)}${excelRow}`, colStyle.get(col) ?? null, val))
-        .join('')
-      appendRows.push(`<row r="${excelRow}"${styleRowAttrs}>${body}</row>`)
+      cells.set(col, cellXml(ref, s, val))
     }
+    const body = [...cells.entries()].sort((x, y) => x[0] - y[0]).map(([, c]) => c).join('')
+    return `${openTag}${body}</row>`
+  })
+  // 原表里没有的行（新增行）追加到末尾
+  const appendRows: string[] = []
+  for (const [excelRow, rowMap] of [...pending.entries()].sort((x, y) => x[0] - y[0])) {
+    const body = [...rowMap.entries()]
+      .sort((x, y) => x[0] - y[0])
+      .map(([col, val]) => cellXml(`${colLetter(col)}${excelRow}`, colStyle.get(col) ?? null, val))
+      .join('')
+    appendRows.push(`<row r="${excelRow}"${styleRowAttrs}>${body}</row>`)
   }
   if (appendRows.length > 0) {
     if (xml.includes('</sheetData>')) xml = xml.replace('</sheetData>', `${appendRows.join('')}</sheetData>`)
