@@ -6,7 +6,7 @@ import { useSession } from '../store/session'
 
 /** 34 列的紧凑中文表头（Excel 列字母另行小字显示） */
 const COL_LABELS = [
-  'No.', '批次', 'Item', 'P/N', 'Rev', '描述', '数量', '选定价',
+  'No.', '批次', 'Item', 'P/N', 'Rev', '描述', '数量', '平均价',
   'Mao', 'HC', 'SKW', 'CL', 'BY', 'JM', 'US$', 'USD',
   'Cleaning', '材料费', '运费+税', 'Cost', '对客价', '报价单号', '交期',
   '材料', '表面处理', '清洗', '工艺', '尺寸', 'Type', '备注', '备注2', 'Base P/N', 'YJ', 'Base ID',
