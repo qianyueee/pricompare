@@ -52,10 +52,10 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(firstRow).toContainText('20260816 Test')
   await expect(firstRow).toContainText(FIXTURE_PNS[1]!)
 
-  // 合并结果：K=45、W 按列序拼接、H/U 取自 KV 家（带对客报价）
+  // 合并结果：K=45、W 按列序拼接、H = 两家平均 (56.7 + 45) / 2 = 50.85 向上取整
   await expect(page.locator('[data-cell="0:10"]')).toHaveText('45')
   await expect(page.locator('[data-cell="0:22"]')).toHaveText('22Days/3 weeks+cleaning')
-  await expect(page.locator('[data-cell="0:7"]')).toHaveText('45')
+  await expect(page.locator('[data-cell="0:7"]')).toHaveText('51')
   // U 列对客价表格里不显示（只在导出的 Excel 里按公式算）
   await expect(page.locator('[data-cell="0:20"]')).toHaveCount(0)
   await expect(page.locator('th[data-colh="20"]')).toHaveCount(0)
@@ -69,6 +69,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await page.getByTestId('cell-editor').fill('60')
   await page.keyboard.press('Enter')
   await expect(page.locator('[data-cell="0:9"]')).toHaveText('60')
+  await expect(page.locator('[data-cell="0:7"]')).toHaveText('53') // H 跟着重算：(60 + 45) / 2 = 52.5
   await expect(page.getByText('（有未导出更改）')).toBeVisible()
 
   // 导出：以原工作簿为底，NEGO 透传、编辑与合并结果写回
@@ -82,7 +83,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   const ws = wb.getWorksheet('KK询价汇总')!
   expect(ws.getCell('J2').value).toBe(60)
   expect(ws.getCell('K2').value).toBe(45)
-  expect(ws.getCell('H2').value).toBe(45)
+  expect(ws.getCell('H2').value).toBe(53)
   expect(ws.getCell('W2').value).toBe('22Days/3 weeks+cleaning')
   expect(ws.getCell('V2').value).toBe('KV202607133')
   expect(ws.getCell('D4').value).toBe(FIXTURE_PNS[1]) // 新增行占用预编号行、A 序号保留

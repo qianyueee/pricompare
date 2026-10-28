@@ -135,10 +135,11 @@ describe('pricompare 服务', () => {
   it('改格：版本 +1，写进 master.json 和历史，重启后还在', async () => {
     const r = await postOp(1, { kind: 'setCells', cells: [{ row: 1, col: 10, value: 88 }] })
     expect(r.status).toBe(200)
-    expect(r.body).toMatchObject({ applied: true, version: 2, changedCells: 1 })
+    expect(r.body).toMatchObject({ applied: true, version: 2, changedCells: 2 }) // K 列 + H 跟着重算
     const saved = JSON.parse(await readFile(join(dir, 'data', 'master.json'), 'utf8'))
     expect(saved.version).toBe(2)
     expect(saved.master.rows[1].cells[10]).toBe(88)
+    expect(saved.master.rows[1].cells[7]).toBe(88) // H = 各家平均（只有 K 一家）
     const hist = await call('GET', '/api/history?limit=5')
     expect((hist.body as { summary: string }[]).map((h) => h.summary)).toEqual(['改 1 格', '整表更新：KK询价汇总表20261012.xlsm'])
     await stop()

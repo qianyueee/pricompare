@@ -1,6 +1,8 @@
 import { applyMerge, planMerge, type MergeOptions, type MergePlan } from './merge'
 import { deleteMasterRows } from './edit'
 import { KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
+import { nextQuoteEach } from './quoteEach'
+import { KK_COL, isKkVendorCol } from '../export/kkLayout'
 import type { QuoteRow } from '../types'
 
 /**
@@ -15,7 +17,10 @@ export interface CellChange {
 }
 
 export type MasterOp =
-  /** 改格 / 清空 / 撤销改格：逐格写入（col 0 序号也可写，供撤销还原） */
+  /**
+   * 改格 / 清空 / 撤销改格：逐格写入（col 0 序号也可写，供撤销还原）。
+   * 改了供应商价的行，H 按各家报价平均自动重算；同一次里明确写了 H 的行（手改 H、撤销）按写的值
+   */
   | { kind: 'setCells'; cells: CellChange[] }
   /** 删除整行，A 列序号重排 */
   | { kind: 'deleteRows'; rows: number[] }
@@ -54,6 +59,9 @@ function emptyCells(): MasterCell[] {
 function setCells(master: MasterData, changes: CellChange[]): OpResult {
   const rows = [...master.rows]
   const touched = new Map<number, MasterRow>()
+  const original = new Map<number, readonly MasterCell[]>()
+  const explicitH = new Set<number>()
+  const vendorChanged = new Set<number>()
   const inverse: CellChange[] = []
   for (const ch of changes) {
     if (ch.col < 0 || ch.col >= KK_COL_COUNT || ch.row < 0) continue
@@ -63,21 +71,37 @@ function setCells(master: MasterData, changes: CellChange[]): OpResult {
     }
     let row = touched.get(ch.row)
     if (!row) {
+      original.set(ch.row, rows[ch.row]!.cells)
       row = { cells: [...rows[ch.row]!.cells] }
       while (row.cells.length < KK_COL_COUNT) row.cells.push(null)
       touched.set(ch.row, row)
       rows[ch.row] = row
     }
+    if (ch.col === KK_COL.quoteEach) explicitH.add(ch.row)
     const before = row.cells[ch.col] ?? null
     if (before === ch.value) continue
     inverse.push({ row: ch.row, col: ch.col, value: before })
     row.cells[ch.col] = ch.value
+    if (isKkVendorCol(ch.col)) vendorChanged.add(ch.row)
   }
-  if (inverse.length === 0) return { master, inverse: null, changedCells: 0 }
+  let changedCells = inverse.length
+  // 供应商价变了的行，H 按各家报价平均重算。撤销里总带上这一行原来的 H：
+  // 明确写了 H 的操作不再重算，撤销后 H 和改之前一模一样（哪怕原来的 H 不是平均价）
+  for (const r of vendorChanged) {
+    if (explicitH.has(r)) continue
+    const row = touched.get(r)!
+    const h = row.cells[KK_COL.quoteEach] ?? null
+    inverse.push({ row: r, col: KK_COL.quoteEach, value: h })
+    const next = nextQuoteEach(original.get(r)!, row.cells)
+    if (next === undefined) continue
+    row.cells[KK_COL.quoteEach] = next
+    changedCells += 1
+  }
+  if (changedCells === 0) return { master, inverse: null, changedCells: 0 }
   return {
     master: { ...master, rows },
     inverse: { kind: 'setCells', cells: inverse.reverse() },
-    changedCells: inverse.length,
+    changedCells,
   }
 }
 
@@ -124,6 +148,10 @@ function merge(master: MasterData, quotes: QuoteRow[], options: MergeOptions): O
   for (const a of plan.actions) {
     if (a.rowIndex >= base) continue // 追加到表尾的新行，撤销时整行删掉
     for (const ch of a.changes) inverse.push({ row: a.rowIndex, col: ch.col, value: ch.from })
+    // 改了供应商价但 H 没变（已是平均价）的行，撤销时也写回原 H，免得撤销那一步又按平均重算
+    if (a.changes.some((ch) => isKkVendorCol(ch.col)) && !a.changes.some((ch) => ch.col === KK_COL.quoteEach)) {
+      inverse.push({ row: a.rowIndex, col: KK_COL.quoteEach, value: master.rows[a.rowIndex]!.cells[KK_COL.quoteEach] ?? null })
+    }
   }
   const appended = Array.from({ length: next.rows.length - base }, (_, i) => base + i)
   const undo: MasterOp[] = []

@@ -11,6 +11,7 @@ import { cleanAmountString, cleanMasterAmounts } from '../engine/master/clean'
 import { planMerge, type MergeOptions, type MergePlan } from '../engine/master/merge'
 import { isDataRow, isPlaceholderRow, parseMasterWorkbook, type MasterCell, type MasterData } from '../engine/master/model'
 import type { CellChange, MasterOp } from '../engine/master/ops'
+import { recalcQuoteEachChanges } from '../engine/master/quoteEach'
 import { parseLeadTime } from '../engine/normalize/leadtime'
 import { parsePrice } from '../engine/normalize/price'
 import type { AnalyzedSheet, ColumnMapping, Currency, FieldKey, QuoteRow } from '../engine/types'
@@ -45,6 +46,10 @@ const HELP = `用法：node cli.mjs <命令> [参数]
                                            查总表行（Excel 行号、各家价格、单号、交期、备注）
   set --row R --col C --value V [--expect-pn P] [--append] [--text]
   set --cells <cells.json>                 改格：R 是 Excel 行号，C 是列字母；--append 追加（备注用「; 」连接）
+                                           改了供应商价的行 H 自动按各家报价平均重算（同一次也改 H 的按写的值）
+  recalc-h [--only-empty] [--dry-run] [--limit N]
+                                           整表补算 H = 各家数字报价平均、向上取整到个位；--only-empty 只补空着的 H，
+                                           否则已有的数字 H 也改；H 里的文字说明不动
   hash-password                            从标准输入读密码，输出填进 config.json「password」的哈希（不连服务）
 
 识别参数：--sheet 名称  --header-row N（Excel 行号）  --price-col 列字母  --map 字段=列字母,…
@@ -79,6 +84,7 @@ const OPTIONS = {
   append: { type: 'boolean', default: false },
   text: { type: 'boolean', default: false },
   cells: { type: 'string' },
+  'only-empty': { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 } as const
 
@@ -499,6 +505,37 @@ async function setCells() {
   for (const ch of changes) out(`  ${colName(ch.col)}${excelRow(ch.row)} = ${text(ch.value)}`)
 }
 
+async function recalcH() {
+  const onlyEmpty = values['only-empty'] ?? false
+  const dryRun = values['dry-run'] ?? false
+  const limit = Number(values.limit ?? 30)
+  const snap = await call<MasterSnapshot>('GET', '/api/master')
+  const master = snap.master
+  if (!master) throw new CliError('总表是空的')
+  const list = recalcQuoteEachChanges(master.rows, onlyEmpty)
+  const filled = list.filter((c) => typeof c.from !== 'number').length
+  out(
+    `${dryRun ? '预演' : '补算'} H = 各家报价平均（向上取整）${onlyEmpty ? '，只补空着的' : ''}：` +
+      `${list.length} 格（空着的补上 ${filled}，已有的改 ${list.length - filled}），总表版本 ${snap.version}`,
+  )
+  for (const c of list.slice(0, limit)) {
+    const cells = master.rows[c.row]!.cells
+    out(`  H${excelRow(c.row)} [${text(cells[KK_COL.name])}] ${text(cells[KK_COL.pn])}：${text(c.from) || '空'} → ${c.to}`)
+  }
+  if (list.length > limit) out(`  …… 另有 ${list.length - limit} 格（--limit 看更多）`)
+  if (dryRun || list.length === 0) return
+  const op: MasterOp = {
+    kind: 'setCells',
+    cells: list.map((c) => ({ row: c.row, col: KK_COL.quoteEach, value: c.to })),
+  }
+  const res = await call<PostOpResponse>('POST', '/api/ops', { baseVersion: snap.version, opId: crypto.randomUUID(), op })
+  if (res.applied) {
+    out(`已改 ${res.changedCells} 格，总表版本 ${res.version}`)
+    if (res.version !== snap.version + 1) out('（期间总表有别的改动，再跑一次 recalc-h --dry-run 核对）')
+  } else if (res.reason === 'unchanged') out('没有变化')
+  else throw new CliError('总表刚删过行，行号可能变了；再跑一次')
+}
+
 /* ---------------- 看原表 / 询价组 ---------------- */
 
 const clip = (t: string, n = 60) => (t.length > n ? `${t.slice(0, n)}…` : t)
@@ -645,6 +682,7 @@ export async function runCli(
     } else if (cmd === 'batches') await batches()
     else if (cmd === 'rows') await rows()
     else if (cmd === 'set') await setCells()
+    else if (cmd === 'recalc-h') await recalcH()
     else if (cmd === 'hash-password') {
       const password = (await (io.stdin ?? readStdin)()).replace(/\r?\n$/, '')
       if (!password) throw new CliError('没读到密码：用法 printf %s 密码 | node cli.mjs hash-password')
