@@ -126,6 +126,7 @@ describe('pricompare 命令行', () => {
     expect(store.getVersion()).toBe(2)
     expect(cell(3, KK_COL.vendorSlotStart + 1)).toBe(FILE_B_PRICES[0]) // J3 HC
     expect(cell(3, KK_COL.vendorSlotStart + 2)).toBe(40) // K3 SKW 原值不动
+    expect(cell(3, KK_COL.quoteEach)).toBe(Math.ceil((FILE_B_PRICES[0]! + 40) / 2)) // H3 = 两家平均
     expect(master().rows).toHaveLength(10)
     expect(cell(11, KK_COL.pn)).toBe(FIXTURE_PNS[8])
     expect(cell(11, KK_COL.name)).toBe(BATCH)
@@ -195,6 +196,29 @@ describe('pricompare 命令行', () => {
     expect(cell(4, KK_COL.comment)).toBe('HC 20261013:做不了; SKW:无图纸')
     await cli('set', '--row', '4', '--col', 'K', '--value', '¥1,200')
     expect(cell(4, KK_COL.vendorSlotStart + 2)).toBe(1200)
+    expect(cell(4, KK_COL.quoteEach)).toBe(1200) // 改了供应商价，H 跟着按平均算（J 是「无」不算）
+  })
+
+  it('recalc-h：预演不改；--only-empty 只补空着的 H，不带就连已有的数字 H 一起改', async () => {
+    await store.applyOp(1, 'h', { kind: 'setCells', cells: [{ row: 1, col: KK_COL.quoteEach, value: 45 }] }, {
+      user: 'local',
+      source: 'cli',
+    })
+    const dry = await cli('recalc-h', '--only-empty', '--dry-run')
+    expect(dry.code, dry.err).toBe(0)
+    expect(dry.out).toContain('1 格（空着的补上 1，已有的改 0）')
+    expect(dry.out).toContain('H2 [20261001 Old] X-1：空 → 50')
+    expect(store.getVersion()).toBe(2)
+
+    const empty = await cli('recalc-h', '--only-empty')
+    expect(empty.code, empty.err).toBe(0)
+    expect(cell(2, KK_COL.quoteEach)).toBe(50)
+    expect(cell(3, KK_COL.quoteEach)).toBe(45) // 已有的不动
+
+    const all = await cli('recalc-h')
+    expect(all.out).toContain('H3 [20261012 Test]')
+    expect(cell(3, KK_COL.quoteEach)).toBe(40)
+    expect((await cli('recalc-h')).out).toContain('0 格')
   })
 
   it('dump 逐格打印并标出隐藏列', async () => {

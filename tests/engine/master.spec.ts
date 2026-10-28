@@ -55,7 +55,7 @@ describe('合并规则', () => {
     expect(guessBatchLabel([makeQuote('X', { quoteNo: 'KV202608151' })], 'KV202608153.xlsx')).toBe('')
   })
 
-  it('SKW 报价：填充既有行（K 列、W 追加在后、V 真单号、H/U 取自带 Quote(EA) 的文件）', async () => {
+  it('SKW 报价：填充既有行（K 列、W 追加在后、V 真单号、H = 各家平均、U 取自带 Quote(EA) 的文件）', async () => {
     const master = await loadMaster()
     const quote = makeQuote(FIXTURE_PNS[0]!, {
       qty: 10,
@@ -79,7 +79,7 @@ describe('合并规则', () => {
     expect(row.cells[10]).toBe(45) // K
     expect(row.cells[KK_COL.leadTime]).toBe('22Days/3 weeks+cleaning') // K 在 J 之后 → 追加
     expect(row.cells[KK_COL.quoteNo]).toBe('KV202608151')
-    expect(row.cells[KK_COL.quoteEach]).toBe(45) // H 只因带 quoteEa 才填
+    expect(row.cells[KK_COL.quoteEach]).toBe(51) // H = (J 56.7 + K 45) / 2 = 50.85，向上取整
     expect(row.cells[KK_COL.quoteEa]).toBe(31)
     expect(row.cells[KK_COL.material]).toBe('304')
     // 原对象不被修改
@@ -105,7 +105,7 @@ describe('合并规则', () => {
     expect(row2.cells[KK_COL.material]).toBe('蓝色/黄色PC')
   })
 
-  it('HC 报价：J 列在前 → W 前插；无 Quote(EA) 不动 H/U；批次标签不进 V', async () => {
+  it('HC 报价：J 列在前 → W 前插；H 按两家平均重算、无 Quote(EA) 不动 U；批次标签不进 V', async () => {
     const master = await loadMaster()
     // 先造一行只有 SKW 报过的行
     master.rows[0]!.cells[9] = null
@@ -128,7 +128,8 @@ describe('合并规则', () => {
     expect(row.cells[9]).toBe(56.7)
     expect(row.cells[KK_COL.leadTime]).toBe('22Days/3 weeks+cleaning') // J 在前 → 前插
     expect(row.cells[KK_COL.quoteNo]).toBeNull() // 批次标签不算真单号
-    expect(row.cells[KK_COL.quoteEach]).toBeNull() // 无 quoteEa 不填 H
+    expect(row.cells[KK_COL.quoteEach]).toBe(51) // (56.7 + 45) / 2 = 50.85 → 51，不管带没带 quoteEa
+    expect(row.cells[KK_COL.quoteEa]).toBeNull()
   })
 
   it('TDB 占位可回填 + 同零件同数量多行按材料对齐（中文/空格归一化）', () => {
@@ -166,7 +167,8 @@ describe('合并规则', () => {
     expect(merged.rows[1]!.cells[10]).toBe(6500) // SS 416 → SS-416 行
     expect(merged.rows[2]!.cells[10]).toBe(6500) // SS 303 → SS-303 行
     expect(merged.rows[0]!.cells[10]).toBe(15000) // 殷钢材料名对不上 → 兜底落剩余 Invar 行
-    expect(merged.rows[0]!.cells[7]).toBe(15000) // H 的 TDB 也被替换
+    expect(merged.rows[0]!.cells[7]).toBe(7550) // H 的 TDB 也被替换：J 100 和 K 15000 的平均
+    expect(merged.rows[1]!.cells[7]).toBe(3280) // (60 + 6500) / 2
     expect(merged.rows[1]!.cells[20]).toBe(4012) // U 对客价带入
   })
 
@@ -312,7 +314,7 @@ describe('并入智能化（0823/0826/0828 实证规则）', () => {
     expect(applyMerge(master, plan).rows[0]!.cells[6]).toBe(88)
   })
 
-  it('KV 修订：H/U 来自同家（H=修订前槽位值）时跟随更新', () => {
+  it('KV 修订：H 按新价重算平均，U 跟着修订单的 Quote(EA)', () => {
     const master = base([mk({ 0: 1, 1: 'KV1', 3: 'E-1', 6: 2, 7: 1235, 10: 1235, 20: 772 })])
     const plan = planMerge(
       master,
@@ -322,7 +324,7 @@ describe('并入智能化（0823/0826/0828 实证规则）', () => {
     expect(plan.reviseCount).toBe(1)
     const row = applyMerge(master, plan).rows[0]!
     expect(row.cells[10]).toBe(1300)
-    expect(row.cells[7]).toBe(1300) // H 跟随
+    expect(row.cells[7]).toBe(1300) // 只有凯维一家，平均就是新价
     expect(row.cells[20]).toBe(810) // U 跟随
     expect(row.cells[KK_COL.quoteNo]).toBe('KV202609011')
   })

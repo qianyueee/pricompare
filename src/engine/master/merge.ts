@@ -2,6 +2,7 @@ import { formatLeadTime } from '../normalize/leadtime'
 import { cleanAmountString } from './clean'
 import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
 import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
+import { nextQuoteEach } from './quoteEach'
 import type { QuoteRow } from '../types'
 
 /**
@@ -10,7 +11,8 @@ import type { QuoteRow } from '../types'
  *   找不到则追加（优先占用底部只有 A 列序号的预编号空行）
  * - W 交期按供应商列序拼接（HC 在 J、SKW 在 K → "18Days/3 weeks+cleaning"）
  * - V 只收真报价单号（KV202608151 这类），"询价 20260814 Natalie A" 是批次标签不进 V
- * - H 选定价 / U 对客报价：来自带 Quote(EA) 的报价文件（KV 家宏算好的），只填空不覆盖
+ * - H Quote (each)：这一行各家数字报价的平均，向上取整到个位（Zane 2026-10-28，见 quoteEach.ts），
+ *   每并入一家就重算；U 对客报价：来自带 Quote(EA) 的报价文件（KV 家宏算好的），只填空不覆盖
  * - 材料/表面处理等明细：空则填；SKW 的值可覆盖别家（观察到 KV 中文规格优先）
  *
  * 0823/0826/0828 三轮真实汇总补充的规则：
@@ -131,6 +133,20 @@ function slotEqualsQuote(cell: MasterCell | undefined, q: QuoteRow): boolean {
   return false
 }
 
+/** 该家槽位写入 price 后，H 按各家报价平均重算（槽位没变或 H 不用改时不记改动） */
+function setQuoteEach(
+  cells: readonly MasterCell[],
+  slot: number,
+  price: MasterCell,
+  set: (col: number, to: MasterCell) => void,
+): void {
+  if (cells[slot] === price) return
+  const after = [...cells]
+  after[slot] = price
+  const h = nextQuoteEach(cells, after)
+  if (h !== undefined) set(KK_COL.quoteEach, h)
+}
+
 function numericOr(v: string): MasterCell {
   const n = cleanAmountString(v)
   return n !== null ? n : v
@@ -173,9 +189,12 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (cells[col] === to) return
       changes.push({ col, from: cells[col] ?? null, to })
     }
-    // 供应商价格列
+    // 供应商价格列；H 按各家报价平均重算
     const price = priceCellValue(q)
-    if (price !== undefined) set(opts.vendorSlot, price)
+    if (price !== undefined) {
+      set(opts.vendorSlot, price)
+      setQuoteEach(cells, opts.vendorSlot, price, set)
+    }
     // 基础信息只填空
     if (isEmptyCell(cells[KK_COL.name]) && opts.batch) set(KK_COL.name, opts.batch)
     if (isEmptyCell(cells[KK_COL.item]) && q.item) set(KK_COL.item, numericOr(q.item))
@@ -183,11 +202,8 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     if (isEmptyCell(cells[KK_COL.rev]) && q.rev) set(KK_COL.rev, q.rev)
     if (isEmptyCell(cells[KK_COL.description]) && q.description) set(KK_COL.description, q.description)
     if (isEmptyCell(cells[KK_COL.qty]) && q.qty !== null) set(KK_COL.qty, q.qty)
-    // H 选定价 / U 对客报价：只有报价文件带 Quote(EA)（KV 家）才带入，且只填空（TDB 占位视同空）
-    if (q.quoteEa) {
-      if (isFillableCell(cells[KK_COL.quoteEach]) && price !== undefined) set(KK_COL.quoteEach, price)
-      if (isFillableCell(cells[KK_COL.quoteEa])) set(KK_COL.quoteEa, numericOr(q.quoteEa))
-    }
+    // U 对客报价：只有报价文件带 Quote(EA)（KV 家）才带入，且只填空（TDB 占位视同空）
+    if (q.quoteEa && isFillableCell(cells[KK_COL.quoteEa])) set(KK_COL.quoteEa, numericOr(q.quoteEa))
     // V 真报价单号
     if (q.quoteNo && isRealQuoteNo(q.quoteNo)) {
       const existing = String(cells[KK_COL.quoteNo] ?? '').trim()
@@ -252,15 +268,14 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (cells[col] === to) return
       changes.push({ col, from: cells[col] ?? null, to })
     }
-    const oldSlot = cellAmount(cells[opts.vendorSlot])
     const price = priceCellValue(q)
-    if (price !== undefined) set(opts.vendorSlot, price)
-    if (q.qty !== null && !numEq(cells[KK_COL.qty] ?? null, q.qty)) set(KK_COL.qty, q.qty)
-    // H 选定价 / U 对客报价：现 H 等于修订前该家槽位值（说明来自同一家）时才跟随更新
-    if (q.quoteEa && price !== undefined && oldSlot !== null && cellAmount(cells[KK_COL.quoteEach]) === oldSlot) {
-      set(KK_COL.quoteEach, price)
-      set(KK_COL.quoteEa, numericOr(q.quoteEa))
+    if (price !== undefined) {
+      set(opts.vendorSlot, price)
+      setQuoteEach(cells, opts.vendorSlot, price, set)
     }
+    if (q.qty !== null && !numEq(cells[KK_COL.qty] ?? null, q.qty)) set(KK_COL.qty, q.qty)
+    // U 对客报价：KV 家修订单带了新的 Quote(EA) 就跟着更新（U 只存着，导出时按 H 写公式重算）
+    if (q.quoteEa && price !== undefined) set(KK_COL.quoteEa, numericOr(q.quoteEa))
     // V 真报价单号：修订单若带新单号则拼接（沿用填充规则）
     if (q.quoteNo && isRealQuoteNo(q.quoteNo)) {
       const existing = String(cells[KK_COL.quoteNo] ?? '').trim()

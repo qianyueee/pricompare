@@ -45,9 +45,11 @@ describe('applyMasterOp 总表操作', () => {
         { row: 2, col: 11, value: 66 },
       ],
     })
-    expect(r.changedCells).toBe(3)
+    expect(r.changedCells).toBe(5) // 3 格 + 两行的 H 跟着重算
     expect(r.master.rows[0]!.cells[9]).toBe(120)
+    expect(r.master.rows[0]!.cells[7]).toBe(120)
     expect(r.master.rows[2]!.cells[11]).toBe(66)
+    expect(r.master.rows[2]!.cells[7]).toBe(66)
     expect(r.master.rows[1]).toBe(m.rows[1]) // 未改的行共用引用
     expect(m.rows[0]!.cells[9]).toBe(100)
   })
