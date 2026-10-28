@@ -109,6 +109,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   // 选中 2 行带入 + 末尾恒保一空行；最低单价高亮；各家总额与最优组合
   await expect(page.getByTestId('nego-line')).toHaveCount(3)
   await expect(nego.locator('[data-min="1"]')).toHaveCount(2)
+  await expect(page.getByTestId('nego-avg').first()).toHaveText('53') // H 平均价：(60 + 45) / 2 = 52.5 → 53
   await expect(page.getByTestId('nego-sum-9')).toContainText('1100') // HC 60×10+100×5
   await expect(page.getByTestId('nego-sum-10')).toContainText('900') // SKW 45×10+90×5
   await expect(page.getByTestId('nego-sum-optimal')).toHaveText('900')

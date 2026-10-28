@@ -62,6 +62,8 @@ export interface NegoLine {
   qty: number | null
   /** 各供应商价格列（I..N、AG）的单价；TDB/文字/空 → null */
   unit: Record<number, number | null>
+  /** 这一行 H 列 Quote (each)（各家报价平均，向上取整）原值：数字、文字说明或空 */
+  quoteEach: MasterCell
 }
 
 export function buildNegoLine(master: MasterData, rowIndex: number, qtyOverride?: number | null): NegoLine {
@@ -76,6 +78,7 @@ export function buildNegoLine(master: MasterData, rowIndex: number, qtyOverride?
     description: cellStr(cells[KK_COL.description]),
     qty: qtyOverride !== undefined ? qtyOverride : cellNum(cells[KK_COL.qty]),
     unit,
+    quoteEach: cells[KK_COL.quoteEach] ?? null,
   }
 }
 

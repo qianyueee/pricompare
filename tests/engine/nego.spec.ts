@@ -57,11 +57,12 @@ describe('pnTiers 数量档', () => {
 
 describe('buildNegoLine 取行', () => {
   const master = mkMaster([
-    row({ 3: 'P-1', 4: 'AA', 5: 'PLATE, FX', 6: 5, 8: 56.7, 9: '￥1,360.00', 10: 'TDB' }),
+    row({ 3: 'P-1', 4: 'AA', 5: 'PLATE, FX', 6: 5, 7: 709, 8: 56.7, 9: '￥1,360.00', 10: 'TDB' }),
   ])
 
-  it('槽位数值经金额清洗；TDB/空 → null；qty 可覆盖', () => {
+  it('槽位数值经金额清洗；TDB/空 → null；qty 可覆盖；带上 H 列平均价', () => {
     const line = buildNegoLine(master, 0)
+    expect(line.quoteEach).toBe(709)
     expect(line.pn).toBe('P-1')
     expect(line.rev).toBe('AA')
     expect(line.qty).toBe(5)

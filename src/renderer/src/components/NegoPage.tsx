@@ -15,7 +15,7 @@ import { api } from '../api'
 import { todayBatch, useSession } from '../store/session'
 import { copyText } from '../utils/clipboard'
 
-const fmt = (n: number | null | undefined): string => (n === null || n === undefined ? '—' : String(n))
+const fmt = (n: number | string | null | undefined): string => (n === null || n === undefined || n === '' ? '—' : String(n))
 
 const focusCell = (index: number, col: 'pn' | 'qty') => {
   const el = document.querySelector<HTMLInputElement>(`[data-ni="${index}:${col}"]`)
@@ -227,7 +227,7 @@ export default function NegoPage() {
   }
 
   const exportBusy = exportingNego || exportingMaster
-  const colCount = 5 + vendors.length * 2 + 2 + 1
+  const colCount = 5 + vendors.length * 2 + 3 + 1
 
   return (
     <div data-testid="nego-page" className="fixed inset-0 z-40 flex flex-col bg-slate-50">
@@ -373,6 +373,12 @@ export default function NegoPage() {
               ))}
               <th className="border-b-2 border-slate-300 bg-white px-2 py-2 text-right font-medium text-green-700">
                 最低单价(¥)
+              </th>
+              <th
+                title="汇总表 H 列：各家报价平均，向上取整到个位"
+                className="border-b-2 border-slate-300 bg-white px-2 py-2 text-right font-medium text-blue-700"
+              >
+                H 平均价(¥)
               </th>
               {vendors.map((v) => (
                 <th key={`t${v.slot}`} className="border-b-2 border-slate-300 bg-slate-50 px-2 py-2 text-right font-medium text-slate-600">
@@ -531,6 +537,9 @@ export default function NegoPage() {
                   <td className="border-b border-slate-100 px-2 py-1 text-right font-semibold text-green-700">
                     {sl ? fmt(sl.minUnit) : ''}
                   </td>
+                  <td data-testid="nego-avg" className="border-b border-slate-100 bg-blue-50/60 px-2 py-1 text-right font-medium">
+                    {res?.line ? fmt(res.line.quoteEach) : ''}
+                  </td>
                   {vendors.map((v) => (
                     <td key={`t${v.slot}`} className="border-b border-slate-100 bg-slate-50/60 px-2 py-1 text-right">
                       {sl ? fmt(sl.totals[v.slot] ?? null) : ''}
@@ -570,6 +579,7 @@ export default function NegoPage() {
                   合计
                 </td>
                 <td className="border-t-2 border-slate-300" />
+                <td className="border-t-2 border-slate-300" />
                 {summary.perVendor.map((v) => (
                   <td
                     key={v.slot}
@@ -595,7 +605,7 @@ export default function NegoPage() {
       </div>
 
       <div className="border-t border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
-        各家总价 = 该家单价 × 下单数量；最优总价 = 每行取最低单价 · 绿色 = 本行最低 ·
+        各家总价 = 该家单价 × 下单数量；最优总价 = 每行取最低单价 · 绿色 = 本行最低 · H 平均价 = 汇总表 H 列 ·
         「复制为表格」「导出表格」都可选比价表或总表格式（总表格式直接粘贴进汇总表列对得上）·
         汇总表选行后 Ctrl+B 也会把行带进来
       </div>
