@@ -249,10 +249,11 @@ export default function MasterTable(props: {
   selectedCols: Set<number>
   range: CellRange | null
   onToggleRow: (rowIndex: number) => void
-  /** A 列按住拖动：按可见序号区间整选行 */
-  onRowDrag: (vFrom: number, vTo: number) => void
+  /** A 列按住拖动：按可见序号区间选行，加在按下时已选的行（base）上 */
+  onRowDrag: (vFrom: number, vTo: number, base: ReadonlySet<number>) => void
   onToggleCol: (col: number) => void
-  onColDrag: (c1: number, c2: number) => void
+  /** 表头按住拖动：选 c1..c2 列，加在按下时已选的列（base）上 */
+  onColDrag: (c1: number, c2: number, base: ReadonlySet<number>) => void
   onRangeDrag: (range: CellRange) => void
   onClearSelection: () => void
 }) {
@@ -318,6 +319,8 @@ export default function MasterTable(props: {
     moved: boolean
     /** 上一次报出去的选区：鼠标在同一格里来回时不重复更新 */
     last: string
+    /** 按下时已选的行/列：这次拖的加在它上面，不取消前面选的（Zane 2026-10-30） */
+    base: ReadonlySet<number>
   } | null>(null)
 
   const cellFromEvent = (e: React.MouseEvent): { rawRow: number; col: number; v: number } | null => {
@@ -341,7 +344,15 @@ export default function MasterTable(props: {
     if (e.button !== 0) return
     const hc = colFromHeader(e)
     if (hc !== null) {
-      drag.current = { kind: 'col', startV: -1, startC: hc, rawRow: -1, moved: false, last: '' }
+      drag.current = {
+        kind: 'col',
+        startV: -1,
+        startC: hc,
+        rawRow: -1,
+        moved: false,
+        last: '',
+        base: new Set(props.selectedCols),
+      }
       e.preventDefault()
       return
     }
@@ -355,6 +366,7 @@ export default function MasterTable(props: {
       rawRow: cell.rawRow,
       moved: false,
       last: '',
+      base: cell.col === 0 ? new Set(props.selected) : NO_COLS,
     }
   }
 
@@ -372,14 +384,14 @@ export default function MasterTable(props: {
       if (hc !== d.startC) d.moved = true
       const c1 = Math.min(d.startC, hc)
       const c2 = Math.max(d.startC, hc)
-      if (d.moved) report(`${c1}:${c2}`, () => props.onColDrag(c1, c2))
+      if (d.moved) report(`${c1}:${c2}`, () => props.onColDrag(c1, c2, d.base))
       return
     }
     const cell = cellFromEvent(e)
     if (!cell) return
     if (d.kind === 'row') {
       if (cell.v !== d.startV) d.moved = true
-      if (d.moved) report(String(cell.v), () => props.onRowDrag(d.startV, cell.v))
+      if (d.moved) report(String(cell.v), () => props.onRowDrag(d.startV, cell.v, d.base))
     } else {
       if (cell.v !== d.startV || cell.col !== d.startC) d.moved = true
       if (!d.moved) return

@@ -86,10 +86,11 @@ export default function MainPage() {
     })
   }, [])
 
-  const colDrag = useCallback((c1: number, c2: number) => {
+  // 拖选行/列：加在按下时已选的上面，再拖另一段不取消前面选的（取消用单击、Esc 或 ✕）
+  const colDrag = useCallback((c1: number, c2: number, base: ReadonlySet<number>) => {
     setSelected(new Set())
     setSelRange(null)
-    const next = new Set<number>()
+    const next = new Set<number>(base)
     for (let c = Math.max(1, c1); c <= c2; c++) next.add(c)
     setSelCols(next)
   }, [])
@@ -158,11 +159,13 @@ export default function MainPage() {
   const visibleRef = useRef(visible)
   visibleRef.current = visible
 
-  const rowDrag = useCallback((vFrom: number, vTo: number) => {
+  const rowDrag = useCallback((vFrom: number, vTo: number, base: ReadonlySet<number>) => {
     setSelCols(new Set())
     setSelRange(null)
     const [a, b] = vFrom <= vTo ? [vFrom, vTo] : [vTo, vFrom]
-    setSelected(new Set(visibleRef.current.slice(a, b + 1).map((it) => it.index)))
+    const next = new Set<number>(base)
+    for (const it of visibleRef.current.slice(a, b + 1)) next.add(it.index)
+    setSelected(next)
   }, [])
 
   const selKind = selected.size > 0 ? 'rows' : selCols.size > 0 ? 'cols' : selRange ? 'range' : null
@@ -378,14 +381,14 @@ export default function MainPage() {
       <div className="text-[11px] text-slate-400">
         {readOnly ? (
           <>
-            最新批次显示在最上（导出仍按原顺序）· 按住拖动选多格 · A 列选行、表头选列（都可拖选多个）→ Ctrl+C 复制 ·
+            最新批次显示在最上（导出仍按原顺序）· 按住拖动选多格 · A 列选行、表头选列（都可拖选多个，再拖一段接着加选）→ Ctrl+C 复制 ·
             选行后可「导出所选」单独导出这几行 · Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 新报价会自动出现在表里
           </>
         ) : (
           <>
             最新批次显示在最上（导出仍按原顺序）· 单击格子编辑（Enter 保存 / Esc 取消），按住拖动选多格 ·
-            A 列选行、表头选列（都可拖选多个）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / 导出所选 / Ctrl+Z 撤销 /
+            A 列选行、表头选列（都可拖选多个，再拖一段接着加选）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / 导出所选 / Ctrl+Z 撤销 /
             Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 拖入报价按规则并入，拖入 KK 汇总表整表更新
           </>
