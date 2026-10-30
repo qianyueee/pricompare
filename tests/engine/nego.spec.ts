@@ -8,6 +8,7 @@ import {
   carryQtyFor,
   dedupeNegoLinesByPn,
   minQtyFor,
+  negoTierLines,
   negoToTsv,
   pnTiers,
   resolveNegoInput,
@@ -159,6 +160,41 @@ describe('resolveNegoInput 自由输入解析（比价页编号+数量格）', (
     expect(miss.tiers).toEqual([])
     expect(miss.usedTier).toBeNull()
     expect(miss.line).toBeNull()
+  })
+})
+
+describe('negoTierLines 显示所有数量档', () => {
+  // 9=HC(J) 10=SKW(K)
+  const master = mkMaster([
+    row({ 1: 'B1', 3: 'T-1', 4: 'AA', 6: 6, 9: 80, 10: 75 }),
+    row({ 1: 'B1', 3: 'T-1', 4: 'AA', 6: 1, 9: 100, 10: 120 }),
+    row({ 1: 'B2', 3: 'T-1', 4: 'AB', 6: 1, 9: 95 }), // 同数量再询：取这一行
+    row({ 1: 'B2', 3: 'OTHER', 6: 1, 9: 1 }),
+  ])
+
+  it('每档一行，数量取该档、按数量升序，同数量取最近一行', () => {
+    const lines = negoTierLines(master, pnTiers(master, 't-1'))
+    expect(lines.map((l) => [l.rowIndex, l.qty, l.rev, l.unit[9], l.unit[10]])).toEqual([
+      [2, 1, 'AB', 95, null],
+      [0, 6, 'AA', 80, 75],
+    ])
+  })
+
+  it('汇总按各档数量算总价，合计为各档相加', () => {
+    const s = buildNegoSummary(negoTierLines(master, pnTiers(master, 'T-1')))
+    expect(s.lines.map((l) => [l.minUnit, l.optimalTotal])).toEqual([
+      [95, 95],
+      [75, 450],
+    ])
+    expect(s.perVendor).toEqual([
+      { slot: 9, label: 'HC', sum: 575, missing: 0 }, // 95×1 + 80×6
+      { slot: 10, label: 'SKW', sum: 450, missing: 1 },
+    ])
+    expect(s.optimalSum).toBe(545)
+  })
+
+  it('没找到的编号 → 空', () => {
+    expect(negoTierLines(master, pnTiers(master, 'NOPE'))).toEqual([])
   })
 })
 

@@ -75,6 +75,7 @@ export {
   buildNegoSummary,
   negoToTsv,
   resolveNegoInput,
+  negoTierLines,
   dedupeNegoLinesByPn,
   carryQtyFor,
   tierQtys,

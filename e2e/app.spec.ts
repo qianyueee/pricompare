@@ -350,6 +350,43 @@ test('HC 阶梯省略行：第二数量档自动继承零件号并入', async ({
   await expect(page.locator('[data-cell="5:3"]')).toHaveText(FIXTURE_PNS[1]!)
   await expect(page.locator('[data-cell="5:6"]')).toHaveText('20')
   await expect(page.locator('[data-cell="5:9"]')).toHaveText('255')
+
+  // 比价页「显示所有数量档」：PN1 有 10、20 两档；先按下单 20 个比价（HC 只取 20 档 255）
+  await page.keyboard.press('Control+b')
+  const nego = page.getByTestId('nego-page')
+  await expect(nego).toBeVisible()
+  await page.getByTestId('nego-pn').first().fill(FIXTURE_PNS[1]!)
+  await page.getByTestId('nego-qty').first().fill('20')
+  await expect(page.getByTestId('nego-sum-9')).toHaveText('5100') // 255×20
+  // 勾选 → 每档一行（数量格换成档的数量），总价按各档数量算，合计为各档相加
+  await page.getByTestId('nego-allqty').check()
+  await expect(page.getByTestId('nego-tier-qty')).toHaveText(['10', '20'])
+  await expect(page.getByTestId('nego-qty')).toHaveCount(0)
+  await expect(page.getByTestId('nego-line')).toHaveCount(2) // 1 个零件 + 末尾空行
+  await expect(page.getByTestId('nego-tier-row')).toHaveCount(1)
+  await expect(page.getByTestId('nego-sum-9')).toHaveText('8500') // 340×10 + 255×20
+  await expect(nego).toContainText('1 个零件 · 2 个数量档')
+  // 末尾空行照常输入编号 → 也按档展开
+  await page.getByTestId('nego-pn').nth(1).fill(FIXTURE_PNS[2]!)
+  await expect(page.getByTestId('nego-tier-qty')).toHaveText(['10', '20', '10', '20'])
+  await expect(page.getByTestId('nego-sum-9')).toHaveText('8925') // 8500 + 17×10 + 12.75×20
+  // 总表格式复制：各档的那一行都带上（按比价页顺序）
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.getByTestId('nego-copy-btn').click()
+  await page.getByTestId('nego-copy-master').click()
+  await expect(page.getByTestId('toast')).toContainText('已复制 4 行')
+  const tierRows = (await page.evaluate(() => navigator.clipboard.readText())).split('\n').map((l) => l.split('\t'))
+  expect(tierRows.map((r) => [r[2], r[5]])).toEqual([
+    [FIXTURE_PNS[1], '10'],
+    [FIXTURE_PNS[1], '20'],
+    [FIXTURE_PNS[2], '10'],
+    [FIXTURE_PNS[2], '20'],
+  ])
+  // 取消勾选：回到按填的数量比价，填过的 20 还在
+  await page.getByTestId('nego-allqty').uncheck()
+  await expect(page.getByTestId('nego-tier-row')).toHaveCount(0)
+  await expect(page.getByTestId('nego-qty').first()).toHaveValue('20')
+  await expect(page.getByTestId('nego-sum-9')).toHaveText('5100')
 })
 
 test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一步撤销', async ({ page }) => {

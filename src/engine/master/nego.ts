@@ -108,6 +108,14 @@ export function resolveNegoInput(master: MasterData, pn: string, qty: number | n
 }
 
 /**
+ * 比价页「显示所有数量档」：该件总表里的每个数量档各出一行比价行，
+ * 数量 = 该档数量（总价按档算），顺序同 tiers（数量升序）。
+ */
+export function negoTierLines(master: MasterData, tiers: PnTier[]): NegoLine[] {
+  return tiers.map((t) => buildNegoLine(master, t.rowIndex))
+}
+
+/**
  * 比价页行按零件号合并：同一零件号（忽略大小写/首尾空白）只保留先出现的一行（含其数量），
  * 后面的重复丢弃；零件号为空的行（末尾空行 / 正在输入）原样保留。
  * 粘贴一列、Ctrl+B 选行、手输提交三条入口共用。
