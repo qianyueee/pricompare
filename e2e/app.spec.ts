@@ -158,15 +158,15 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(page.getByTestId('toast')).toContainText('已复制为表格')
   expect((await page.evaluate(() => navigator.clipboard.readText())).split('\n')[0]).toMatch(/^P\/N\tRev\tDescription/)
 
-  // 复制为表格 → 「总表格式」：每个零件取价的那一行，汇总表整行 34 列，按比价页的顺序
+  // 复制为表格 → 「总表格式」：每个零件取价的那一行，从 B 列批次起 33 列，按比价页的顺序
   await page.getByTestId('nego-copy-btn').click()
   await page.getByTestId('nego-copy-master').click()
-  await expect(page.getByTestId('toast')).toContainText('已复制 5 行（汇总表格式）')
+  await expect(page.getByTestId('toast')).toContainText('已复制 5 行（汇总表格式，从 B 列批次起）')
   const mfRows = (await page.evaluate(() => navigator.clipboard.readText())).split('\n').map((l) => l.split('\t'))
-  expect(mfRows.map((r) => r.length)).toEqual([34, 34, 34, 34, 34])
-  expect(mfRows.map((r) => r[3])).toEqual([FIXTURE_PNS[0], '0900001-000', FIXTURE_PNS[1], FIXTURE_PNS[2], FIXTURE_PNS[3]])
-  expect(mfRows[2]![6]).toBe('10') // 下单 20 个时取价的是 10 档那一行
-  expect(mfRows[0]![9]).toBe('60') // J 列 HC 价还在 J
+  expect(mfRows.map((r) => r.length)).toEqual([33, 33, 33, 33, 33])
+  expect(mfRows.map((r) => r[2])).toEqual([FIXTURE_PNS[0], '0900001-000', FIXTURE_PNS[1], FIXTURE_PNS[2], FIXTURE_PNS[3]])
+  expect(mfRows[2]![5]).toBe('10') // F 数量：下单 20 个时取价的是 10 档那一行
+  expect(mfRows[0]![8]).toBe('60') // J 列 HC 价还在 J
 
   // 导出表格 → 下拉选「比价表」：NEGO 布局 xlsx（RMB 表头、数量在描述后）
   await page.getByTestId('nego-export-btn').click()
@@ -366,8 +366,26 @@ test('汇总页选区：拖选行/列/格区，复制、清空、删除行与一
   await page.locator('[data-cell="1:0"]').hover()
   await page.mouse.up()
   await expect(page.getByTestId('selected-count')).toHaveText('已选 2 行')
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.keyboard.press('Control+c')
-  await expect(page.getByTestId('toast')).toContainText('已复制 2 行')
+  await expect(page.getByTestId('toast')).toContainText('已复制 2 行（从 B 列批次起）')
+  // 从 B 列批次起 33 列（A 列序号不带）；U 列对客价按 H 现算：H 90 → 60，H 空着的行留空
+  const rowsCopied = (await page.evaluate(() => navigator.clipboard.readText())).split('\n').map((l) => l.split('\t'))
+  expect(rowsCopied.map((r) => r.length)).toEqual([33, 33])
+  expect(rowsCopied.map((r) => r[0])).toEqual(['20260801 Old', '20260801 Old'])
+  expect(rowsCopied.map((r) => r[2])).toEqual([FIXTURE_PNS[0], '0900001-000']) // D P/N
+  expect(rowsCopied.map((r) => r[19])).toEqual(['', '60']) // U Quote (EA)
+  expect(rowsCopied.map((r) => r[21])).toEqual(['22Days', '']) // W 交期
+  // 剪贴板里还有带汇总表格式的 HTML：第一行浅蓝、第二行白，U 列是 $ 格式
+  const copiedHtml = await page.evaluate(async () => {
+    const [item] = await navigator.clipboard.read()
+    return await (await item!.getType('text/html')).text()
+  })
+  const trs = [...copiedHtml.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((m) => m[1]!)
+  expect(trs).toHaveLength(2)
+  expect(trs[0]).toContain('background:#D9E1F2')
+  expect(trs[1]).toContain('background:#FFFFFF')
+  expect(trs[1]).toContain("mso-number-format:'\\0022$\\0022\\#\\,\\#\\#0\\.00'\" bgcolor=\"#FFFFFF\" align=\"center\" valign=\"middle\">60</td>")
 
   // 导出所选：只有这 2 行，列和样式同汇总表，只有汇总这一张 sheet（NEGO 不带）
   const selDl = page.waitForEvent('download')

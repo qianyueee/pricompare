@@ -4,7 +4,7 @@ import {
   buildNegoWorkbook,
   carryQtyFor,
   hiddenColsFor,
-  masterRowsToTsv,
+  masterRowsToClipboard,
   minQtyFor,
   negoToTsv,
   resolveNegoInput,
@@ -13,7 +13,7 @@ import {
 import type { NegoSummaryLine, PnResolution } from '@engine/index'
 import { api } from '../api'
 import { todayBatch, useSession } from '../store/session'
-import { copyText } from '../utils/clipboard'
+import { copyTable, copyText } from '../utils/clipboard'
 
 const fmt = (n: number | null | undefined): string => (n === null || n === undefined ? '—' : String(n))
 
@@ -191,16 +191,17 @@ export default function NegoPage() {
     )
   }
 
-  // 总表格式复制：汇总表整行、34 列位置不变（表格里不显示的 U 列对客价、只读账号的 O、P、Q、S 留空），直接贴进汇总表 Excel 列对得上
+  // 总表格式复制：汇总表的行，从 B 列批次到 AH 列（和主表选行复制一样）：U 列对客价按 H 列和清洗等级现算，
+  // 只读账号的 O、P、Q、S 留空占位，贴到汇总表 B 列列对得上；带汇总表的格式（蓝白隔行）
   const onCopyMasterFormat = async () => {
     setMenu(null)
     if (!master) return
     const picked = pricedRowIdxs().flatMap((i) => (master.rows[i] ? [master.rows[i]] : []))
     if (picked.length === 0) return
-    const ok = await copyText(masterRowsToTsv(picked, hiddenColsFor(readOnly)))
+    const ok = await copyTable(masterRowsToClipboard(picked, hiddenColsFor(readOnly)))
     showToast(
       ok
-        ? { message: `已复制 ${picked.length} 行（汇总表格式），可直接粘贴进汇总表` }
+        ? { message: `已复制 ${picked.length} 行（汇总表格式，从 B 列批次起），可直接粘贴到汇总表 B 列` }
         : { message: '复制失败，请重试' },
     )
   }
@@ -282,7 +283,7 @@ export default function NegoPage() {
               >
                 <div className="text-xs font-medium text-slate-700">总表格式</div>
                 <div className="mt-0.5 text-[11px] text-slate-400">
-                  这些零件在汇总表里取价的那一行，整行 34 列，直接粘贴进汇总表列对得上
+                  这些零件在汇总表里取价的那一行，从 B 列批次起，带蓝白条，粘贴到汇总表 B 列列对得上
                 </div>
               </button>
             </div>
@@ -596,7 +597,7 @@ export default function NegoPage() {
 
       <div className="border-t border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
         各家总价 = 该家单价 × 下单数量；最优总价 = 每行取最低单价 · 绿色 = 本行最低 ·
-        「复制为表格」「导出表格」都可选比价表或总表格式（总表格式直接粘贴进汇总表列对得上）·
+        「复制为表格」「导出表格」都可选比价表或总表格式（总表格式复制从 B 列批次起，粘贴到汇总表 B 列列对得上）·
         汇总表选行后 Ctrl+B 也会把行带进来
       </div>
     </div>

@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   KK_COL_COUNT,
-  copyColumns,
-  copyRowCells,
+  cellsToClipboard,
   hiddenColsFor,
   isDataRow,
-  masterRowsToTsv,
-  toExcelTsv,
+  masterRowsToClipboard,
+  type CopyPayload,
 } from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable, { type CellRange } from '../components/MasterTable'
 import { todayBatch, useSession } from '../store/session'
-import { copyText } from '../utils/clipboard'
+import { copyTable } from '../utils/clipboard'
 
 const ALL_EDIT_COLS = Array.from({ length: KK_COL_COUNT - 1 }, (_, i) => i + 1) // B..AH（A 列序号不参与清空）
 
@@ -170,27 +169,28 @@ export default function MainPage() {
 
   const copySelection = useCallback(async () => {
     const vis = visibleRef.current
-    // 隐藏列（U 列对客价、只读账号的 O、P、Q、S）夹在选中列中间时照样占一列、内容留空：贴进汇总表 Excel 时列对得上
-    const matrix = (rowsToCopy: typeof vis, isSelected: (c: number) => boolean) => {
-      const cols = copyColumns(isSelected, hiddenCols, KK_COL_COUNT)
-      return rowsToCopy.map((it) => copyRowCells(it.row.cells, cols, hiddenCols))
-    }
-    let tsv = ''
+    // 隐藏列（只读账号的 O、P、Q、S）夹在选中列中间时照样占一列、内容留空，贴进汇总表 Excel 时列对得上；
+    // U 列对客价按 H 列和清洗等级现算。剪贴板里同时有纯文本和带汇总表格式（蓝白隔行）的 HTML
+    let payload: CopyPayload
     let desc = ''
     if (selected.size > 0) {
       const picked = vis.filter((it) => selected.has(it.index))
-      tsv = masterRowsToTsv(picked.map((it) => it.row), hiddenCols)
-      desc = `${picked.length} 行`
+      payload = masterRowsToClipboard(picked.map((it) => it.row), hiddenCols)
+      desc = `${picked.length} 行（从 B 列批次起）`
     } else if (selCols.size > 0) {
-      tsv = toExcelTsv(matrix(vis, (c) => selCols.has(c)))
+      payload = cellsToClipboard(vis.map((it) => it.row.cells), (c) => selCols.has(c), hiddenCols)
       const shown = [...selCols].filter((c) => !hiddenCols.has(c)).length
       desc = `${shown} 列（${vis.length} 行）`
     } else if (selRange) {
       const { c1, c2 } = selRange
-      tsv = toExcelTsv(matrix(vis.slice(selRange.v1, selRange.v2 + 1), (c) => c >= c1 && c <= c2))
+      payload = cellsToClipboard(
+        vis.slice(selRange.v1, selRange.v2 + 1).map((it) => it.row.cells),
+        (c) => c >= c1 && c <= c2,
+        hiddenCols,
+      )
       desc = `${selRange.v2 - selRange.v1 + 1}×${c2 - c1 + 1} 格`
     } else return
-    const ok = await copyText(tsv)
+    const ok = await copyTable(payload)
     showToast({ message: ok ? `已复制 ${desc}，可直接粘贴进 Excel` : '复制失败，请重试' })
   }, [selected, selCols, selRange, showToast, hiddenCols])
 
