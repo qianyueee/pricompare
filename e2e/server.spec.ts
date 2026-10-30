@@ -98,7 +98,7 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await page.getByTestId('cell-editor').press('Enter')
   await expect(tony.locator('[data-cell="1:9"]')).toHaveText('95')
 
-  // Tony 复制整行贴进汇总表 Excel：看不到的 O、P、Q、S 照样占一列（内容留空），后面的列不左移
+  // Tony 复制整行贴进汇总表 Excel（从 B 列批次起）：看不到的 O、P、Q、S 照样占一列（内容留空），后面的列不左移
   await page.locator('[data-cell="1:15"]').click()
   await page.getByTestId('cell-editor').fill('12.3') // P USD：Tony 看不到，也不该复制给他
   await page.getByTestId('cell-editor').press('Enter')
@@ -110,18 +110,19 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await tony.keyboard.press('Control+c')
   await expect(tony.getByTestId('toast')).toContainText('已复制 1 行')
   const copied = (await tony.evaluate(() => navigator.clipboard.readText())).split('\t')
-  expect(copied).toHaveLength(34)
-  expect(copied[3]).toBe('0900001-000')
-  expect(copied[9]).toBe('95')
-  expect([copied[14], copied[15], copied[16], copied[18]]).toEqual(['', '', '', ''])
-  expect(copied[22]).toBe('15Days') // W 交期还在 W
+  const at = (col: number) => copied[col - 1] // 第一格是 B 列
+  expect(copied).toHaveLength(33)
+  expect(at(3)).toBe('0900001-000')
+  expect(at(9)).toBe('95')
+  expect([at(14), at(15), at(16), at(18)]).toEqual(['', '', '', ''])
+  expect(at(22)).toBe('15Days') // W 交期还在 W
 
-  // 比价页「复制为表格 → 总表格式」：同样是汇总表整行 34 列，O、P、Q、S 留空
+  // 比价页「复制为表格 → 总表格式」：和主表选行复制一样，从 B 列起，O、P、Q、S 留空
   await tony.keyboard.press('Control+b')
   await expect(tony.getByTestId('nego-page')).toBeVisible()
   await tony.getByTestId('nego-copy-btn').click()
   await tony.getByTestId('nego-copy-master').click()
-  await expect(tony.getByTestId('toast')).toContainText('已复制 1 行（汇总表格式）')
+  await expect(tony.getByTestId('toast')).toContainText('已复制 1 行（汇总表格式，从 B 列批次起）')
   const negoCopied = (await tony.evaluate(() => navigator.clipboard.readText())).split('\t')
   expect(negoCopied).toEqual(copied)
   await tony.keyboard.press('Escape') // 返回汇总，选中的行保留

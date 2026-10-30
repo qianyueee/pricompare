@@ -100,11 +100,16 @@ export {
 } from './master/ops'
 export {
   ALWAYS_HIDDEN_COLS,
+  COPY_BAND_FILLS,
+  ROW_COPY_FIRST_COL,
   VIEWER_HIDDEN_COLS,
+  cellsToClipboard,
   copyColumns,
   copyRowCells,
   hiddenColsFor,
-  masterRowsToTsv,
+  masterRowsToClipboard,
   tsvCell,
+  toExcelHtml,
   toExcelTsv,
 } from './master/copy'
+export type { CopyPayload } from './master/copy'
