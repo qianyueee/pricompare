@@ -269,6 +269,26 @@ export async function makeMasterFile(): Promise<ArrayBuffer> {
   return toArrayBuffer(wb)
 }
 
+/** 大汇总表：n 行同一批次（显示顺序 = 原表顺序），测只画看得见的行时的滚动、拖选、编辑 */
+export async function makeBigMasterFile(n: number): Promise<ArrayBuffer> {
+  const { KK_HEADERS } = await import('@engine/export/kkLayout')
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet('KK询价汇总')
+  ws.getRow(1).values = [...KK_HEADERS]
+  for (let i = 0; i < n; i++) {
+    const r = ws.getRow(2 + i)
+    r.getCell(1).value = i + 1
+    r.getCell(2).value = '20261030 Big'
+    r.getCell(3).value = i + 1
+    r.getCell(4).value = `${String(1000000 + i)}-000`
+    r.getCell(5).value = 'AA'
+    r.getCell(6).value = `PLATE, BIG TABLE ROW ${i + 1}`
+    r.getCell(7).value = 1
+    r.getCell(10).value = 100 + i
+  }
+  return toArrayBuffer(wb)
+}
+
 /** 双 sheet 工作簿：第一个 sheet 是空说明页，真数据在第二个 sheet（自动选 sheet 用例） */
 export async function makeMultiSheet(): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook()

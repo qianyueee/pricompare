@@ -3,7 +3,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ExcelJS from 'exceljs'
 import { expect, test } from '@playwright/test'
-import { FILE_A_PRICES, FILE_B_PRICES, FIXTURE_PNS, makeFileA, makeFileB, makeMasterFile } from '../tests/fixtures/buildFixtures'
+import {
+  FILE_A_PRICES,
+  FILE_B_PRICES,
+  FIXTURE_PNS,
+  makeBigMasterFile,
+  makeFileA,
+  makeFileB,
+  makeMasterFile,
+} from '../tests/fixtures/buildFixtures'
 
 const TMP = join(dirname(fileURLToPath(import.meta.url)), '.tmp')
 // 注意：容器内 Chromium 对非 ASCII 文件名的 setInputFiles 会静默丢文件，固件名保持 ASCII
@@ -464,4 +472,64 @@ test('并入智能化：重复拖入跳过、修订版原位更新', async ({ pa
   // 老批次同件行（文件行下标 0）不受影响
   await expect(page.locator('[data-cell="2:9"]')).toHaveText('113.4')
   await expect(page.locator('[data-cell="0:9"]')).toHaveText('56.7')
+})
+
+test('大表只画看得见的行：滚动、编辑中滚走照样保存、跨屏拖选、筛选后回到顶部', async ({ page }) => {
+  const BIG_PATH = join(TMP, 'KKMasterBig.xlsx')
+  writeFileSync(BIG_PATH, Buffer.from(await makeBigMasterFile(400)))
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.setInputFiles('[data-testid=file-input]', [BIG_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByText('显示 400 行')).toBeVisible()
+
+  // 只画开头几十行，其余用等高空行占位，滚动条照样是 400 行那么长
+  const rendered = await page.getByTestId('master-row').count()
+  expect(rendered).toBeGreaterThan(20)
+  expect(rendered).toBeLessThan(120)
+  const scroller = page.getByTestId('master-table').locator('xpath=..')
+  expect(await scroller.evaluate((el) => el.scrollHeight)).toBeGreaterThan(400 * 21)
+  const colB = () => page.locator('th[data-colh="1"]').evaluate((el) => el.getBoundingClientRect().width)
+  const colBTop = await colB()
+
+  // 编辑中把这一行滚出屏幕：改的内容照样保存
+  await page.locator('[data-cell="3:5"]').click()
+  await page.getByTestId('cell-editor').fill('EDITED WHILE SCROLLING')
+  await scroller.evaluate((el) => {
+    el.scrollTop = el.scrollHeight
+  })
+  await expect(page.locator('[data-cell="399:3"]')).toHaveText('1000399-000')
+  await expect(page.locator('[data-cell="3:5"]')).toHaveCount(0)
+  expect(await colB()).toBe(colBTop) // 列宽不随滚动变
+  await scroller.evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await expect(page.locator('[data-cell="3:5"]')).toHaveText('EDITED WHILE SCROLLING')
+  await expect(page.getByTestId('cell-editor')).toHaveCount(0)
+
+  // 跨屏拖选行：A 列第 3 行按下，滚到第 301 行再松开 → 299 行
+  await page.locator('[data-cell="2:0"]').hover()
+  await page.mouse.down()
+  await scroller.evaluate((el) => {
+    el.scrollTop = 290 * 21
+  })
+  await page.locator('[data-cell="300:0"]').hover()
+  await page.mouse.up()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 299 行')
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 299 行')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('selected-count')).toHaveCount(0)
+
+  // 滚在表尾时搜索：只剩 1 行，照样画出来；清空搜索后从顶部重新画
+  await scroller.evaluate((el) => {
+    el.scrollTop = el.scrollHeight
+  })
+  await page.getByTestId('search-input').fill('1000005-000')
+  await expect(page.getByTestId('master-row')).toHaveCount(1)
+  await expect(page.locator('[data-cell="5:3"]')).toHaveText('1000005-000')
+  await page.getByTestId('search-input').fill('')
+  await expect(page.getByText('显示 400 行')).toBeVisible()
+  await expect(page.locator('[data-cell="0:3"]')).toHaveText('1000000-000')
 })

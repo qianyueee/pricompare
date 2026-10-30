@@ -1,8 +1,17 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { KK_COL, KK_VENDOR_COLS, colLetter, isKkVendorCol } from '@engine/index'
 import type { MasterRow } from '@engine/index'
 import { api } from '../api'
 import { useSession } from '../store/session'
+import {
+  ROW_H,
+  columnWidths,
+  rowWindow,
+  stickyLefts,
+  type ColumnSpec,
+  type MeasureText,
+  type RowWindow,
+} from './tableLayout'
 
 /** 34 列的紧凑中文表头（Excel 列字母另行小字显示） */
 const COL_LABELS = [
@@ -12,19 +21,22 @@ const COL_LABELS = [
   '材料', '表面处理', '清洗', '工艺', '尺寸', 'Type', '备注', '备注2', 'Base P/N', 'YJ', 'Base ID',
 ]
 
+/** 每列最窄的宽度；内容更长时最多放宽到 1.6 倍，再长省略号截断 */
 const COL_WIDTHS = [
   44, 128, 44, 118, 46, 220, 52, 76, 72, 72, 72, 72, 64, 64, 72, 60,
   62, 66, 70, 60, 68, 108, 150, 110, 130, 82, 82, 92, 60, 170, 80, 92, 64, 72,
 ]
 
-/** 冻结列（A–D）的累计左偏移 */
+/** 冻结列（A–D） */
 const STICKY_COUNT = 4
-const STICKY_LEFT = [0, 44, 172, 216]
 
 const VENDOR_SLOTS = KK_VENDOR_COLS.map((v) => v.col)
 
 /** 选区蓝色叠加用 inset 阴影实现，避免和最低价绿底/TDB 琥珀底的 bg 类冲突 */
 const SEL_TINT = 'shadow-[inset_0_0_0_999px_rgba(59,130,246,0.16)]'
+
+/** 没选列时统一用这一个空集合：每次拖选都会新建空 Set，换成同一个才不会让每一行都重画 */
+const NO_COLS: ReadonlySet<number> = new Set()
 
 function parsePriceNum(v: string | number | null): number | null {
   if (v === null) return null
@@ -40,15 +52,72 @@ function cellText(v: string | number | null): string {
   return String(v)
 }
 
+/** 内容没变就沿用上一次的数组：列宽每次改格都重算，引用一变每一行都要重画 */
+function useSameNumbers(next: readonly number[]): readonly number[] {
+  const ref = useRef(next)
+  const prev = ref.current
+  if (prev !== next && (prev.length !== next.length || prev.some((v, i) => v !== next[i]))) ref.current = next
+  return ref.current
+}
+
+/** 用 canvas 量文字宽度（和表格同字体）；量不了时按字数估 */
+function createMeasurer(): { measure: MeasureText; header: (c: number) => number } {
+  const doc = typeof document !== 'undefined' ? document : null
+  const sans = (doc && getComputedStyle(doc.body).fontFamily) || 'system-ui, sans-serif'
+  const mono =
+    (doc && getComputedStyle(doc.documentElement).getPropertyValue('--font-mono').trim()) || 'ui-monospace, monospace'
+  const ctx = (font: string) => {
+    const c = doc?.createElement('canvas').getContext('2d') ?? null
+    if (c) c.font = font
+    return c
+  }
+  const body = ctx(`12px ${sans}`)
+  const pn = ctx(`500 12px ${mono}`) // P/N 列是等宽字、加粗一档
+  const label = ctx(`500 12px ${sans}`)
+  const letter = ctx(`10px ${sans}`)
+  const width = (c: CanvasRenderingContext2D | null, text: string, perChar: number) =>
+    c ? c.measureText(text).width : text.length * perChar
+  // 同样的字只量一次（批次名、材料、交期这些大量重复）
+  const seen = [new Map<string, number>(), new Map<string, number>()]
+  const cached = (font: 0 | 1, text: string) => {
+    const map = seen[font]!
+    let w = map.get(text)
+    if (w === undefined) {
+      if (map.size > 50_000) map.clear()
+      w = width(font === 1 ? pn : body, text, 7.5)
+      map.set(text, w)
+    }
+    return w
+  }
+  return {
+    measure: (text, col) => cached(col === KK_COL.pn ? 1 : 0, text),
+    // 表头：小字列字母 + 4px 间距 + 列名，左右内边距和右边框同数据格
+    header: (c) => width(letter, colLetter(c), 6.5) + 4 + width(label, COL_LABELS[c]!, 12) + 14,
+  }
+}
+
 function CellEditor(props: { initial: string; onDone: (value: string | null) => void }) {
   const [value, setValue] = useState(props.initial)
   const ref = useRef<HTMLInputElement>(null)
   const done = useRef(false)
+  const latest = useRef({ value, initial: props.initial, onDone: props.onDone })
+  latest.current = { value, initial: props.initial, onDone: props.onDone }
 
   useEffect(() => {
     ref.current?.focus()
     ref.current?.select()
   }, [])
+
+  // 编辑中把这一行滚出屏幕（只画看得见的行，编辑框会被拿掉）：改过的内容照样保存，不丢
+  useEffect(
+    () => () => {
+      const l = latest.current
+      if (done.current || l.value === l.initial) return
+      done.current = true
+      l.onDone(l.value)
+    },
+    [],
+  )
 
   const finish = (save: boolean) => {
     if (done.current) return
@@ -70,7 +139,7 @@ function CellEditor(props: { initial: string; onDone: (value: string | null) => 
           finish(false)
         }
       }}
-      className="h-full w-full border-2 border-blue-500 bg-white px-1 py-0.5 text-xs select-text outline-none"
+      className="block h-5 w-full border-2 border-blue-500 bg-white px-1 py-0 text-xs leading-4 select-text outline-none"
     />
   )
 }
@@ -80,10 +149,12 @@ interface RowProps {
   rowIndex: number
   editingCol: number | null
   selected: boolean
-  selectedCols: Set<number>
-  /** 本行落在拖选格区内时的列区间 [c1, c2]；不在格区内为 null */
-  rangeCols: [number, number] | null
+  selectedCols: ReadonlySet<number>
+  /** 本行落在拖选格区内时的列区间 [rangeC1, rangeC2]；不在格区内为 -1 */
+  rangeC1: number
+  rangeC2: number
   hiddenCols: ReadonlySet<number>
+  stickyLeft: readonly number[]
   onFinishEdit: (rowIndex: number, col: number, value: string | null) => void
 }
 
@@ -93,8 +164,10 @@ const MasterRowView = memo(function MasterRowView({
   editingCol,
   selected,
   selectedCols,
-  rangeCols,
+  rangeC1,
+  rangeC2,
   hiddenCols,
+  stickyLeft,
   onFinishEdit,
 }: RowProps) {
   // 供应商列最低价高亮（≥2 家有数值才标）
@@ -105,6 +178,7 @@ const MasterRowView = memo(function MasterRowView({
   return (
     <tr
       data-testid="master-row"
+      style={{ height: ROW_H }}
       className={`group ${selected ? 'bg-blue-100/70' : 'hover:bg-blue-50/40'}`}
     >
       {row.cells.map((v, c) => {
@@ -115,19 +189,16 @@ const MasterRowView = memo(function MasterRowView({
         const isMin = min !== null && num !== null && num === min
         const isTdb = isVendor && typeof v === 'string' && /tdb|tbd|待定/i.test(v)
         const isEditing = editingCol === c
-        const tinted =
-          (rangeCols !== null && c >= rangeCols[0] && c <= rangeCols[1]) || selectedCols.has(c)
+        const tinted = (rangeC1 >= 0 && c >= rangeC1 && c <= rangeC2) || selectedCols.has(c)
         return (
           <td
             key={c}
             data-cell={`${rowIndex}:${c}`}
             title={c === 0 ? '点击选中本行；按住拖动可多选（用于比价/复制/删除）' : cellText(v)}
-            style={{
-              minWidth: COL_WIDTHS[c],
-              maxWidth: COL_WIDTHS[c]! * 1.6,
-              ...(isSticky ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 1 } : {}),
-            }}
-            className={`overflow-hidden border-r border-b border-slate-100 px-1.5 py-0.5 text-xs text-ellipsis whitespace-nowrap ${
+            style={isSticky ? { position: 'sticky', left: stickyLeft[c], zIndex: 1 } : undefined}
+            className={`overflow-hidden border-r border-b border-slate-100 text-xs text-ellipsis whitespace-nowrap ${
+              isEditing ? 'p-0' : 'px-1.5 py-0.5' // 编辑框正好占满一行高，行不变高
+            } ${
               c === 0
                 ? `cursor-pointer text-center select-none ${
                     selected ? 'bg-blue-500 font-bold text-white' : 'bg-slate-50 text-slate-400 hover:bg-blue-100'
@@ -143,7 +214,7 @@ const MasterRowView = memo(function MasterRowView({
               isMin ? 'bg-green-100 font-semibold text-green-700' : ''
             } ${isTdb ? 'bg-amber-50 text-amber-700' : ''} ${
               c === KK_COL.quoteEach ? 'bg-blue-50/60 font-medium' : ''
-            } ${tinted ? SEL_TINT : ''} ${isEditing ? 'p-0' : ''}`}
+            } ${tinted ? SEL_TINT : ''}`}
           >
             {isEditing ? (
               <CellEditor initial={cellText(v)} onDone={(value) => onFinishEdit(rowIndex, c, value)} />
@@ -186,12 +257,55 @@ export default function MasterTable(props: {
   onClearSelection: () => void
 }) {
   const editMasterCell = useSession((s) => s.editMasterCell)
+  const allRows = useSession((s) => s.master?.rows)
   const [editing, setEditing] = useState<{ rowIndex: number; col: number } | null>(null)
 
-  const finishEdit = (rowIndex: number, col: number, value: string | null) => {
-    setEditing(null)
-    if (value !== null) editMasterCell(rowIndex, col, value)
-  }
+  // 引用不变：每一行都拿到它，变了就会让 2000 多行全部重画
+  const finishEdit = useCallback(
+    (rowIndex: number, col: number, value: string | null) => {
+      setEditing(null)
+      if (value !== null) editMasterCell(rowIndex, col, value)
+    },
+    [editMasterCell],
+  )
+
+  // 列宽：按整张总表的内容算一次（筛选、滚动都不变）；改一格只重量那一行
+  const measurer = useMemo(() => createMeasurer(), [])
+  const widthCache = useRef(new WeakMap<MasterRow, Float32Array>())
+  const specs = useMemo<ColumnSpec[]>(
+    () => COL_WIDTHS.map((min, c) => ({ min, max: min * 1.6, header: measurer.header(c) })),
+    [measurer],
+  )
+  const widths = useSameNumbers(
+    useMemo(() => columnWidths(allRows ?? [], specs, measurer.measure, widthCache.current), [allRows, specs, measurer]),
+  )
+  const stickyLeft = useMemo(() => stickyLefts(widths, STICKY_COUNT), [widths])
+  const shownCols = useMemo(
+    () => COL_LABELS.map((_, c) => c).filter((c) => !props.hiddenCols.has(c)),
+    [props.hiddenCols],
+  )
+  const tableWidth = shownCols.reduce((sum, c) => sum + widths[c]!, 0)
+
+  // 只画看得见的行（上下各多画一些），其余用等高空行占位
+  const total = props.rows.length
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [win, setWin] = useState<RowWindow>(() => rowWindow(0, 1200, ROW_H, Number.MAX_SAFE_INTEGER))
+  const updateWindow = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const next = rowWindow(el.scrollTop, el.clientHeight || window.innerHeight, ROW_H, total)
+    setWin((prev) => (prev.start === next.start && prev.end === next.end ? prev : next))
+  }, [total])
+  useLayoutEffect(updateWindow, [updateWindow])
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(updateWindow)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [updateWindow])
+  const start = Math.min(win.start, total)
+  const end = Math.min(Math.max(win.end, start), total)
 
   // rawRowIndex → 可见位置（拖选按可见顺序换算）
   const posOf = useMemo(() => new Map(props.rows.map((r, i) => [r.index, i])), [props.rows])
@@ -202,6 +316,8 @@ export default function MasterTable(props: {
     startC: number
     rawRow: number
     moved: boolean
+    /** 上一次报出去的选区：鼠标在同一格里来回时不重复更新 */
+    last: string
   } | null>(null)
 
   const cellFromEvent = (e: React.MouseEvent): { rawRow: number; col: number; v: number } | null => {
@@ -225,7 +341,7 @@ export default function MasterTable(props: {
     if (e.button !== 0) return
     const hc = colFromHeader(e)
     if (hc !== null) {
-      drag.current = { kind: 'col', startV: -1, startC: hc, rawRow: -1, moved: false }
+      drag.current = { kind: 'col', startV: -1, startC: hc, rawRow: -1, moved: false, last: '' }
       e.preventDefault()
       return
     }
@@ -238,33 +354,42 @@ export default function MasterTable(props: {
       startC: cell.col,
       rawRow: cell.rawRow,
       moved: false,
+      last: '',
     }
   }
 
   const onMouseOver = (e: React.MouseEvent) => {
     const d = drag.current
     if (!d) return
+    const report = (key: string, fn: () => void) => {
+      if (key === d.last) return
+      d.last = key
+      fn()
+    }
     if (d.kind === 'col') {
       const hc = colFromHeader(e)
       if (hc === null) return
       if (hc !== d.startC) d.moved = true
-      if (d.moved) props.onColDrag(Math.min(d.startC, hc), Math.max(d.startC, hc))
+      const c1 = Math.min(d.startC, hc)
+      const c2 = Math.max(d.startC, hc)
+      if (d.moved) report(`${c1}:${c2}`, () => props.onColDrag(c1, c2))
       return
     }
     const cell = cellFromEvent(e)
     if (!cell) return
     if (d.kind === 'row') {
       if (cell.v !== d.startV) d.moved = true
-      if (d.moved) props.onRowDrag(d.startV, cell.v)
+      if (d.moved) report(String(cell.v), () => props.onRowDrag(d.startV, cell.v))
     } else {
       if (cell.v !== d.startV || cell.col !== d.startC) d.moved = true
-      if (d.moved)
-        props.onRangeDrag({
-          v1: Math.min(d.startV, cell.v),
-          v2: Math.max(d.startV, cell.v),
-          c1: Math.min(d.startC, Math.max(1, cell.col)),
-          c2: Math.max(d.startC, Math.max(1, cell.col)),
-        })
+      if (!d.moved) return
+      const r: CellRange = {
+        v1: Math.min(d.startV, cell.v),
+        v2: Math.max(d.startV, cell.v),
+        c1: Math.min(d.startC, Math.max(1, cell.col)),
+        c2: Math.max(d.startC, Math.max(1, cell.col)),
+      }
+      report(`${r.v1}:${r.v2}:${r.c1}:${r.c2}`, () => props.onRangeDrag(r))
     }
   }
 
@@ -283,63 +408,81 @@ export default function MasterTable(props: {
     return () => window.removeEventListener('mouseup', onUp)
   }, [onToggleRow, onToggleCol, readOnly])
 
+  const selectedCols = props.selectedCols.size === 0 ? NO_COLS : props.selectedCols
+  const range = props.range
+
   return (
-    <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div
+      ref={scrollRef}
+      onScroll={updateWindow}
+      className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm"
+    >
       <table
         data-testid="master-table"
         onMouseDown={onMouseDown}
         onMouseOver={onMouseOver}
-        className="border-separate border-spacing-0 select-none"
+        style={{ width: tableWidth }}
+        className="table-fixed border-separate border-spacing-0 select-none"
       >
+        <colgroup>
+          {shownCols.map((c) => (
+            <col key={c} style={{ width: widths[c] }} />
+          ))}
+        </colgroup>
         <thead className="sticky top-0 z-10">
           <tr>
-            {COL_LABELS.map((label, c) =>
-              props.hiddenCols.has(c) ? null : (
-                <th
-                  key={c}
-                  onClick={c === 0 ? props.onClearSelection : undefined}
-                  {...(c > 0 ? { 'data-colh': c } : {})}
-                  title={c === 0 ? '点击清空全部选中' : '点击选中整列，按住拖动选多列（Delete 清空 / Ctrl+C 复制）'}
-                  style={{
-                    minWidth: COL_WIDTHS[c],
-                    ...(c < STICKY_COUNT
-                      ? { position: 'sticky' as const, left: STICKY_LEFT[c], zIndex: 11 }
-                      : {}),
-                  }}
-                  className={`cursor-pointer border-r border-b border-slate-200 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap select-none ${
-                    c > 0 && props.selectedCols.has(c)
-                      ? 'bg-blue-200 text-blue-800'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  <span className="mr-1 text-[10px] text-slate-400">{colLetter(c)}</span>
-                  {label}
-                </th>
-              ),
-            )}
+            {shownCols.map((c) => (
+              <th
+                key={c}
+                onClick={c === 0 ? props.onClearSelection : undefined}
+                {...(c > 0 ? { 'data-colh': c } : {})}
+                title={c === 0 ? '点击清空全部选中' : '点击选中整列，按住拖动选多列（Delete 清空 / Ctrl+C 复制）'}
+                style={c < STICKY_COUNT ? { position: 'sticky', left: stickyLeft[c], zIndex: 11 } : undefined}
+                className={`cursor-pointer border-r border-b border-slate-200 px-1.5 py-1.5 text-left text-xs font-medium whitespace-nowrap select-none ${
+                  c > 0 && selectedCols.has(c)
+                    ? 'bg-blue-200 text-blue-800'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <span className="mr-1 text-[10px] text-slate-400">{colLetter(c)}</span>
+                {COL_LABELS[c]}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {props.rows.map(({ row, index }, i) => (
-            <MasterRowView
-              key={index}
-              row={row}
-              rowIndex={index}
-              editingCol={editing?.rowIndex === index ? editing.col : null}
-              selected={props.selected.has(index)}
-              selectedCols={props.selectedCols}
-              rangeCols={
-                props.range && i >= props.range.v1 && i <= props.range.v2
-                  ? [props.range.c1, props.range.c2]
-                  : null
-              }
-              hiddenCols={props.hiddenCols}
-              onFinishEdit={finishEdit}
-            />
-          ))}
+          {start > 0 && (
+            <tr aria-hidden="true" style={{ height: start * ROW_H }}>
+              <td colSpan={shownCols.length} />
+            </tr>
+          )}
+          {props.rows.slice(start, end).map(({ row, index }, k) => {
+            const i = start + k
+            const inRange = range !== null && i >= range.v1 && i <= range.v2
+            return (
+              <MasterRowView
+                key={index}
+                row={row}
+                rowIndex={index}
+                editingCol={editing?.rowIndex === index ? editing.col : null}
+                selected={props.selected.has(index)}
+                selectedCols={selectedCols}
+                rangeC1={inRange ? range.c1 : -1}
+                rangeC2={inRange ? range.c2 : -1}
+                hiddenCols={props.hiddenCols}
+                stickyLeft={stickyLeft}
+                onFinishEdit={finishEdit}
+              />
+            )
+          })}
+          {end < total && (
+            <tr aria-hidden="true" style={{ height: (total - end) * ROW_H }}>
+              <td colSpan={shownCols.length} />
+            </tr>
+          )}
           {props.rows.length === 0 && (
             <tr>
-              <td colSpan={COL_LABELS.length - props.hiddenCols.size} className="px-4 py-24 text-center">
+              <td colSpan={shownCols.length} className="px-4 py-24 text-center">
                 <div className="text-4xl">📥</div>
                 <div className="mt-3 text-base font-medium text-slate-600">
                   {props.hasMaster
