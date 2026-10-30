@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildNegoSummary,
   buildNegoWorkbook,
@@ -6,11 +6,12 @@ import {
   hiddenColsFor,
   masterRowsToClipboard,
   minQtyFor,
+  negoTierLines,
   negoToTsv,
   resolveNegoInput,
   stepQtyTier,
 } from '@engine/index'
-import type { NegoSummaryLine, PnResolution } from '@engine/index'
+import type { NegoLine, NegoSummaryLine, PnResolution } from '@engine/index'
 import { api } from '../api'
 import { todayBatch, useSession } from '../store/session'
 import { copyTable, copyText } from '../utils/clipboard'
@@ -27,6 +28,7 @@ const focusCell = (index: number, col: 'pn' | 'qty') => {
  * NEGO 比价页（全窗页面）：编号/数量两列像 Excel 一样直接输入或整列粘贴，
  * 编号填入后数量格以「1/3/6」灰字提示总表里的有效数量档，点进数量格时下方列出这些档可直接选；
  * 数量不填直接 Tab 取最小档；其余列按总表解析自动算。
+ * 勾选「显示所有数量档」时每个零件把总表里的数量档各列一行（总价按该档数量算），复制、导出也按这些行。
  */
 export default function NegoPage() {
   const open = useSession((s) => s.negoOpen)
@@ -44,6 +46,8 @@ export default function NegoPage() {
   const exportingMaster = useSession((s) => s.exporting)
   const readOnly = useSession((s) => s.role !== 'editor')
   const [exportingNego, setExportingNego] = useState(false)
+  /** 显示所有数量档：每个零件按总表数量档展开成多行（关掉回到按填的数量取一档，填过的数量还在） */
+  const [allQty, setAllQty] = useState(false)
   /** 「复制为表格」「导出表格」两个下拉（都是比价表 / 总表格式），同时只开一个 */
   const [menu, setMenu] = useState<'copy' | 'export' | null>(null)
   const copyMenuRef = useRef<HTMLDivElement>(null)
@@ -149,19 +153,25 @@ export default function NegoPage() {
   }, [menu])
 
   const view = useMemo(() => {
-    const rows = negoLines.map((l) => {
+    const parts = negoLines.map((l) => {
       const res: PnResolution | null = master && l.pn.trim() !== '' ? resolveNegoInput(master, l.pn, l.qty) : null
-      return { l, res }
+      // 比价行：显示所有数量档时每档一行（数量 = 该档数量）；否则按填的数量取一档
+      const lines: NegoLine[] =
+        master && res ? (allQty ? negoTierLines(master, res.tiers) : res.line ? [res.line] : []) : []
+      return { l, res, lines }
     })
-    const valid = rows.filter((r) => r.res?.line)
-    const summary = buildNegoSummary(valid.map((r) => r.res!.line!))
-    const sumById = new Map<number, NegoSummaryLine>()
-    valid.forEach((r, i) => sumById.set(r.l.id, summary.lines[i]!))
-    return { rows, summary, sumById, validCount: valid.length }
-  }, [master, negoLines])
+    const summary = buildNegoSummary(parts.flatMap((p) => p.lines))
+    let at = 0
+    const rows = parts.map((p) => {
+      const sums = summary.lines.slice(at, at + p.lines.length)
+      at += p.lines.length
+      return { ...p, sums }
+    })
+    return { rows, summary, validCount: rows.filter((r) => r.lines.length > 0).length }
+  }, [master, negoLines, allQty])
 
   if (!open) return null
-  const { rows, summary, sumById } = view
+  const { rows, summary } = view
   const vendors = summary.vendors
 
   const onPaste = (e: React.ClipboardEvent<HTMLInputElement>, index: number, col: 'pn' | 'qty') => {
@@ -176,10 +186,8 @@ export default function NegoPage() {
     pasteNego(index, col, grid)
   }
 
-  /** 每个零件在汇总表里取价的那一行（按比价页的顺序），「总表格式」复制和导出共用 */
-  const pricedRowIdxs = (): number[] => [
-    ...new Set(rows.flatMap(({ res }) => (res?.line && res.usedTier ? [res.usedTier.rowIndex] : []))),
-  ]
+  /** 每个零件在汇总表里取价的那一行（显示所有数量档时为各档的行，按比价页的顺序），「总表格式」复制和导出共用 */
+  const pricedRowIdxs = (): number[] => [...new Set(rows.flatMap(({ lines }) => lines.map((x) => x.rowIndex)))]
 
   const onCopy = async () => {
     setMenu(null)
@@ -243,8 +251,28 @@ export default function NegoPage() {
         </button>
         <h1 className="text-base font-bold">NEGO 比价</h1>
         <span className="text-xs text-slate-400">
-          {view.validCount} 个零件 · 各家总价按下单数量计算
+          {allQty
+            ? `${view.validCount} 个零件 · ${summary.lines.length} 个数量档 · 各家总价按各档数量计算`
+            : `${view.validCount} 个零件 · 各家总价按下单数量计算`}
         </span>
+        <label
+          title="每个零件把总表里的数量档各列一行，各档单价、总价并排；复制、导出也按这些行"
+          className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium select-none ${
+            allQty ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <input
+            type="checkbox"
+            data-testid="nego-allqty"
+            checked={allQty}
+            onChange={(e) => {
+              setQtyPop(null)
+              setAllQty(e.target.checked)
+            }}
+            className="accent-blue-600"
+          />
+          显示所有数量档
+        </label>
         <div className="flex-1" />
         <div ref={copyMenuRef} className="relative">
           <button
@@ -343,9 +371,18 @@ export default function NegoPage() {
       </div>
 
       <div className="border-b border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
-        编号、数量两格可直接输入，也可从 Excel 整列复制粘贴（编号+数量两列一起粘也行）·
-        编号填入后数量格灰字显示总表里的有效数量档「1/3/6」，点进数量格可直接点选或 ↑↓ 切换 ·
-        数量不填直接 Tab 取最小档 · 数量不在档上时按 ≤数量 的最大档取单价 · Enter 跳到下一格
+        {allQty ? (
+          <>
+            正在显示所有数量档：每个零件把总表里的有效数量档各列一行（同一数量多次询价取最近一次），总价按该档数量算 ·
+            编号格照常输入或整列粘贴 · 取消勾选回到按下单数量比价（填过的数量还在）
+          </>
+        ) : (
+          <>
+            编号、数量两格可直接输入，也可从 Excel 整列复制粘贴（编号+数量两列一起粘也行）·
+            编号填入后数量格灰字显示总表里的有效数量档「1/3/6」，点进数量格可直接点选或 ↑↓ 切换 ·
+            数量不填直接 Tab 取最小档 · 数量不在档上时按 ≤数量 的最大档取单价 · Enter 跳到下一格
+          </>
+        )}
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-4">
@@ -365,7 +402,7 @@ export default function NegoPage() {
                 描述
               </th>
               <th className="w-24 border-b-2 border-slate-300 bg-white px-2 py-2 text-left font-medium text-slate-600">
-                数量
+                {allQty ? '数量档' : '数量'}
               </th>
               {vendors.map((v) => (
                 <th key={`u${v.slot}`} className="border-b-2 border-slate-300 bg-white px-2 py-2 text-right font-medium text-slate-600">
@@ -387,9 +424,14 @@ export default function NegoPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ l, res }, i) => {
-              const sl = sumById.get(l.id)
+            {rows.map(({ l, res, lines, sums }, i) => {
               const notFound = l.pn.trim() !== '' && res !== null && res.tiers.length === 0
+              // 显示所有数量档：该件每档一行，#、编号、描述、✕ 跨行合并；各组底边线深一点好分件
+              const expanded = allQty && lines.length > 0
+              const span = expanded && lines.length > 1 ? lines.length : undefined
+              const groupBorder = expanded ? 'border-slate-200' : 'border-slate-100'
+              const rowBorder = (j: number) => (expanded && j === lines.length - 1 ? 'border-slate-200' : 'border-slate-100')
+              const description = lines.find((x) => x.description)?.description ?? ''
               const tierHint =
                 res && res.tiers.length > 0 && l.qty === null
                   ? res.tiers.map((t) => t.qty ?? '?').join('/')
@@ -399,161 +441,202 @@ export default function NegoPage() {
               const showPop = qtyPop?.index === i && res !== null && res.tiers.length > 0
               const minQty = res?.tiers.find((t) => t.qty !== null)?.qty ?? null
               const typed = l.qty === null ? '' : String(l.qty)
-              return (
-                <tr key={l.id} data-testid="nego-line" className="group hover:bg-blue-50/30">
-                  <td className="border-b border-slate-100 px-2 py-1 text-center text-slate-300">{i + 1}</td>
-                  <td className="border-b border-slate-100 p-0.5">
-                    <input
-                      data-testid="nego-pn"
-                      data-ni={`${i}:pn`}
-                      value={l.pn}
-                      onChange={(e) => setNegoPn(i, e.target.value)}
-                      onPaste={(e) => onPaste(e, i, 'pn')}
-                      onBlur={() => commitPn(i)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          const kept = commitPn(i)
-                          requestAnimationFrame(() => focusCell(kept, 'qty'))
-                        }
-                      }}
-                      placeholder="输入或粘贴零件编号…"
-                      className={`w-full rounded border px-1.5 py-1 font-mono ${
-                        notFound ? 'border-red-300 bg-red-50 text-red-700' : 'border-transparent hover:border-slate-200 focus:border-blue-400'
-                      } outline-none`}
-                    />
-                  </td>
-                  <td className="border-b border-slate-100 px-2 py-1">{res?.line?.rev ?? ''}</td>
+              const tierQtyTd = (j: number) => {
+                const t = res!.tiers[j]!
+                return (
                   <td
-                    className={`max-w-64 overflow-hidden border-b border-slate-100 px-2 py-1 text-ellipsis whitespace-nowrap ${
-                      notFound ? 'text-red-500' : ''
-                    }`}
-                    title={res?.line?.description}
+                    data-testid="nego-tier-qty"
+                    title={`汇总表第 ${t.excelRow} 行${t.batch ? ` · ${t.batch}` : ''}`}
+                    className={`border-b ${rowBorder(j)} px-2 py-1 text-right font-medium text-slate-700`}
                   >
-                    {notFound ? '总表中未找到该编号' : (res?.line?.description ?? '')}
+                    {t.qty ?? '?'}
                   </td>
-                  <td className="border-b border-slate-100 p-0.5">
-                    <div className="relative flex items-center gap-1">
-                      <input
-                        data-testid="nego-qty"
-                        data-ni={`${i}:qty`}
-                        value={l.qty ?? ''}
-                        inputMode="decimal"
-                        onChange={(e) => {
-                          const raw = e.target.value.trim()
-                          if (raw === '') return setNegoQty(i, null)
-                          const n = Number(raw)
-                          if (Number.isFinite(n)) setNegoQty(i, n)
-                        }}
-                        onPaste={(e) => onPaste(e, i, 'qty')}
-                        onFocus={(e) => onQtyFocus(e, i)}
-                        onBlur={() => setQtyPop((p) => (p?.index === i ? null : p))}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') focusCell(i + 1, 'pn')
-                          else if (e.key === 'Tab' && tabFromQty(i, e.shiftKey)) e.preventDefault()
-                          else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && stepQty(i, e.key === 'ArrowUp' ? 1 : -1))
-                            e.preventDefault()
-                        }}
-                        placeholder={tierHint || undefined}
-                        title={
-                          tierHint ? `总表里的有效数量档：${tierHint}（输入其一或任意数量；不填直接 Tab 取最小 ${minQty ?? '档'}）` : undefined
-                        }
-                        className={`w-full rounded border px-1.5 py-1 text-right outline-none ${
-                          tierHint
-                            ? 'border-blue-200 bg-blue-50/50 placeholder:text-blue-500/80 placeholder:font-medium'
-                            : 'border-transparent hover:border-slate-200 focus:border-blue-400'
-                        }`}
-                      />
-                      {showPop && (
-                        <div
-                          data-testid="nego-qty-pop"
-                          onMouseDown={(e) => e.preventDefault()} // 点选时数量格不失焦
-                          className={`absolute left-0 z-20 w-max max-w-72 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-left shadow-lg ${
-                            qtyPop.above ? 'bottom-full mb-1' : 'top-full mt-1'
-                          }`}
+                )
+              }
+              const priceTds = (j: number) => {
+                const sl: NegoSummaryLine | undefined = sums[j]
+                const bc = rowBorder(j)
+                return (
+                  <>
+                    {vendors.map((v) => {
+                      const u = sl?.unit[v.slot] ?? null
+                      const isMin = u !== null && sl?.minUnit !== null && u === sl?.minUnit
+                      return (
+                        <td
+                          key={`u${v.slot}`}
+                          data-min={isMin ? '1' : undefined}
+                          className={`border-b ${bc} px-2 py-1 text-right ${
+                            isMin ? 'bg-green-100 font-semibold text-green-700' : ''
+                          } ${u === null ? 'text-slate-300' : ''}`}
                         >
-                          <div className="mb-1 text-[10px] whitespace-nowrap text-slate-400">
-                            总表数量档
-                            {l.qty === null && minQty !== null ? ` · 不填直接 Tab 取最小 ${minQty}` : ''} · ↑↓ 切换
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            {res.tiers.map((t) => {
-                              const used = res.usedTier?.rowIndex === t.rowIndex
-                              const match = !used && typed !== '' && t.qty !== null && String(t.qty).startsWith(typed)
-                              return (
-                                <button
-                                  key={t.rowIndex}
-                                  type="button"
-                                  data-testid="nego-qty-opt"
-                                  data-used={used ? '1' : undefined}
-                                  disabled={t.qty === null}
-                                  onClick={() => t.qty !== null && pickQty(i, t.qty)}
-                                  title={`汇总表第 ${t.excelRow} 行${t.batch ? ` · ${t.batch}` : ''}${t.qty === null ? ' · 数量为空' : ''}`}
-                                  className={`min-w-8 rounded border px-1.5 py-0.5 text-xs font-medium ${
-                                    used
-                                      ? 'border-blue-600 bg-blue-600 text-white'
-                                      : match
-                                        ? 'border-blue-400 bg-blue-50 text-blue-700'
-                                        : 'border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50'
-                                  } disabled:cursor-default disabled:text-slate-300 disabled:hover:border-slate-200 disabled:hover:bg-white`}
-                                >
-                                  {t.qty ?? '?'}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      )}
-                      {tierMismatch && (
-                        <span
-                          data-testid="nego-tier-badge"
-                          title={`总表无 ${l.qty} 数量档，单价取自 ${res!.usedTier!.qty} 档（第 ${res!.usedTier!.excelRow} 行）`}
-                          className="rounded bg-amber-100 px-1 text-[10px] whitespace-nowrap text-amber-700"
-                        >
-                          取{res!.usedTier!.qty}档
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  {vendors.map((v) => {
-                    const u = res?.line?.unit[v.slot] ?? null
-                    const isMin = u !== null && sl?.minUnit !== null && u === sl?.minUnit
-                    return (
-                      <td
-                        key={`u${v.slot}`}
-                        data-min={isMin ? '1' : undefined}
-                        className={`border-b border-slate-100 px-2 py-1 text-right ${
-                          isMin ? 'bg-green-100 font-semibold text-green-700' : ''
-                        } ${u === null ? 'text-slate-300' : ''}`}
-                      >
-                        {res?.line ? fmt(u) : ''}
-                      </td>
-                    )
-                  })}
-                  <td className="border-b border-slate-100 px-2 py-1 text-right font-semibold text-green-700">
-                    {sl ? fmt(sl.minUnit) : ''}
-                  </td>
-                  {vendors.map((v) => (
-                    <td key={`t${v.slot}`} className="border-b border-slate-100 bg-slate-50/60 px-2 py-1 text-right">
-                      {sl ? fmt(sl.totals[v.slot] ?? null) : ''}
+                          {sl ? fmt(u) : ''}
+                        </td>
+                      )
+                    })}
+                    <td className={`border-b ${bc} px-2 py-1 text-right font-semibold text-green-700`}>
+                      {sl ? fmt(sl.minUnit) : ''}
                     </td>
-                  ))}
-                  <td className="border-b border-slate-100 bg-slate-50/60 px-2 py-1 text-right font-semibold text-green-700">
-                    {sl ? fmt(sl.optimalTotal) : ''}
-                  </td>
-                  <td className="border-b border-slate-100 px-1 py-1 text-center">
-                    {(l.pn.trim() !== '' || l.qty !== null) && (
-                      <button
-                        type="button"
-                        data-testid="nego-remove"
-                        onClick={() => removeNegoLine(i)}
-                        title="移除本行"
-                        className="rounded px-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
-                      >
-                        ✕
-                      </button>
+                    {vendors.map((v) => (
+                      <td key={`t${v.slot}`} className={`border-b ${bc} bg-slate-50/60 px-2 py-1 text-right`}>
+                        {sl ? fmt(sl.totals[v.slot] ?? null) : ''}
+                      </td>
+                    ))}
+                    <td className={`border-b ${bc} bg-slate-50/60 px-2 py-1 text-right font-semibold text-green-700`}>
+                      {sl ? fmt(sl.optimalTotal) : ''}
+                    </td>
+                  </>
+                )
+              }
+              return (
+                <Fragment key={l.id}>
+                  <tr data-testid="nego-line" className="group hover:bg-blue-50/30">
+                    <td rowSpan={span} className={`border-b ${groupBorder} px-2 py-1 text-center align-top text-slate-300`}>
+                      {i + 1}
+                    </td>
+                    <td rowSpan={span} className={`border-b ${groupBorder} p-0.5 align-top`}>
+                      <input
+                        data-testid="nego-pn"
+                        data-ni={`${i}:pn`}
+                        value={l.pn}
+                        onChange={(e) => setNegoPn(i, e.target.value)}
+                        onPaste={(e) => onPaste(e, i, 'pn')}
+                        onBlur={() => commitPn(i)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const kept = commitPn(i)
+                            // 显示所有数量档时没有数量格，直接跳下一行编号
+                            requestAnimationFrame(() => (allQty ? focusCell(kept + 1, 'pn') : focusCell(kept, 'qty')))
+                          }
+                        }}
+                        placeholder="输入或粘贴零件编号…"
+                        className={`w-full rounded border px-1.5 py-1 font-mono ${
+                          notFound ? 'border-red-300 bg-red-50 text-red-700' : 'border-transparent hover:border-slate-200 focus:border-blue-400'
+                        } outline-none`}
+                      />
+                    </td>
+                    <td className={`border-b ${rowBorder(0)} px-2 py-1`}>{lines[0]?.rev ?? ''}</td>
+                    <td
+                      rowSpan={span}
+                      className={`max-w-64 overflow-hidden border-b ${groupBorder} px-2 py-1 align-top text-ellipsis whitespace-nowrap ${
+                        notFound ? 'text-red-500' : ''
+                      }`}
+                      title={description || undefined}
+                    >
+                      {notFound ? '总表中未找到该编号' : description}
+                    </td>
+                    {expanded ? (
+                      tierQtyTd(0)
+                    ) : allQty ? (
+                      <td className="border-b border-slate-100" />
+                    ) : (
+                      <td className="border-b border-slate-100 p-0.5">
+                        <div className="relative flex items-center gap-1">
+                          <input
+                            data-testid="nego-qty"
+                            data-ni={`${i}:qty`}
+                            value={l.qty ?? ''}
+                            inputMode="decimal"
+                            onChange={(e) => {
+                              const raw = e.target.value.trim()
+                              if (raw === '') return setNegoQty(i, null)
+                              const n = Number(raw)
+                              if (Number.isFinite(n)) setNegoQty(i, n)
+                            }}
+                            onPaste={(e) => onPaste(e, i, 'qty')}
+                            onFocus={(e) => onQtyFocus(e, i)}
+                            onBlur={() => setQtyPop((p) => (p?.index === i ? null : p))}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') focusCell(i + 1, 'pn')
+                              else if (e.key === 'Tab' && tabFromQty(i, e.shiftKey)) e.preventDefault()
+                              else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && stepQty(i, e.key === 'ArrowUp' ? 1 : -1))
+                                e.preventDefault()
+                            }}
+                            placeholder={tierHint || undefined}
+                            title={
+                              tierHint ? `总表里的有效数量档：${tierHint}（输入其一或任意数量；不填直接 Tab 取最小 ${minQty ?? '档'}）` : undefined
+                            }
+                            className={`w-full rounded border px-1.5 py-1 text-right outline-none ${
+                              tierHint
+                                ? 'border-blue-200 bg-blue-50/50 placeholder:text-blue-500/80 placeholder:font-medium'
+                                : 'border-transparent hover:border-slate-200 focus:border-blue-400'
+                            }`}
+                          />
+                          {showPop && (
+                            <div
+                              data-testid="nego-qty-pop"
+                              onMouseDown={(e) => e.preventDefault()} // 点选时数量格不失焦
+                              className={`absolute left-0 z-20 w-max max-w-72 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-left shadow-lg ${
+                                qtyPop.above ? 'bottom-full mb-1' : 'top-full mt-1'
+                              }`}
+                            >
+                              <div className="mb-1 text-[10px] whitespace-nowrap text-slate-400">
+                                总表数量档
+                                {l.qty === null && minQty !== null ? ` · 不填直接 Tab 取最小 ${minQty}` : ''} · ↑↓ 切换
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {res.tiers.map((t) => {
+                                  const used = res.usedTier?.rowIndex === t.rowIndex
+                                  const match = !used && typed !== '' && t.qty !== null && String(t.qty).startsWith(typed)
+                                  return (
+                                    <button
+                                      key={t.rowIndex}
+                                      type="button"
+                                      data-testid="nego-qty-opt"
+                                      data-used={used ? '1' : undefined}
+                                      disabled={t.qty === null}
+                                      onClick={() => t.qty !== null && pickQty(i, t.qty)}
+                                      title={`汇总表第 ${t.excelRow} 行${t.batch ? ` · ${t.batch}` : ''}${t.qty === null ? ' · 数量为空' : ''}`}
+                                      className={`min-w-8 rounded border px-1.5 py-0.5 text-xs font-medium ${
+                                        used
+                                          ? 'border-blue-600 bg-blue-600 text-white'
+                                          : match
+                                            ? 'border-blue-400 bg-blue-50 text-blue-700'
+                                            : 'border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50'
+                                      } disabled:cursor-default disabled:text-slate-300 disabled:hover:border-slate-200 disabled:hover:bg-white`}
+                                    >
+                                      {t.qty ?? '?'}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {tierMismatch && (
+                            <span
+                              data-testid="nego-tier-badge"
+                              title={`总表无 ${l.qty} 数量档，单价取自 ${res!.usedTier!.qty} 档（第 ${res!.usedTier!.excelRow} 行）`}
+                              className="rounded bg-amber-100 px-1 text-[10px] whitespace-nowrap text-amber-700"
+                            >
+                              取{res!.usedTier!.qty}档
+                            </span>
+                          )}
+                        </div>
+                      </td>
                     )}
-                  </td>
-                </tr>
+                    {priceTds(0)}
+                    <td rowSpan={span} className={`border-b ${groupBorder} px-1 py-1 text-center align-top`}>
+                      {(l.pn.trim() !== '' || l.qty !== null) && (
+                        <button
+                          type="button"
+                          data-testid="nego-remove"
+                          onClick={() => removeNegoLine(i)}
+                          title="移除本行"
+                          className="rounded px-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                  {expanded &&
+                    lines.slice(1).map((x, k) => (
+                      <tr key={x.rowIndex} data-testid="nego-tier-row" className="hover:bg-blue-50/30">
+                        <td className={`border-b ${rowBorder(k + 1)} px-2 py-1`}>{x.rev}</td>
+                        {tierQtyTd(k + 1)}
+                        {priceTds(k + 1)}
+                      </tr>
+                    ))}
+                </Fragment>
               )
             })}
             {!master && (
@@ -568,7 +651,7 @@ export default function NegoPage() {
             <tfoot>
               <tr className="font-semibold">
                 <td colSpan={5 + vendors.length} className="border-t-2 border-slate-300 px-2 py-1.5 text-right">
-                  合计
+                  {allQty ? '合计（各档相加）' : '合计'}
                 </td>
                 <td className="border-t-2 border-slate-300" />
                 {summary.perVendor.map((v) => (
@@ -596,7 +679,7 @@ export default function NegoPage() {
       </div>
 
       <div className="border-t border-slate-100 bg-white px-4 py-1.5 text-[11px] text-slate-400">
-        各家总价 = 该家单价 × 下单数量；最优总价 = 每行取最低单价 · 绿色 = 本行最低 ·
+        各家总价 = 该家单价 × 下单数量（显示所有数量档时 × 该档数量）；最优总价 = 每行取最低单价 · 绿色 = 本行最低 ·
         「复制为表格」「导出表格」都可选比价表或总表格式（总表格式复制从 B 列批次起，粘贴到汇总表 B 列列对得上）·
         汇总表选行后 Ctrl+B 也会把行带进来
       </div>
