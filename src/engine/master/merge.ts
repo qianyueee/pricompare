@@ -3,6 +3,7 @@ import { cleanAmountString } from './clean'
 import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
 import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
 import { nextQuoteEach } from './quoteEach'
+import { kzQuoteNo, normalizeReceivedDate, todayYmd } from './quoteNo'
 import type { QuoteRow } from '../types'
 
 /**
@@ -10,7 +11,8 @@ import type { QuoteRow } from '../types'
  * - 每条报价行（P/N × 数量档）自底向上找「P/N 相同 + 数量相同 + 该供应商列还空着」的行 → 填入；
  *   找不到则追加（优先占用底部只有 A 列序号的预编号空行）
  * - W 交期按供应商列序拼接（HC 在 J、SKW 在 K → "18Days/3 weeks+cleaning"）
- * - V 只收真报价单号（KV202608151 这类），"询价 20260814 Natalie A" 是批次标签不进 V
+ * - V 报价单号由我们自己编（Zane 2026-10-31）：KZ + 收到报价的日期 + 字母（KZ20261031A），同组同一天共用一个，
+ *   只写进 V 空着、这次写了价的行，见 quoteNo.ts；供应商自己的单号（凯维的 KV…）不再进 V
  * - H Quote (each)：这一行各家数字报价的平均，向上取整到个位（Zane 2026-10-28，见 quoteEach.ts），
  *   每并入一家就重算；U 对客报价：来自带 Quote(EA) 的报价文件（KV 家宏算好的），只填空不覆盖
  * - 材料/表面处理等明细：空则填；SKW 的值可覆盖别家（观察到 KV 中文规格优先）
@@ -30,6 +32,8 @@ export interface MergeOptions {
   vendorSlot: number
   vendorId: string
   vendorDisplay: string
+  /** 收到这份报价的日期（YYYYMMDD 或 2026-10-31），V 列 KZ 单号用；不给或认不出就用今天（本机时区） */
+  receivedDate?: string
 }
 
 export interface MergeChange {
@@ -60,13 +64,6 @@ export interface MergePlan {
   reviseCount: number
   skipCount: number
   warnings: string[]
-}
-
-/** 真报价单号：字母前缀 + 长数字（KV202608151 / KT20260711B）；批次标签（含"询价"或空格开头）不算 */
-export function isRealQuoteNo(s: string): boolean {
-  const t = s.trim()
-  if (!t || /询价/.test(t)) return false
-  return /^[A-Za-z]{1,5}\d{4,}[A-Za-z0-9-]*$/.test(t)
 }
 
 const normPn = (v: MasterCell | string): string => String(v ?? '').trim().toUpperCase()
@@ -157,6 +154,8 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
   const claimed = new Set<number>()
   const actions: MergeAction[] = []
   const warnings: string[] = []
+  // V 报价单号：本组本日的 KZ 单号（同组当天已有就沿用）
+  const quoteNo = kzQuoteNo(master, opts.batch, normalizeReceivedDate(opts.receivedDate) ?? todayYmd())
 
   // 追加目标：底部连续的预编号空行（自上而下依次占用）
   const placeholderIdxs: number[] = []
@@ -204,12 +203,8 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     if (isEmptyCell(cells[KK_COL.qty]) && q.qty !== null) set(KK_COL.qty, q.qty)
     // U 对客报价：只有报价文件带 Quote(EA)（KV 家）才带入，且只填空（TDB 占位视同空）
     if (q.quoteEa && isFillableCell(cells[KK_COL.quoteEa])) set(KK_COL.quoteEa, numericOr(q.quoteEa))
-    // V 真报价单号
-    if (q.quoteNo && isRealQuoteNo(q.quoteNo)) {
-      const existing = String(cells[KK_COL.quoteNo] ?? '').trim()
-      if (!existing) set(KK_COL.quoteNo, q.quoteNo)
-      else if (!existing.split('/').includes(q.quoteNo)) set(KK_COL.quoteNo, `${existing}/${q.quoteNo}`)
-    }
+    // V 报价单号：这次写了价、V 还空着 → 本组本日的 KZ 单号；已有的单号不动
+    if (price !== undefined && isEmptyCell(cells[KK_COL.quoteNo])) set(KK_COL.quoteNo, quoteNo)
     // W 交期按列序拼接：J（HC）以左的供应商放前面，K 及以右追加在后
     if (q.leadTime.raw) {
       const fmt = formatLeadTime(q.leadTime)
@@ -276,12 +271,8 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     if (q.qty !== null && !numEq(cells[KK_COL.qty] ?? null, q.qty)) set(KK_COL.qty, q.qty)
     // U 对客报价：KV 家修订单带了新的 Quote(EA) 就跟着更新（U 只存着，导出时按 H 写公式重算）
     if (q.quoteEa && price !== undefined) set(KK_COL.quoteEa, numericOr(q.quoteEa))
-    // V 真报价单号：修订单若带新单号则拼接（沿用填充规则）
-    if (q.quoteNo && isRealQuoteNo(q.quoteNo)) {
-      const existing = String(cells[KK_COL.quoteNo] ?? '').trim()
-      if (!existing) set(KK_COL.quoteNo, q.quoteNo)
-      else if (!existing.split('/').includes(q.quoteNo)) set(KK_COL.quoteNo, `${existing}/${q.quoteNo}`)
-    }
+    // V 报价单号：修订行原有的单号不动，还空着才补本组本日的 KZ 单号
+    if (price !== undefined && isEmptyCell(cells[KK_COL.quoteNo])) set(KK_COL.quoteNo, quoteNo)
     // W 是多家拼接文本，交期变了不自动改，提示人工核对
     if (q.leadTime.raw) {
       const fmt = formatLeadTime(q.leadTime)

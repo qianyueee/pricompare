@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   ALL_FIELDS,
   FIELD_LABELS,
+  KK_COL,
   KK_VENDOR_COLS,
   colLetter,
   letterToIdx,
@@ -75,8 +76,13 @@ function Inner({ file }: { file: LoadedFile }) {
       vendorSlot,
       vendorId,
       vendorDisplay: vendor.trim() || vendorId,
+      receivedDate: todayBatch(),
     })
   }, [master, analysis.rows, batch, vendorSlot, vendorId, vendor])
+  // 这次会写进 V 列的报价单号（KZ+今天+字母；行里已有单号的不改）
+  const previewQuoteNo = preview?.actions
+    .flatMap((a) => a.changes)
+    .find((ch) => ch.col === KK_COL.quoteNo)?.to
 
   const setField = (col: number, field: FieldKey) => {
     setDraftMap((prev) => {
@@ -245,6 +251,7 @@ function Inner({ file }: { file: LoadedFile }) {
                 .join('　')}
               {preview.actions.length > 5 && ` …共 ${preview.actions.length} 条`}
             </span>
+            {previewQuoteNo && <span className="text-green-700">报价单号 {previewQuoteNo}</span>}
             {!master && <span className="text-amber-600">当前没有汇总表，将新建一份</span>}
           </div>
         )}

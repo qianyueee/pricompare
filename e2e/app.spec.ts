@@ -18,6 +18,9 @@ const TMP = join(dirname(fileURLToPath(import.meta.url)), '.tmp')
 const KV_PATH = join(TMP, 'KV202608153_0815.xlsx')
 const MASTER_PATH = join(TMP, 'KKMaster.xlsx')
 const HC_LABELED_PATH = join(TMP, 'HCQuote20260816_TestE.xlsx')
+/** 网页并入时 V 列报价单号 = KZ + 今天 + 字母 */
+const d = new Date()
+const KZ_TODAY = `KZ${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
 
 test.beforeAll(async () => {
   mkdirSync(TMP, { recursive: true })
@@ -49,6 +52,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   await expect(dialog).toBeVisible()
   await expect(page.getByTestId('vendor-input')).toHaveValue('SKW')
   await expect(page.getByTestId('merge-preview')).toContainText('更新 1 行 · 新增 8 行')
+  await expect(page.getByTestId('merge-preview')).toContainText(`报价单号 ${KZ_TODAY}A`)
   await page.getByTestId('batch-input').fill('20260816 Test')
   await page.getByTestId('confirm-mapping').click()
   await expect(dialog).toBeHidden()
@@ -93,7 +97,7 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   expect(ws.getCell('K2').value).toBe(45)
   expect(ws.getCell('H2').value).toBe(53)
   expect(ws.getCell('W2').value).toBe('22Days/3 weeks+cleaning')
-  expect(ws.getCell('V2').value).toBe('KV202607133')
+  expect(ws.getCell('V2').value).toBe(`${KZ_TODAY}A`) // 凯维的 KV 单号不再进 V
   expect(ws.getCell('D4').value).toBe(FIXTURE_PNS[1]) // 新增行占用预编号行、A 序号保留
   expect(ws.getCell('A4').value).toBe(3)
   expect(ws.getCell('J3').value).toBe(100) // 清洗后的文本金额以数字写回
