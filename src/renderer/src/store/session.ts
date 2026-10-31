@@ -684,7 +684,8 @@ export const useSession = create<SessionState>((set, get) => ({
           const key = negoKey(pn)
           if (seen.has(key)) continue
           seen.add(key)
-          kept.push({ id: negoSeq++, pn, qty: negoQtyFrom(cells[6] ?? null) })
+          // 数量档先留空，由比价的人自己填（Zane 2026-10-31）：总表这一行的数量只是当时询价的一档
+          kept.push({ id: negoSeq++, pn, qty: null })
         }
       }
       return { negoOpen: true, negoLines: withTrailingEmptyNego(kept) }

@@ -6,6 +6,7 @@ import {
   KK_COL,
   KK_COL_COUNT,
   VIEWER_HIDDEN_COLS,
+  cellRangesToClipboard,
   cellsToClipboard,
   copyColumns,
   copyRowCells,
@@ -231,5 +232,47 @@ describe('复制成表格：贴进汇总表 Excel 时列对得上', () => {
     expect(tsvCell('1/2" OD\nM6')).toBe('"1/2"" OD\nM6"')
     expect(tsvCell('"quoted"')).toBe('"""quoted"""')
     expect(tsvCell('x\ty')).toBe('x y')
+  })
+})
+
+describe('框选几块格区一起复制（再框一块接着加选）', () => {
+  const row = (tag: string) => fullRow((c) => `${tag}${c}`)
+
+  it('只有一块：和单块框选的复制完全一样（含 U 列现算、隐藏列占位）', () => {
+    const cells = [row('a'), row('b')]
+    for (const [c1, c2] of [
+      [3, 5],
+      [13, 21],
+      [9, 9],
+    ] as const) {
+      for (const hidden of [hiddenColsFor(false), hiddenColsFor(true)]) {
+        const one = cellRangesToClipboard(
+          cells.map((c) => ({ cells: c, spans: [[c1, c2]] })),
+          hidden,
+        )
+        expect(one).toEqual(cellsToClipboard(cells, (c) => c >= c1 && c <= c2, hidden))
+      }
+    }
+  })
+
+  it('分几段框同一列（D 列零件号）：上下接成一列', () => {
+    const out = cellRangesToClipboard(
+      [row('a'), row('b'), row('c')].map((cells) => ({ cells, spans: [[3, 3]] as const })),
+      NONE,
+    )
+    expect(out.text).toBe('a3\nb3\nc3')
+  })
+
+  it('几块列不一样：列取并集，不在这一行所在块里的格子留空', () => {
+    const out = cellRangesToClipboard(
+      [
+        { cells: row('a'), spans: [[3, 4]] },
+        { cells: row('b'), spans: [[3, 4]] },
+        { cells: row('c'), spans: [[9, 9]] },
+        { cells: row('d'), spans: [[3, 3], [9, 9]] }, // 这一行同时在两块里
+      ],
+      NONE,
+    )
+    expect(out.text.split('\n')).toEqual(['a3\ta4\t', 'b3\tb4\t', '\t\tc9', 'd3\t\td9'])
   })
 })

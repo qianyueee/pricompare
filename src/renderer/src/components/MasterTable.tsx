@@ -38,6 +38,24 @@ const SEL_TINT = 'shadow-[inset_0_0_0_999px_rgba(59,130,246,0.16)]'
 /** 没选列时统一用这一个空集合：每次拖选都会新建空 Set，换成同一个才不会让每一行都重画 */
 const NO_COLS: ReadonlySet<number> = new Set()
 
+/** 本行落在哪几块格区里，写成 "c1-c2,c1-c2"（不在任何一块里为 ''）：字符串传给行，内容不变时行不重画 */
+function rowSpansKey(ranges: readonly CellRange[], v: number): string {
+  let key = ''
+  for (const r of ranges) {
+    if (v < r.v1 || v > r.v2) continue
+    key += `${key ? ',' : ''}${r.c1}-${r.c2}`
+  }
+  return key
+}
+
+function parseSpans(key: string): [number, number][] {
+  if (!key) return []
+  return key.split(',').map((part) => {
+    const [a, b] = part.split('-')
+    return [Number(a), Number(b)]
+  })
+}
+
 function parsePriceNum(v: string | number | null): number | null {
   if (v === null) return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
@@ -150,9 +168,8 @@ interface RowProps {
   editingCol: number | null
   selected: boolean
   selectedCols: ReadonlySet<number>
-  /** 本行落在拖选格区内时的列区间 [rangeC1, rangeC2]；不在格区内为 -1 */
-  rangeC1: number
-  rangeC2: number
+  /** 本行落在哪几块拖选格区里（见 rowSpansKey） */
+  rangeSpans: string
   hiddenCols: ReadonlySet<number>
   stickyLeft: readonly number[]
   onFinishEdit: (rowIndex: number, col: number, value: string | null) => void
@@ -164,12 +181,12 @@ const MasterRowView = memo(function MasterRowView({
   editingCol,
   selected,
   selectedCols,
-  rangeC1,
-  rangeC2,
+  rangeSpans,
   hiddenCols,
   stickyLeft,
   onFinishEdit,
 }: RowProps) {
+  const spans = parseSpans(rangeSpans)
   // 供应商列最低价高亮（≥2 家有数值才标）
   const prices = VENDOR_SLOTS.map((c) => parsePriceNum(row.cells[c] ?? null))
   const valid = prices.filter((p): p is number => p !== null)
@@ -189,7 +206,7 @@ const MasterRowView = memo(function MasterRowView({
         const isMin = min !== null && num !== null && num === min
         const isTdb = isVendor && typeof v === 'string' && /tdb|tbd|待定/i.test(v)
         const isEditing = editingCol === c
-        const tinted = (rangeC1 >= 0 && c >= rangeC1 && c <= rangeC2) || selectedCols.has(c)
+        const tinted = spans.some(([a, b]) => c >= a && c <= b) || selectedCols.has(c)
         return (
           <td
             key={c}
@@ -247,14 +264,16 @@ export default function MasterTable(props: {
   hiddenCols: ReadonlySet<number>
   selected: Set<number>
   selectedCols: Set<number>
-  range: CellRange | null
+  /** 拖选的格区（可以好几块） */
+  ranges: readonly CellRange[]
   onToggleRow: (rowIndex: number) => void
   /** A 列按住拖动：按可见序号区间选行，加在按下时已选的行（base）上 */
   onRowDrag: (vFrom: number, vTo: number, base: ReadonlySet<number>) => void
   onToggleCol: (col: number) => void
   /** 表头按住拖动：选 c1..c2 列，加在按下时已选的列（base）上 */
   onColDrag: (c1: number, c2: number, base: ReadonlySet<number>) => void
-  onRangeDrag: (range: CellRange) => void
+  /** 数据格按住拖动：框出一块格区，加在按下时已框的几块（base）后面 */
+  onRangeDrag: (range: CellRange, base: readonly CellRange[]) => void
   onClearSelection: () => void
 }) {
   const editMasterCell = useSession((s) => s.editMasterCell)
@@ -321,6 +340,8 @@ export default function MasterTable(props: {
     last: string
     /** 按下时已选的行/列：这次拖的加在它上面，不取消前面选的（Zane 2026-10-30） */
     base: ReadonlySet<number>
+    /** 按下时已框的格区：框格区也一样接着加（Zane 2026-10-31） */
+    baseRanges: readonly CellRange[]
   } | null>(null)
 
   const cellFromEvent = (e: React.MouseEvent): { rawRow: number; col: number; v: number } | null => {
@@ -352,6 +373,7 @@ export default function MasterTable(props: {
         moved: false,
         last: '',
         base: new Set(props.selectedCols),
+        baseRanges: [],
       }
       e.preventDefault()
       return
@@ -367,6 +389,7 @@ export default function MasterTable(props: {
       moved: false,
       last: '',
       base: cell.col === 0 ? new Set(props.selected) : NO_COLS,
+      baseRanges: cell.col === 0 ? [] : props.ranges,
     }
   }
 
@@ -401,7 +424,7 @@ export default function MasterTable(props: {
         c1: Math.min(d.startC, Math.max(1, cell.col)),
         c2: Math.max(d.startC, Math.max(1, cell.col)),
       }
-      report(`${r.v1}:${r.v2}:${r.c1}:${r.c2}`, () => props.onRangeDrag(r))
+      report(`${r.v1}:${r.v2}:${r.c1}:${r.c2}`, () => props.onRangeDrag(r, d.baseRanges))
     }
   }
 
@@ -421,7 +444,7 @@ export default function MasterTable(props: {
   }, [onToggleRow, onToggleCol, readOnly])
 
   const selectedCols = props.selectedCols.size === 0 ? NO_COLS : props.selectedCols
-  const range = props.range
+  const ranges = props.ranges
 
   return (
     <div
@@ -470,7 +493,6 @@ export default function MasterTable(props: {
           )}
           {props.rows.slice(start, end).map(({ row, index }, k) => {
             const i = start + k
-            const inRange = range !== null && i >= range.v1 && i <= range.v2
             return (
               <MasterRowView
                 key={index}
@@ -479,8 +501,7 @@ export default function MasterTable(props: {
                 editingCol={editing?.rowIndex === index ? editing.col : null}
                 selected={props.selected.has(index)}
                 selectedCols={selectedCols}
-                rangeC1={inRange ? range.c1 : -1}
-                rangeC2={inRange ? range.c2 : -1}
+                rangeSpans={rowSpansKey(ranges, i)}
                 hiddenCols={props.hiddenCols}
                 stickyLeft={stickyLeft}
                 onFinishEdit={finishEdit}
