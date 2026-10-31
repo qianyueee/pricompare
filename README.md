@@ -40,7 +40,7 @@
   找不到则**追加**（优先占用底部只有 A 列序号的预编号空行，A 序号保留）
 - HC 填 J 列、SKW 填 K 列（其他供应商按注册表槽位，未知供应商在弹窗里选）
 - **W 交期**按列序拼接：`18Days/3 weeks+cleaning`（J 在前、K 在后；纯数字自动补 Days）
-- **V 报价单号**只收真单号（`KV202608151`）；HC 单里的"询价 20260814 Natalie A"识别为**批次名**写入 B 列
+- **V 报价单号**由我们自己编（2026-10-31 起）：`KZ` + 收到报价的日期 + 字母，如 `KZ20261031A`；同一询价组同一天收到的报价共用一个单号，同一天下一组顺延 B、C……，Z 之后接 AA、AB……。只填 V 空着、这次写了价的行，已有的单号（历史的 `KV…`）不动；供应商自己的单号不再进 V。HC 单里的"询价 20260814 Natalie A"识别为**批次名**写入 B 列
 - **H Quote (each)**：这一行各家（I–N、AG 列）拿到的数字报价取平均，向上取整到个位（TDB、「无」、US$ 文字价不算）；
   并入新报价、改供应商价时自动重算，手改 H 按写的值，直到这一行的供应商价再变
 - **U 对客报价**：来自带 Quote(EA) 列的报价文件（KV 家宏算好的），只填空不覆盖（导出时按 H 写公式重算）
@@ -98,8 +98,8 @@ node dist-server/cli.mjs --help                           # 全部命令
 |---|---|
 | `dump <报价.xlsx>` | 逐格打印报价单，标出隐藏列 / 隐藏行 |
 | `analyze <报价.xlsx>` | 按桌面版规则识别（表头、单价列、各字段），输出 JSON；隐藏列当不存在 |
-| `preview` / `merge <报价.xlsx> --vendor hc --batch "20261012 Ivan"` | 预演 / 并入，规则同桌面版「并入」 |
-| `merge-rows --rows rows.json --vendor cl --batch …` | 并入邮件正文里的报价（没有附件时） |
+| `preview` / `merge <报价.xlsx> --vendor hc --batch "20261012 Ivan" --received 2026-10-31` | 预演 / 并入，规则同桌面版「并入」；`--received` 是收到报价的日期，V 列单号 `KZ20261031A` 按它编，不写就用今天 |
+| `merge-rows --rows rows.json --vendor cl --batch … --received …` | 并入邮件正文里的报价（没有附件时） |
 | `batches`、`rows --batch …` | 最近的询价组、各家已填几行；查行（Excel 行号） |
 | `set --row R --col C --value V --expect-pn P` | 改格（如没发询价的那家填「无」、追加备注）；P/N 对不上就拒绝；改了供应商价的行 H 自动按平均重算 |
 | `recalc-h [--only-empty] [--dry-run]` | 整表补算 H = 各家报价平均（向上取整）；`--only-empty` 只补空着的，H 里的文字说明不动 |

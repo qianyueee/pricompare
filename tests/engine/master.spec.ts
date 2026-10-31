@@ -12,7 +12,6 @@ import {
   guessBatchLabel,
   isMasterWorkbook,
   isPlaceholderRow,
-  isRealQuoteNo,
   parseMasterWorkbook,
   planMerge,
   readWorkbook,
@@ -42,10 +41,7 @@ describe('汇总表解析', () => {
 })
 
 describe('合并规则', () => {
-  it('真单号判定与批次猜测', () => {
-    expect(isRealQuoteNo('KV202608151')).toBe(true)
-    expect(isRealQuoteNo('KT20260711B')).toBe(true)
-    expect(isRealQuoteNo('询价 20260814 Natalie A')).toBe(false)
+  it('批次猜测', () => {
     expect(guessBatchLabel([makeQuote('X', { quoteNo: '询价 20260814 Natalie A' })], 'x.xlsx')).toBe(
       '20260814 Natalie A',
     )
@@ -55,7 +51,7 @@ describe('合并规则', () => {
     expect(guessBatchLabel([makeQuote('X', { quoteNo: 'KV202608151' })], 'KV202608153.xlsx')).toBe('')
   })
 
-  it('SKW 报价：填充既有行（K 列、W 追加在后、V 真单号、H = 各家平均、U 取自带 Quote(EA) 的文件）', async () => {
+  it('SKW 报价：填充既有行（K 列、W 追加在后、V 填 KZ 单号不收凯维的 KV 单号、H = 各家平均、U 取自带 Quote(EA) 的文件）', async () => {
     const master = await loadMaster()
     const quote = makeQuote(FIXTURE_PNS[0]!, {
       qty: 10,
@@ -71,6 +67,7 @@ describe('合并规则', () => {
       vendorSlot: 10,
       vendorId: 'skw',
       vendorDisplay: 'SKW',
+      receivedDate: '2026-08-15',
     })
     expect(plan.fillCount).toBe(1)
     expect(plan.appendCount).toBe(0)
@@ -78,7 +75,7 @@ describe('合并规则', () => {
     const row = merged.rows[0]!
     expect(row.cells[10]).toBe(45) // K
     expect(row.cells[KK_COL.leadTime]).toBe('22Days/3 weeks+cleaning') // K 在 J 之后 → 追加
-    expect(row.cells[KK_COL.quoteNo]).toBe('KV202608151')
+    expect(row.cells[KK_COL.quoteNo]).toBe('KZ20260815A')
     expect(row.cells[KK_COL.quoteEach]).toBe(51) // H = (J 56.7 + K 45) / 2 = 50.85，向上取整
     expect(row.cells[KK_COL.quoteEa]).toBe(31)
     expect(row.cells[KK_COL.material]).toBe('304')
@@ -105,12 +102,13 @@ describe('合并规则', () => {
     expect(row2.cells[KK_COL.material]).toBe('蓝色/黄色PC')
   })
 
-  it('HC 报价：J 列在前 → W 前插；H 按两家平均重算、无 Quote(EA) 不动 U；批次标签不进 V', async () => {
+  it('HC 报价：J 列在前 → W 前插；H 按两家平均重算、无 Quote(EA) 不动 U；批次标签不进 V，V 已有单号不动', async () => {
     const master = await loadMaster()
     // 先造一行只有 SKW 报过的行
     master.rows[0]!.cells[9] = null
     master.rows[0]!.cells[10] = 45
     master.rows[0]!.cells[KK_COL.leadTime] = '3 weeks+cleaning'
+    master.rows[0]!.cells[KK_COL.quoteNo] = 'KV202608141'
     const quote = makeQuote(FIXTURE_PNS[0]!, {
       qty: 10,
       amount: 56.7,
@@ -127,7 +125,7 @@ describe('合并规则', () => {
     const row = merged.rows[0]!
     expect(row.cells[9]).toBe(56.7)
     expect(row.cells[KK_COL.leadTime]).toBe('22Days/3 weeks+cleaning') // J 在前 → 前插
-    expect(row.cells[KK_COL.quoteNo]).toBeNull() // 批次标签不算真单号
+    expect(row.cells[KK_COL.quoteNo]).toBe('KV202608141') // 历史单号不动，批次标签也不进 V
     expect(row.cells[KK_COL.quoteEach]).toBe(51) // (56.7 + 45) / 2 = 50.85 → 51，不管带没带 quoteEa
     expect(row.cells[KK_COL.quoteEa]).toBeNull()
   })
@@ -319,14 +317,14 @@ describe('并入智能化（0823/0826/0828 实证规则）', () => {
     const plan = planMerge(
       master,
       [makeQuote('E-1', { qty: 2, amount: 1300, quoteEa: '810', quoteNo: 'KV202609011' })],
-      { batch: 'KV1', vendorSlot: 10, vendorId: 'skw', vendorDisplay: 'SKW' },
+      { batch: 'KV1', vendorSlot: 10, vendorId: 'skw', vendorDisplay: 'SKW', receivedDate: '20260901' },
     )
     expect(plan.reviseCount).toBe(1)
     const row = applyMerge(master, plan).rows[0]!
     expect(row.cells[10]).toBe(1300)
     expect(row.cells[7]).toBe(1300) // 只有凯维一家，平均就是新价
     expect(row.cells[20]).toBe(810) // U 跟随
-    expect(row.cells[KK_COL.quoteNo]).toBe('KV202609011')
+    expect(row.cells[KK_COL.quoteNo]).toBe('KZ20260901A') // V 空着才补 KZ 单号，凯维的 KV 单号不进 V
   })
 
   it('修订交期变化：W 不自动改，出提醒', () => {

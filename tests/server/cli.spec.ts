@@ -139,6 +139,29 @@ describe('pricompare 命令行', () => {
     expect(store.getVersion()).toBe(2)
   })
 
+  it('merge --received：V 列填 KZ+收到日期+字母，同组同一天共用；日期认不出就拒绝', async () => {
+    const file = await hcFileWithStaleH()
+    const bad = await cli('merge', file, '--vendor', 'hc', '--batch', BATCH, '--received', '2026-13-01')
+    expect(bad.code).not.toBe(0)
+    expect(bad.err).toContain('--received')
+    expect(store.getVersion()).toBe(1)
+
+    const pre = await cli('preview', file, '--vendor', 'hc', '--batch', BATCH, '--received', '2026-10-31T23:30:00+08:00')
+    expect(pre.out).toContain('收到日期 20261031')
+    expect(pre.out).toContain('V 报价单号：KZ20261031A（9 行）')
+
+    const r = await cli('merge', file, '--vendor', 'hc', '--batch', BATCH, '--received', '2026-10-31')
+    expect(r.code, r.err).toBe(0)
+    expect(cell(3, KK_COL.quoteNo)).toBe('KZ20261031A')
+    expect(cell(11, KK_COL.quoteNo)).toBe('KZ20261031A')
+    expect(cell(2, KK_COL.quoteNo)).toBeNull() // 别的组不动
+
+    // 同一天别的组 → B
+    const rows = JSON.stringify([{ pn: 'Z-1', qty: 1, price: 9 }])
+    await cli('merge-rows', '--rows', rows, '--vendor', 'cl', '--batch', '20261030 Other', '--received', '20261031')
+    expect(cell(12, KK_COL.quoteNo)).toBe('KZ20261031B')
+  })
+
   it('不在注册表里的供应商一律拒绝', async () => {
     const r = await cli('merge', await hcFileWithStaleH(), '--vendor', 'RC Precision', '--batch', BATCH)
     expect(r.code).toBe(1)

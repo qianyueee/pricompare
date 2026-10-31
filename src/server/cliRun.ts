@@ -9,6 +9,7 @@ import { analyzeSheet } from '../engine/analyze'
 import { KK_COL, KK_VENDOR_COLS } from '../engine/export/kkLayout'
 import { cleanAmountString, cleanMasterAmounts } from '../engine/master/clean'
 import { planMerge, type MergeOptions, type MergePlan } from '../engine/master/merge'
+import { normalizeReceivedDate, todayYmd } from '../engine/master/quoteNo'
 import { isDataRow, isPlaceholderRow, parseMasterWorkbook, type MasterCell, type MasterData } from '../engine/master/model'
 import type { CellChange, MasterOp } from '../engine/master/ops'
 import { recalcQuoteEachChanges } from '../engine/master/quoteEach'
@@ -35,11 +36,11 @@ const HELP = `用法：node cli.mjs <命令> [参数]
   import-master <汇总表.xlsm>               整表导入（替换当前总表并保存原件作导出底版）
   dump <文件.xlsx> [--sheet S] [--limit N]  逐格打印报价单（每个 sheet，标出隐藏列/隐藏行），看清原表用
   analyze <报价.xlsx> [识别参数]             按桌面版规则识别报价单，输出 JSON（不改总表）
-  preview <报价.xlsx> --vendor V --batch B [识别参数]
+  preview <报价.xlsx> --vendor V --batch B [--received 日期] [识别参数]
                                            预演并入：哪些行填价、新增、修订、跳过（不改总表）
-  merge <报价.xlsx> --vendor V --batch B [识别参数]
+  merge <报价.xlsx> --vendor V --batch B [--received 日期] [识别参数]
                                            并入总表（规则同桌面版「并入」）
-  merge-rows --rows <rows.json> --vendor V --batch B [--dry-run]
+  merge-rows --rows <rows.json> --vendor V --batch B [--received 日期] [--dry-run]
                                            并入正文里的报价（没有附件时，把行写成 JSON）
   batches [--last N]                       最近的询价组：行号范围、各家已填几行
   rows [--batch B] [--pn P] [--last N] [--json]
@@ -57,6 +58,9 @@ const HELP = `用法：node cli.mjs <命令> [参数]
             cleaningSpec process size remark quoteEa name；ignore 表示不取该列）
           报价单里的隐藏列当不存在：识别出的单价列若是隐藏列，自动改用最像单价的可见列（见 warnings）。
 供应商 V：注册表里的 id 或名称（hc、skw、cl…）；不在注册表里的一律拒绝，先问人。
+--received：收到这份报价的日期（2026-10-31、20261031 或邮件日期原文 2026-10-31T10:05:00+08:00），不写就用今天。
+          V 列报价单号按它编：KZ + 日期 + 字母（KZ20261031A），同一询价组同一天共用一个，同一天下一组 B、C……；
+          只填 V 空着、这次写了价的行，已有的单号不动。
 rows.json：[{"pn","rev","qty","price","currency","lead","quoteNo","item","description","material",
             "surfaceFinish","cleaningSpec","process","size","remark","quoteEa"}]，price 可为数字或原文
 cells.json：[{"row":1723,"col":"K","value":"无","expectPn":"0100001-001","append":false}]
@@ -67,6 +71,7 @@ const OPTIONS = {
   source: { type: 'string', default: 'cli' },
   vendor: { type: 'string' },
   batch: { type: 'string' },
+  received: { type: 'string' },
   sheet: { type: 'string' },
   'header-row': { type: 'string' },
   'price-col': { type: 'string' },
@@ -309,6 +314,11 @@ const colName = (c: number) => {
 
 function printPlan(plan: MergePlan, master: MasterData) {
   out(`更新 ${plan.fillCount} 行 · 新增 ${plan.appendCount} 行 · 修订 ${plan.reviseCount} 行 · 跳过 ${plan.skipCount} 行`)
+  const quoteNos = new Map<string, number>()
+  for (const a of plan.actions) {
+    for (const ch of a.changes) if (ch.col === KK_COL.quoteNo) quoteNos.set(text(ch.to), (quoteNos.get(text(ch.to)) ?? 0) + 1)
+  }
+  if (quoteNos.size > 0) out(`V 报价单号：${[...quoteNos].map(([no, n]) => `${no}（${n} 行）`).join('、')}`)
   const kindName = { fill: '填价', append: '新增', revise: '修订', skip: '跳过' } as const
   for (const a of plan.actions) {
     const q = a.quote
@@ -326,11 +336,25 @@ async function runMerge(quotes: QuoteRow[], vendor: Vendor & { slot: number }, d
   const batch = values.batch?.trim()
   if (!batch) throw new CliError('缺少 --batch（询价组名，如「20261012 Ivan」，取自邮件主题）')
   if (quotes.length === 0) throw new CliError('没有可并入的报价行')
-  const options: MergeOptions = { batch, vendorSlot: vendor.slot, vendorId: vendor.id, vendorDisplay: vendor.display }
+  let receivedDate = todayYmd()
+  if (values.received) {
+    const d = normalizeReceivedDate(values.received)
+    if (!d) throw new CliError(`--received 日期认不出：${values.received}（写成 2026-10-31 或 20261031）`)
+    receivedDate = d
+  }
+  const options: MergeOptions = {
+    batch,
+    vendorSlot: vendor.slot,
+    vendorId: vendor.id,
+    vendorDisplay: vendor.display,
+    receivedDate,
+  }
   const snap = await call<MasterSnapshot>('GET', '/api/master')
   const master = snap.master ?? { rows: [], sheetName: 'KK询价汇总', passthrough: [], sourceFileName: null, importedAt: Date.now() }
   const plan = planMerge(master, quotes, options)
-  out(`${dryRun ? '预演' : '并入'}：${vendor.display} → ${colName(vendor.slot)}，批次「${batch}」，总表版本 ${snap.version}`)
+  out(
+    `${dryRun ? '预演' : '并入'}：${vendor.display} → ${colName(vendor.slot)}，批次「${batch}」，收到日期 ${receivedDate}，总表版本 ${snap.version}`,
+  )
   printPlan(plan, master)
   if (dryRun) return
   const op: MasterOp = { kind: 'merge', quotes, options }

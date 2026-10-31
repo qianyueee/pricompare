@@ -501,7 +501,12 @@ export const useSession = create<SessionState>((set, get) => ({
     }
     // 并入也是一步总表操作：网页版由服务在最新总表上按同样规则重新规划，不会盖掉后台刚并入的报价
     const res = commitMasterOp(
-      { kind: 'merge', quotes: analysis.rows, options: { batch, vendorSlot, vendorId, vendorDisplay: display } },
+      {
+        kind: 'merge',
+        quotes: analysis.rows,
+        // 收到日期按今天：V 列报价单号 KZ+今天+字母
+        options: { batch, vendorSlot, vendorId, vendorDisplay: display, receivedDate: todayBatch() },
+      },
       () => ({ undo: null }), // 并入后旧撤销作废（撤销只针对手工编辑/删行/清空）
     )
     const m = res?.merge

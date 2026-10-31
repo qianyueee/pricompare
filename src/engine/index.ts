@@ -35,13 +35,13 @@ export {
 export {
   planMerge,
   applyMerge,
-  isRealQuoteNo,
   guessBatchLabel,
   type MergeOptions,
   type MergeAction,
   type MergeChange,
   type MergePlan,
 } from './master/merge'
+export { KZ_PREFIX, kzQuoteNo, normalizeReceivedDate, seqIndex, seqLetters, todayYmd } from './master/quoteNo'
 export {
   suggestBatchFromMaster,
   partSetOverlap,
