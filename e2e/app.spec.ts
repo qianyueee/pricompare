@@ -529,7 +529,7 @@ test('并入智能化：重复拖入跳过、修订版原位更新', async ({ pa
   await expect(page.locator('[data-cell="0:9"]')).toHaveText('56.7')
 })
 
-test('大表只画看得见的行：滚动、编辑中滚走照样保存、跨屏拖选、筛选后回到顶部', async ({ page }) => {
+test('大表只画看得见的行：滚动、编辑中滚走照样保存、跨屏拖选、再拖接着加选、筛选后回到顶部', async ({ page }) => {
   const BIG_PATH = join(TMP, 'KKMasterBig.xlsx')
   writeFileSync(BIG_PATH, Buffer.from(await makeBigMasterFile(400)))
   await page.goto('/')
@@ -576,6 +576,43 @@ test('大表只画看得见的行：滚动、编辑中滚走照样保存、跨�
   await expect(page.getByTestId('toast')).toContainText('已复制 299 行')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('selected-count')).toHaveCount(0)
+
+  // 再拖一段接着加选，不取消前面选的：先拖第 3–6 行，再拖第 11–15 行又退回到第 13 行 → 4 + 3 = 7 行
+  await scroller.evaluate((el) => {
+    el.scrollTop = 0
+  })
+  const dragA = async (from: number, ...to: number[]) => {
+    await page.locator(`[data-cell="${from}:0"]`).hover()
+    await page.mouse.down()
+    for (const t of to) await page.locator(`[data-cell="${t}:0"]`).hover()
+    await page.mouse.up()
+  }
+  await dragA(2, 5)
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 4 行')
+  await dragA(10, 14, 12)
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 7 行')
+  for (const r of [2, 5, 10, 12]) await expect(page.locator(`[data-cell="${r}:0"]`)).toHaveText('✓')
+  for (const r of [6, 9, 13]) await expect(page.locator(`[data-cell="${r}:0"]`)).toHaveText(String(r + 1))
+  // 单击已选的行照旧是取消这一行
+  await page.locator('[data-cell="12:0"]').click()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 6 行')
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 6 行')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('selected-count')).toHaveCount(0)
+
+  // 表头拖选列同样接着加选：D–F 再加 H–I → 5 列
+  const dragHeader = async (from: number, to: number) => {
+    await page.locator(`th[data-colh="${from}"]`).hover()
+    await page.mouse.down()
+    await page.locator(`th[data-colh="${to}"]`).hover()
+    await page.mouse.up()
+  }
+  await dragHeader(3, 5)
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 3 列')
+  await dragHeader(7, 8)
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 5 列')
+  await page.keyboard.press('Escape')
 
   // 滚在表尾时搜索：只剩 1 行，照样画出来；清空搜索后从顶部重新画
   await scroller.evaluate((el) => {
