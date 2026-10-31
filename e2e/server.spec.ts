@@ -120,6 +120,8 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   // 比价页「复制为表格 → 总表格式」：和主表选行复制一样，从 B 列起，O、P、Q、S 留空
   await tony.keyboard.press('Control+b')
   await expect(tony.getByTestId('nego-page')).toBeVisible()
+  await expect(tony.getByTestId('nego-qty').first()).toHaveValue('') // 数量档先留空，填了才取价
+  await tony.getByTestId('nego-qty').first().fill('5')
   await tony.getByTestId('nego-copy-btn').click()
   await tony.getByTestId('nego-copy-master').click()
   await expect(tony.getByTestId('toast')).toContainText('已复制 1 行（汇总表格式，从 B 列批次起）')

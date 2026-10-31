@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   KK_COL_COUNT,
+  cellRangesToClipboard,
   cellsToClipboard,
   hiddenColsFor,
   isDataRow,
   masterRowsToClipboard,
   type CopyPayload,
+  type MasterRow,
 } from '@engine/index'
 import FileChip from '../components/FileChip'
 import MasterTable, { type CellRange } from '../components/MasterTable'
@@ -13,6 +15,25 @@ import { todayBatch, useSession } from '../store/session'
 import { copyTable } from '../utils/clipboard'
 
 const ALL_EDIT_COLS = Array.from({ length: KK_COL_COUNT - 1 }, (_, i) => i + 1) // B..AH（A 列序号不参与清空）
+
+/** 没框格区时统一用这一个空数组（引用不变，表格不用重画） */
+const NO_RANGES: readonly CellRange[] = []
+
+/** 框选的几块格区按行展开：落在任一块里的行（按显示顺序），带上这一行所在各块的列区间 */
+function rangeRows(ranges: readonly CellRange[], vis: readonly { row: MasterRow; index: number }[]) {
+  const spans = new Map<number, [number, number][]>()
+  for (const r of ranges) {
+    for (let v = r.v1; v <= r.v2; v++) {
+      if (!vis[v]) continue
+      const list = spans.get(v)
+      if (list) list.push([r.c1, r.c2])
+      else spans.set(v, [[r.c1, r.c2]])
+    }
+  }
+  return [...spans.keys()]
+    .sort((a, b) => a - b)
+    .map((v) => ({ index: vis[v]!.index, cells: vis[v]!.row.cells, spans: spans.get(v)! }))
+}
 
 export default function MainPage() {
   const files = useSession((s) => s.files)
@@ -38,7 +59,7 @@ export default function MainPage() {
   const [showEmpty, setShowEmpty] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [selCols, setSelCols] = useState<Set<number>>(() => new Set())
-  const [selRange, setSelRange] = useState<CellRange | null>(null)
+  const [selRanges, setSelRanges] = useState<readonly CellRange[]>(NO_RANGES)
 
   const rows = master?.rows ?? []
   const dataCount = useMemo(() => rows.filter(isDataRow).length, [rows])
@@ -49,18 +70,18 @@ export default function MainPage() {
   useEffect(() => {
     setSelected(new Set())
     setSelCols(new Set())
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
   }, [importedAt, rowCount])
 
   // 筛选/搜索改变可见顺序 → 格区（按可见位置记录）作废
   useEffect(() => {
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
   }, [search, batchFilter, showEmpty])
 
   // 三种选区互斥：行 / 列 / 格区
   const toggleRow = useCallback((rowIndex: number) => {
     setSelCols(new Set())
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
     setSelected((prev) => {
       const next = new Set(prev)
       if (next.has(rowIndex)) next.delete(rowIndex)
@@ -72,12 +93,12 @@ export default function MainPage() {
   const clearSelection = useCallback(() => {
     setSelected(new Set())
     setSelCols(new Set())
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
   }, [])
 
   const toggleCol = useCallback((col: number) => {
     setSelected(new Set())
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
     setSelCols((prev) => {
       const next = new Set(prev)
       if (next.has(col)) next.delete(col)
@@ -89,16 +110,17 @@ export default function MainPage() {
   // 拖选行/列：加在按下时已选的上面，再拖另一段不取消前面选的（取消用单击、Esc 或 ✕）
   const colDrag = useCallback((c1: number, c2: number, base: ReadonlySet<number>) => {
     setSelected(new Set())
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
     const next = new Set<number>(base)
     for (let c = Math.max(1, c1); c <= c2; c++) next.add(c)
     setSelCols(next)
   }, [])
 
-  const rangeDrag = useCallback((r: CellRange) => {
+  // 框格区也一样：再框一块接着加（分几段框同一列，复制出来上下接成一列）
+  const rangeDrag = useCallback((r: CellRange, base: readonly CellRange[]) => {
     setSelected(new Set())
     setSelCols(new Set())
-    setSelRange(r)
+    setSelRanges([...base, r])
   }, [])
 
   // Ctrl/Cmd+B：带选中行进入 NEGO 比价页（页已开时忽略）
@@ -161,14 +183,14 @@ export default function MainPage() {
 
   const rowDrag = useCallback((vFrom: number, vTo: number, base: ReadonlySet<number>) => {
     setSelCols(new Set())
-    setSelRange(null)
+    setSelRanges(NO_RANGES)
     const [a, b] = vFrom <= vTo ? [vFrom, vTo] : [vTo, vFrom]
     const next = new Set<number>(base)
     for (const it of visibleRef.current.slice(a, b + 1)) next.add(it.index)
     setSelected(next)
   }, [])
 
-  const selKind = selected.size > 0 ? 'rows' : selCols.size > 0 ? 'cols' : selRange ? 'range' : null
+  const selKind = selected.size > 0 ? 'rows' : selCols.size > 0 ? 'cols' : selRanges.length > 0 ? 'range' : null
 
   const copySelection = useCallback(async () => {
     const vis = visibleRef.current
@@ -184,18 +206,17 @@ export default function MainPage() {
       payload = cellsToClipboard(vis.map((it) => it.row.cells), (c) => selCols.has(c), hiddenCols)
       const shown = [...selCols].filter((c) => !hiddenCols.has(c)).length
       desc = `${shown} 列（${vis.length} 行）`
-    } else if (selRange) {
-      const { c1, c2 } = selRange
-      payload = cellsToClipboard(
-        vis.slice(selRange.v1, selRange.v2 + 1).map((it) => it.row.cells),
-        (c) => c >= c1 && c <= c2,
-        hiddenCols,
-      )
-      desc = `${selRange.v2 - selRange.v1 + 1}×${c2 - c1 + 1} 格`
+    } else if (selRanges.length > 0) {
+      const picked = rangeRows(selRanges, vis)
+      payload = cellRangesToClipboard(picked, hiddenCols)
+      const one = selRanges.length === 1 ? selRanges[0]! : null
+      desc = one
+        ? `${one.v2 - one.v1 + 1}×${one.c2 - one.c1 + 1} 格`
+        : `${selRanges.length} 块格区（${picked.length} 行）`
     } else return
     const ok = await copyTable(payload)
     showToast({ message: ok ? `已复制 ${desc}，可直接粘贴进 Excel` : '复制失败，请重试' })
-  }, [selected, selCols, selRange, showToast, hiddenCols])
+  }, [selected, selCols, selRanges, showToast, hiddenCols])
 
   const clearSelectionCells = useCallback(() => {
     const vis = visibleRef.current
@@ -204,17 +225,16 @@ export default function MainPage() {
     } else if (selCols.size > 0) {
       const cols = [...selCols]
       clearCellsAction(vis.map((it) => ({ rowIndex: it.index, cols })))
-    } else if (selRange) {
-      const cols: number[] = []
-      for (let c = Math.max(1, selRange.c1); c <= selRange.c2; c++) cols.push(c)
-      const targets: { rowIndex: number; cols: number[] }[] = []
-      for (let v = selRange.v1; v <= selRange.v2; v++) {
-        const it = vis[v]
-        if (it) targets.push({ rowIndex: it.index, cols })
-      }
-      clearCellsAction(targets)
+    } else if (selRanges.length > 0) {
+      clearCellsAction(
+        rangeRows(selRanges, vis).map((r) => {
+          const cols = new Set<number>()
+          for (const [a, b] of r.spans) for (let c = Math.max(1, a); c <= b; c++) cols.add(c)
+          return { rowIndex: r.index, cols: [...cols].sort((x, y) => x - y) }
+        }),
+      )
     }
-  }, [selected, selCols, selRange, clearCellsAction])
+  }, [selected, selCols, selRanges, clearCellsAction])
 
   const deleteSelectedRows = useCallback(() => {
     if (selected.size > 0) deleteRowsAction([...selected])
@@ -370,7 +390,7 @@ export default function MainPage() {
         hiddenCols={hiddenCols}
         selected={selected}
         selectedCols={selCols}
-        range={selRange}
+        ranges={selRanges}
         onToggleRow={toggleRow}
         onRowDrag={rowDrag}
         onToggleCol={toggleCol}
@@ -381,14 +401,14 @@ export default function MainPage() {
       <div className="text-[11px] text-slate-400">
         {readOnly ? (
           <>
-            最新批次显示在最上（导出仍按原顺序）· 按住拖动选多格 · A 列选行、表头选列（都可拖选多个，再拖一段接着加选）→ Ctrl+C 复制 ·
+            最新批次显示在最上（导出仍按原顺序）· 按住拖动选多格 · A 列选行、表头选列（都可拖选多个；再拖一段、再框一块都是接着加选）→ Ctrl+C 复制 ·
             选行后可「导出所选」单独导出这几行 · Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 新报价会自动出现在表里
           </>
         ) : (
           <>
             最新批次显示在最上（导出仍按原顺序）· 单击格子编辑（Enter 保存 / Esc 取消），按住拖动选多格 ·
-            A 列选行、表头选列（都可拖选多个，再拖一段接着加选）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / 导出所选 / Ctrl+Z 撤销 /
+            A 列选行、表头选列（都可拖选多个；再拖一段、再框一块都是接着加选）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / 导出所选 / Ctrl+Z 撤销 /
             Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 拖入报价按规则并入，拖入 KK 汇总表整表更新
           </>
@@ -404,7 +424,9 @@ export default function MainPage() {
                   ? `已选 ${selected.size} 行`
                   : selKind === 'cols'
                     ? `已选 ${selCols.size} 列`
-                    : `已选 ${selRange!.v2 - selRange!.v1 + 1}×${selRange!.c2 - selRange!.c1 + 1} 格`}
+                    : selRanges.length === 1
+                      ? `已选 ${selRanges[0]!.v2 - selRanges[0]!.v1 + 1}×${selRanges[0]!.c2 - selRanges[0]!.c1 + 1} 格`
+                      : `已选 ${selRanges.length} 块格区`}
               </span>
               <button
                 type="button"

@@ -104,6 +104,7 @@ export {
   COPY_BAND_FILLS,
   ROW_COPY_FIRST_COL,
   VIEWER_HIDDEN_COLS,
+  cellRangesToClipboard,
   cellsToClipboard,
   copyColumns,
   copyRowCells,
@@ -113,4 +114,4 @@ export {
   toExcelHtml,
   toExcelTsv,
 } from './master/copy'
-export type { CopyPayload } from './master/copy'
+export type { CopyPayload, RangeRow } from './master/copy'

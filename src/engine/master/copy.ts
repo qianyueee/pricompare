@@ -163,6 +163,26 @@ export function cellsToClipboard(
   return { text: toExcelTsv(matrix), html: toExcelHtml(matrix, cols) }
 }
 
+/** 框选的一行：这一行的格子，和它落在哪几块格区里（每块的列区间 [c1, c2]，含端点） */
+export interface RangeRow {
+  cells: readonly MasterCell[]
+  spans: readonly (readonly [number, number])[]
+}
+
+/**
+ * 框选的几块格区 → 剪贴板内容（Zane 2026-10-31：再框一块接着加选）。
+ * 行 = 落在任一块里的行（按显示顺序），列 = 任一块用到的列；某格不在这一行所在的块里就留空。
+ * 几块列相同（如分几段框 D 列零件号）时就是上下接起来的一列；只有一块时和 cellsToClipboard 一样。
+ */
+export function cellRangesToClipboard(rows: readonly RangeRow[], hiddenCols: ReadonlySet<number>): CopyPayload {
+  const inSpan = (spans: RangeRow['spans'], c: number) => spans.some(([a, b]) => c >= a && c <= b)
+  const cols = copyColumns((c) => rows.some((r) => inSpan(r.spans, c)), hiddenCols, KK_COL_COUNT)
+  const matrix = rows.map((r) =>
+    copyRowCells(r.cells, cols, hiddenCols).map((v, k) => (inSpan(r.spans, cols[k]!) ? v : null)),
+  )
+  return { text: toExcelTsv(matrix), html: toExcelHtml(matrix, cols) }
+}
+
 /**
  * 汇总表整行 → 剪贴板内容（主表选行复制、比价页「总表格式」复制共用）：
  * B 列批次到 AH 列共 33 列，位置和汇总表 B 列起一一对上；隐藏列留空，U 列现算

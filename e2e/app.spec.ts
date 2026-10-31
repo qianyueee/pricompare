@@ -114,8 +114,15 @@ test('汇总载入 → 报价按规则并入 → 单元格编辑 → 原格式�
   const nego = page.getByTestId('nego-page')
   await expect(nego).toBeVisible()
   await expect(nego.getByText('最优总价(¥)')).toBeVisible() // 金额表头带 ¥
-  // 选中 2 行带入 + 末尾恒保一空行；最低单价高亮；各家总额与最优组合
+  // 选中 2 行带入 + 末尾恒保一空行；数量档先留空（灰字提示总表里有的档），填了数量才比价
   await expect(page.getByTestId('nego-line')).toHaveCount(3)
+  await expect(page.getByTestId('nego-qty').nth(0)).toHaveValue('')
+  await expect(page.getByTestId('nego-qty').nth(0)).toHaveAttribute('placeholder', '10')
+  await expect(page.getByTestId('nego-qty').nth(1)).toHaveValue('')
+  await expect(page.getByTestId('nego-qty').nth(1)).toHaveAttribute('placeholder', '5')
+  await page.getByTestId('nego-qty').nth(0).fill('10')
+  await page.getByTestId('nego-qty').nth(1).fill('5')
+  // 最低单价高亮；各家总额与最优组合
   await expect(nego.locator('[data-min="1"]')).toHaveCount(2)
   await expect(page.getByTestId('nego-sum-9')).toContainText('1100') // HC 60×10+100×5
   await expect(page.getByTestId('nego-sum-10')).toContainText('900') // SKW 45×10+90×5
@@ -613,6 +620,50 @@ test('大表只画看得见的行：滚动、编辑中滚走照样保存、跨�
   await dragHeader(7, 8)
   await expect(page.getByTestId('selected-count')).toHaveText('已选 5 列')
   await page.keyboard.press('Escape')
+
+  // 在某一列里拖着框格子也一样接着加：D 列框第 3–5 行，再框第 9–10 行 → 复制出来上下接成一列 5 个零件号
+  const dragCells = async (from: string, to: string) => {
+    await page.locator(`[data-cell="${from}"]`).hover()
+    await page.mouse.down()
+    await page.locator(`[data-cell="${to}"]`).hover()
+    await page.mouse.up()
+  }
+  await dragCells('2:3', '4:3')
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 3×1 格')
+  await dragCells('8:3', '9:3')
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 2 块格区')
+  await expect(page.locator('[data-cell="3:3"]')).toHaveClass(/inset/) // 第一块还在
+  await expect(page.locator('[data-cell="9:3"]')).toHaveClass(/inset/)
+  await expect(page.locator('[data-cell="6:3"]')).not.toHaveClass(/inset/)
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 2 块格区（5 行）')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    ['1000002-000', '1000003-000', '1000004-000', '1000008-000', '1000009-000'].join('\n'),
+  )
+  // 再框一块别的列（J 列第 2 行）：列取并集（D、J 两列，和表头选列一样中间不补），不在框里的格子留空
+  // （单击格子是编辑，只框一格要拖出去再拖回来）
+  await page.locator('[data-cell="1:9"]').hover()
+  await page.mouse.down()
+  await page.locator('[data-cell="1:8"]').hover()
+  await page.locator('[data-cell="1:9"]').hover()
+  await page.mouse.up()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 3 块格区')
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 3 块格区（6 行）')
+  const blocks = (await page.evaluate(() => navigator.clipboard.readText())).split('\n')
+  expect(blocks[0]).toBe('\t101') // 第 2 行只框了 J 列
+  expect(blocks[1]).toBe('1000002-000\t')
+  // Delete 清空所有框住的格子，Ctrl+Z 一步撤销
+  await page.keyboard.press('Delete')
+  await expect(page.locator('[data-cell="9:3"]')).toHaveText('')
+  await expect(page.locator('[data-cell="1:9"]')).toHaveText('')
+  await expect(page.locator('[data-cell="5:3"]')).toHaveText('1000005-000')
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('[data-cell="2:3"]')).toHaveText('1000002-000')
+  await expect(page.locator('[data-cell="1:9"]')).toHaveText('101')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('selected-count')).toHaveCount(0)
 
   // 滚在表尾时搜索：只剩 1 行，照样画出来；清空搜索后从顶部重新画
   await scroller.evaluate((el) => {
