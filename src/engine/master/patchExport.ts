@@ -1,8 +1,16 @@
 import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
-import { KK_COL } from '../export/kkLayout'
-import { KK_COL_COUNT, isDataRow, parseMasterWorkbookDetailed, type MasterCell, type MasterData } from './model'
+import { normalizeHeader } from '../synonyms'
+import { KK_COL, KK_HEADERS } from '../export/kkLayout'
+import {
+  KK_COL_COUNT,
+  isDataRow,
+  parseMasterWorkbookDetailed,
+  type MasterCell,
+  type MasterData,
+  type ParsedMaster,
+} from './model'
 import { quoteEaCellXml } from './quoteEa'
 
 /**
@@ -90,6 +98,47 @@ export function parseRowCells(rowXml: string): Map<number, string> {
   return out
 }
 
+/**
+ * 原表表头里还是旧名的列（见 KK_HEADER_RENAMES，如 M1 还写着 BY）：物理列号 → 旧名原文、现名。
+ * 以原表为底的导出把这几格表头（和表格的同名列）改写成现名，数据列和表头才对得上。
+ */
+export function renamedHeaders(parsed: ParsedMaster): Map<number, { from: string; to: string }> {
+  const out = new Map<number, { from: string; to: string }>()
+  parsed.columnMap.forEach((p, c) => {
+    if (p === null || p === undefined) return
+    const from = parsed.headerRow[p]
+    const to = KK_HEADERS[c]!
+    if (from !== null && from !== undefined && normalizeHeader(from) !== normalizeHeader(to)) out.set(p, { from, to })
+  })
+  return out
+}
+
+/** 表格（Table）定义里把旧表头名的列改成现名：Excel 要求表格列名和表头格文字一致，否则打开时报错修复 */
+export function renameTableColumns(tableXml: string, renames: Iterable<{ from: string; to: string }>): string {
+  let out = tableXml
+  for (const { from, to } of renames) {
+    const name = `name="${xmlEscape(from)}"`
+    out = out.replace(/<tableColumn\b[^>]*>/g, (tag) => (tag.includes(` ${name}`) ? tag.replace(` ${name}`, ` name="${xmlEscape(to)}"`) : tag))
+  }
+  return out
+}
+
+/** 挂在这张 sheet 上的表格（Table）part 路径（zip 里确实存在的） */
+function sheetTablePaths(files: Record<string, Uint8Array>, sheetPath: string): string[] {
+  const relsFile = files[sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')]
+  if (!relsFile) return []
+  const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
+  const out: string[] = []
+  for (const m of dec.decode(relsFile).matchAll(/<Relationship\b[^>]*\/?>/g)) {
+    if (!/\/table"/.test(m[0])) continue
+    const target = attrOf(m[0], 'Target')
+    if (!target) continue
+    const tablePath = target.startsWith('/') ? target.slice(1) : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
+    if (files[tablePath]) out.push(tablePath)
+  }
+  return out
+}
+
 export interface PatchResult {
   buffer: ArrayBuffer
   changedCells: number
@@ -133,6 +182,8 @@ export function patchMasterWorkbook(
   const origRows = parsed.master.rows
   // 逻辑列（KK_HEADERS 列序）→ 原表物理列：原表是旧布局时按表头对位写回原来的位置
   const physCol = parsed.columnMap
+  // 表头还是旧名的列（M1 的 BY → XH）：表头格改写成现名，不算进改动格数
+  const headerRenames = renamedHeaders(parsed)
 
   // 变更集（与导入时同一条解析管线比对，未动的单元格绝不触碰）
   const norm = (v: MasterCell | undefined): MasterCell =>
@@ -176,8 +227,13 @@ export function patchMasterWorkbook(
       changedCells++
     }
   }
-  if (changedCells === 0) {
+  if (changedCells === 0 && headerRenames.size === 0) {
     return { buffer: originalBuffer.slice(0), changedCells: 0, formulaCellsReplaced: 0 }
+  }
+  if (headerRenames.size > 0) {
+    const headerMap = changes.get(1) ?? new Map<number, PatchValue>()
+    for (const [phys, { to }] of headerRenames) headerMap.set(phys, to)
+    changes.set(1, headerMap)
   }
 
   let xml = dec.decode(files[sheetPath])
@@ -256,32 +312,24 @@ export function patchMasterWorkbook(
   // KK 模板的蓝白带状样式（row stripes）与筛选来自表格范围，不扩展则新增行没有斑马纹
   const newBottom = master.rows.length + 1 // 1 基 Excel 行号（表头第 1 行）
   if (newBottom > origRows.length + 1) {
-    const relsPath = sheetPath.replace(/([^/]+)\.xml$/, '_rels/$1.xml.rels')
-    const relsFile = files[relsPath]
-    if (relsFile) {
-      const sheetDir = sheetPath.slice(0, sheetPath.lastIndexOf('/'))
-      for (const m of dec.decode(relsFile).matchAll(/<Relationship\b[^>]*\/?>/g)) {
-        if (!/\/table"/.test(m[0])) continue
-        const target = attrOf(m[0], 'Target')
-        if (!target) continue
-        const tablePath = target.startsWith('/')
-          ? target.slice(1)
-          : `${sheetDir}/${target}`.replace(/[^/]+\/\.\.\//g, '')
-        const tf = files[tablePath]
-        if (!tf) continue
-        const patched = dec.decode(tf).replace(
-          /(ref=")([A-Z]+\d+:[A-Z]+)(\d+)(")/g,
-          (all, p1: string, cols: string, bottom: string, p4: string) =>
-            Number(bottom) < newBottom ? `${p1}${cols}${newBottom}${p4}` : all,
-        )
-        files[tablePath] = enc.encode(patched)
-      }
+    for (const tablePath of sheetTablePaths(files, sheetPath)) {
+      const patched = dec.decode(files[tablePath]!).replace(
+        /(ref=")([A-Z]+\d+:[A-Z]+)(\d+)(")/g,
+        (all, p1: string, cols: string, bottom: string, p4: string) =>
+          Number(bottom) < newBottom ? `${p1}${cols}${newBottom}${p4}` : all,
+      )
+      files[tablePath] = enc.encode(patched)
     }
     // dimension 同步到新底部（Excel 容忍旧值，但保持一致更干净）
     xml = xml.replace(
       /(<dimension ref="[A-Z]+\d+:[A-Z]+)\d+("\/>)/,
       (_all, p1: string, p2: string) => `${p1}${newBottom}${p2}`,
     )
+  }
+  if (headerRenames.size > 0) {
+    for (const tablePath of sheetTablePaths(files, sheetPath)) {
+      files[tablePath] = enc.encode(renameTableColumns(dec.decode(files[tablePath]!), headerRenames.values()))
+    }
   }
   files[sheetPath] = enc.encode(xml)
 

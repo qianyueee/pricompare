@@ -115,7 +115,7 @@ describe('KK 汇总导出', () => {
   })
 
   it('超出 I–N 槽位时在 N 后插入新列并告警', async () => {
-    const vendors = ['mao', 'hc', 'skw', 'cl', 'by', 'jm'].map((id) => ({
+    const vendors = ['mao', 'hc', 'skw', 'cl', 'xh', 'jm'].map((id) => ({
       vendorId: id,
       vendorDisplay: id.toUpperCase(),
       rows: [makeQuote('P-1', { amount: 100 })],

@@ -1,6 +1,6 @@
 import { normalizeHeader } from '../synonyms'
 import { sheetGrid, type ParsedWorkbook } from '../workbook'
-import { KK_HEADERS, KK_LEGACY_HEADERS } from '../export/kkLayout'
+import { KK_HEADERS, KK_HEADER_RENAMES, KK_LEGACY_HEADERS } from '../export/kkLayout'
 import type { Grid } from '../types'
 
 export const KK_COL_COUNT = 34
@@ -31,12 +31,19 @@ export interface MasterData {
 }
 
 const NORMALIZED_KK_HEADERS = KK_HEADERS.map((h) => normalizeHeader(h))
+/** 每一列认的旧表头（改名前的原文，见 KK_HEADER_RENAMES），归一化后 */
+const NORMALIZED_OLD_HEADERS: readonly string[][] = KK_HEADERS.map((h) =>
+  Object.entries(KK_HEADER_RENAMES)
+    .filter(([, to]) => to === h)
+    .map(([from]) => normalizeHeader(from)),
+)
 /** 表头最多往右找这么多列（用户可能在表尾加了自己的列） */
 const HEADER_SCAN_COLS = KK_COL_COUNT + 16
 
 /**
  * 按表头文字对位：返回 KK_HEADERS 每一列在源表里的物理列号（找不到为 null）。
  * 用户挪过列（10-07 把 YJ 从 M 挪到 AG、新增 CL）也能读对，不依赖固定列号。
+ * 改过名的列（11-06 BY → XH）先找现名，找不到再认旧名，所以表头还是 BY 的旧汇总表也读进 XH 列。
  */
 export function kkColumnMap(header: readonly (string | null | undefined)[]): (number | null)[] {
   const pos = new Map<string, number>()
@@ -45,7 +52,25 @@ export function kkColumnMap(header: readonly (string | null | undefined)[]): (nu
     const key = normalizeHeader(String(h))
     if (key && !pos.has(key)) pos.set(key, i)
   })
-  return NORMALIZED_KK_HEADERS.map((key) => pos.get(key) ?? null)
+  const used = new Set<number>()
+  const map = NORMALIZED_KK_HEADERS.map((key) => {
+    const p = pos.get(key)
+    if (p === undefined) return null
+    used.add(p)
+    return p
+  })
+  NORMALIZED_OLD_HEADERS.forEach((olds, c) => {
+    if (map[c] !== null) return
+    for (const old of olds) {
+      const p = pos.get(old)
+      if (p !== undefined && !used.has(p)) {
+        map[c] = p
+        used.add(p)
+        return
+      }
+    }
+  })
+  return map
 }
 
 function headerTexts(grid: Grid): (string | null)[] {
@@ -96,6 +121,8 @@ export interface ParsedMaster {
   master: MasterData
   /** KK_HEADERS 每一列在源 sheet 里的物理列号（null = 源表没有这一列） */
   columnMap: (number | null)[]
+  /** 源 sheet 第 1 行的表头原文（按物理列号） */
+  headerRow: (string | null)[]
 }
 
 /** 解析 KK 汇总工作簿，同时给出逻辑列 → 物理列的对位；不是汇总表返回 null */
@@ -103,7 +130,8 @@ export function parseMasterWorkbookDetailed(pw: ParsedWorkbook, fileName: string
   const sheetName = findMasterSheet(pw)
   if (!sheetName) return null
   const grid = sheetGrid(pw, sheetName, MASTER_MAX_ROWS, HEADER_SCAN_COLS)
-  const columnMap = kkColumnMap(headerTexts(grid))
+  const headerRow = headerTexts(grid)
+  const columnMap = kkColumnMap(headerRow)
   const all = gridToCells(grid, HEADER_SCAN_COLS)
   // 第 1 行是表头；数据行从第 2 行（下标 1）开始
   const body = all.slice(1).map((src) => ({
@@ -122,6 +150,7 @@ export function parseMasterWorkbookDetailed(pw: ParsedWorkbook, fileName: string
   return {
     master: { rows, sheetName, passthrough, sourceFileName: fileName, importedAt: Date.now() },
     columnMap,
+    headerRow,
   }
 }
 
@@ -132,14 +161,14 @@ export function parseMasterWorkbook(pw: ParsedWorkbook, fileName: string): Maste
 
 /** 旧布局（33 列）每一列在新布局里的列号 */
 const LEGACY_TO_CURRENT: readonly number[] = KK_LEGACY_HEADERS.map((h, i) => {
-  // 同名表头按出现顺序对位（布局里没有重名表头）
-  const idx = KK_HEADERS.indexOf(h)
+  // 同名表头按出现顺序对位（布局里没有重名表头）；改过名的按现名找（BY → XH）
+  const idx = KK_HEADERS.indexOf(KK_HEADER_RENAMES[h] ?? h)
   return idx >= 0 ? idx : i
 })
 
 /**
  * 旧版本存下的总表（每行 33 格，10-07 之前的布局）迁移到当前 34 列布局：
- * BY 从 L 到 M、YJ 从 M 到 AG、Base ID 从 AG 到 AH，L 列 CL 留空。已是新布局的行原样保留。
+ * BY 从 L 到 M（现在的 XH 列）、YJ 从 M 到 AG、Base ID 从 AG 到 AH，L 列 CL 留空。已是新布局的行原样保留。
  */
 export function migrateMasterLayout(master: MasterData): { master: MasterData; migratedRows: number } {
   let migratedRows = 0
