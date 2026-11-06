@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import ExcelJS from 'exceljs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { KK_COL, KK_COL_COUNT, type MasterCell, type MasterData } from '@engine/index'
+import { AccessLog } from '../../src/server/access'
 import { DEFAULT_AUTH } from '../../src/server/auth'
 import { runCli } from '../../src/server/cliRun'
 import { createHandler } from '../../src/server/http'
@@ -46,7 +47,7 @@ beforeEach(async () => {
   const web = join(dir, 'web')
   await mkdir(web, { recursive: true })
   await writeFile(join(web, 'index.html'), '<html></html>')
-  const h = createHandler({ store, auth: () => DEFAULT_AUTH, staticDir: web })
+  const h = createHandler({ store, auth: () => DEFAULT_AUTH, staticDir: web, accessLog: new AccessLog(join(dir, 'data', 'access')) })
   closeHandler = h.close
   server = createServer((req, res) => void h.handler(req, res))
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
@@ -260,5 +261,20 @@ describe('pricompare 命令行', () => {
     expect(await verifyPassword('KVS_test1', lines[0]!)).toBe(true)
     expect(await verifyPassword('KVS_test1\n', lines[0]!)).toBe(false)
     expect(await runCli(['hash-password'], { out: () => {}, err: () => {}, stdin: async () => '' })).toBe(1)
+  })
+
+  it('visits：按天按入口列出打开次数，没人访问的日子合成一行；--detail 逐条列出', async () => {
+    await fetch(`${url}/`, { headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/141.0 Safari/537.36' } })
+    await fetch(`${url}/nego`)
+    const r = await cli('visits', '--days', '5', '--detail')
+    expect(r.code).toBe(0)
+    const lines = r.out.split('\n')
+    expect(lines[0]).toBe('最近 5 天网页访问（按 Mac 本地日期）')
+    expect(lines[1]).toMatch(/^日期\s+入口\s+打开\s+访客/)
+    expect(lines[2]).toMatch(/^\d{4}-\d{2}-\d{2}  本机\s+2\s+2\s+0\s+0\s+0\s+0  local$/)
+    expect(lines[3]).toMatch(/^\d{4}-\d{2}-\d{2} ~ \d{4}-\d{2}-\d{2}  没有访问$/)
+    expect(r.out).toContain('合计打开网页 2 次')
+    expect(r.out).toMatch(/本机\s+打开网页\s+local\s+127\.0\.0\.1\s+-\s+Mac Chrome/)
+    expect((await cli('visits', '--days', '0')).code).toBe(1)
   })
 })

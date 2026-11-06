@@ -26,7 +26,12 @@ import {
   type MasterSnapshot,
   type PostOpResponse,
   type ServerSession,
+  type AccessEvent,
+  type AccessKind,
+  type VisitDay,
+  type VisitsReport,
 } from '../shared/serverApi'
+import { entryLabel } from './access'
 import { hashPassword } from './password'
 
 const HELP = `用法：node cli.mjs <命令> [参数]
@@ -51,6 +56,8 @@ const HELP = `用法：node cli.mjs <命令> [参数]
   recalc-h [--only-empty] [--dry-run] [--limit N]
                                            整表补算 H = 各家数字报价平均、向上取整到个位；--only-empty 只补空着的 H，
                                            否则已有的数字 H 也改；H 里的文字说明不动
+  visits [--days N] [--detail] [--json]    网页每天的访问次数（默认最近 14 天），按入口分：quote.kvstek.com、
+                                           ts.net 公网、ts.net 内网（自己的设备）、本机；--detail 逐条列出每次访问
   hash-password                            从标准输入读密码，输出填进 config.json「password」的哈希（不连服务）
 
 识别参数：--sheet 名称  --header-row N（Excel 行号）  --price-col 列字母  --map 字段=列字母,…
@@ -90,6 +97,8 @@ const OPTIONS = {
   text: { type: 'boolean', default: false },
   cells: { type: 'string' },
   'only-empty': { type: 'boolean', default: false },
+  days: { type: 'string' },
+  detail: { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 } as const
 
@@ -652,6 +661,112 @@ async function status(): Promise<void> {
   await history(10)
 }
 
+/* ---------------- 网页访问次数 ---------------- */
+
+/** 终端里中文占两格 */
+function dispWidth(s: string): number {
+  let w = 0
+  for (const ch of s) w += /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1
+  return w
+}
+const padR = (s: string, n: number) => s + ' '.repeat(Math.max(0, n - dispWidth(s)))
+const padL = (s: string, n: number) => ' '.repeat(Math.max(0, n - dispWidth(s))) + s
+
+const KIND_LABEL: Record<AccessKind, string> = {
+  page: '打开网页',
+  'login-page': '登录页',
+  'login-ok': '登录成功',
+  'login-fail': '登录失败',
+  export: '导出',
+}
+
+/** 把浏览器标识缩成「iPhone Safari」这样 */
+export function shortUa(ua: string): string {
+  if (!ua) return '?'
+  if (/bot|spider|crawl|curl|wget|python|go-http|scan|zgrab|httpclient|okhttp|java\//i.test(ua)) return `机器人(${ua.slice(0, 30)})`
+  const os = /iPhone/.test(ua)
+    ? 'iPhone'
+    : /iPad/.test(ua)
+      ? 'iPad'
+      : /Android/.test(ua)
+        ? 'Android'
+        : /Windows/.test(ua)
+          ? 'Windows'
+          : /Mac OS X|Macintosh/.test(ua)
+            ? 'Mac'
+            : /Linux/.test(ua)
+              ? 'Linux'
+              : ''
+  const br = /MicroMessenger/.test(ua)
+    ? '微信'
+    : /Edg\//.test(ua)
+      ? 'Edge'
+      : /Firefox\/|FxiOS/.test(ua)
+        ? 'Firefox'
+        : /Chrome\/|CriOS/.test(ua)
+          ? 'Chrome'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : ''
+  return [os, br].filter(Boolean).join(' ') || ua.slice(0, 30)
+}
+
+function localTime(iso: string): string {
+  const d = new Date(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+async function visits(): Promise<void> {
+  const days = Number(values.days ?? 14)
+  if (!Number.isInteger(days) || days < 1) throw new CliError('--days 要是正整数')
+  const report = await call<VisitsReport>('GET', `/api/visits?days=${days}${values.detail ? '&detail=1' : ''}`)
+  if (values.json) return void out(JSON.stringify(report, null, 1))
+
+  const W = [10, 18, 5, 5, 8, 8, 6, 4]
+  const cols = ['日期', '入口', '打开', '访客', '登录成功', '登录失败', '登录页', '导出']
+  const line = (cells: string[], extra = '') =>
+    out(cells.map((c, i) => (i < 2 ? padR(c, W[i]!) : padL(c, W[i]!))).join('  ') + (extra ? `  ${extra}` : ''))
+  out(`最近 ${report.dates.length} 天网页访问（按 Mac 本地日期）`)
+  line(cols, '身份')
+  const byDate = new Map<string, VisitDay[]>()
+  for (const d of report.days) byDate.set(d.date, [...(byDate.get(d.date) ?? []), d])
+  // 连着几天没人访问的合成一行
+  let emptyFrom = ''
+  let emptyTo = ''
+  const flushEmpty = () => {
+    if (!emptyFrom) return
+    out(`${emptyTo === emptyFrom ? padR(emptyFrom, W[0]!) : `${emptyTo} ~ ${emptyFrom}`}  没有访问`)
+    emptyFrom = emptyTo = ''
+  }
+  for (const date of report.dates) {
+    const rows = byDate.get(date)
+    if (!rows) {
+      emptyFrom ||= date
+      emptyTo = date
+      continue
+    }
+    flushEmpty()
+    for (const r of rows) {
+      line(
+        [r.date, r.entry, r.pages, r.visitors, r.loginOk, r.loginFail, r.loginPage, r.exports].map(String),
+        r.users.join('、'),
+      )
+    }
+  }
+  flushEmpty()
+  const total = report.days.reduce((n, d) => n + d.pages, 0)
+  out(`合计打开网页 ${total} 次`)
+  out('打开 = 已登录打开网页的次数（刷新也算一次）；访客 = 不同 IP + 浏览器（约数）；登录页 = 没登录看到登录页（含扫网站的机器人）')
+  if (values.detail) {
+    out('')
+    out('逐条（时间 入口 动作 身份 IP 国家 浏览器）：')
+    for (const e of (report.events ?? []) as AccessEvent[]) {
+      out(`  ${localTime(e.t)}  ${padR(entryLabel(e), 16)}  ${padR(KIND_LABEL[e.kind] ?? e.kind, 8)}  ${e.user || '-'}  ${e.ip || '-'}  ${e.country || '-'}  ${shortUa(e.ua)}${e.path && e.path !== '/' ? `  ${e.path}` : ''}`)
+    }
+  }
+}
+
 /** 跑一条命令，返回退出码（0 成功，1 出错，2 用法不对） */
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = []
@@ -707,6 +822,7 @@ export async function runCli(
     else if (cmd === 'rows') await rows()
     else if (cmd === 'set') await setCells()
     else if (cmd === 'recalc-h') await recalcH()
+    else if (cmd === 'visits') await visits()
     else if (cmd === 'hash-password') {
       const password = (await (io.stdin ?? readStdin)()).replace(/\r?\n$/, '')
       if (!password) throw new CliError('没读到密码：用法 printf %s 密码 | node cli.mjs hash-password')

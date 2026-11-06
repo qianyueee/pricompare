@@ -21,6 +21,7 @@ import type {
  *   store/<key>.json     供应商注册表、映射模板、设置
  *   history/YYYY-MM.jsonl 每次操作一行：谁、何时、改了什么、怎么撤销
  *   snapshots/master-YYYYMMDD.json 每天第一次改动前的整表，误操作时可回到当天开头
+ *   access/YYYY-MM.jsonl  网页访问记录（打开网页、登录、导出，见 access.ts），保留 13 个月
  */
 
 /** 内存里保留的最近操作条数，供网页端增量追上 */

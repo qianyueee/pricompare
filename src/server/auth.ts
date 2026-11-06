@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http'
-import type { ServerRole } from '../shared/serverApi'
+import type { AccessVia, ServerRole } from '../shared/serverApi'
 import { checkSession, readCookie, SESSION_COOKIE } from './password'
 
 /**
@@ -116,6 +116,34 @@ export function identify(req: IncomingMessage, cfg: AuthConfig, sessionKey?: Buf
   }
   if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') return null
   return { user: 'local', role: cfg.localRole }
+}
+
+/** 访问记录用：请求从哪个入口进来、访客 IP 等（只用来记录，不用来判权限） */
+export function describeRequest(
+  req: IncomingMessage,
+  channel: Channel = 'direct',
+): { via: AccessVia; host: string; ip: string; country: string; ua: string } {
+  const via: AccessVia =
+    channel === 'tunnel'
+      ? 'cloudflare'
+      : header(req, 'tailscale-funnel-request')
+        ? 'funnel'
+        : viaTailscale(req)
+          ? 'tailnet'
+          : 'local'
+  const ip =
+    via === 'cloudflare'
+      ? header(req, 'cf-connecting-ip')
+      : via === 'local'
+        ? (req.socket.remoteAddress ?? '')
+        : (header(req, 'x-forwarded-for').split(',')[0]?.trim() ?? '')
+  return {
+    via,
+    host: hostName(req),
+    ip,
+    country: via === 'cloudflare' ? header(req, 'cf-ipcountry') : '',
+    ua: header(req, 'user-agent'),
+  }
 }
 
 export function normalizeAuth(raw: unknown): AuthConfig {

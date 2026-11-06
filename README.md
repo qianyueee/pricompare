@@ -103,6 +103,7 @@ node dist-server/cli.mjs --help                           # 全部命令
 | `batches`、`rows --batch …` | 最近的询价组、各家已填几行；查行（Excel 行号） |
 | `set --row R --col C --value V --expect-pn P` | 改格（如没发询价的那家填「无」、追加备注）；P/N 对不上就拒绝；改了供应商价的行 H 自动按平均重算 |
 | `recalc-h [--only-empty] [--dry-run]` | 整表补算 H = 各家报价平均（向上取整）；`--only-empty` 只补空着的，H 里的文字说明不动 |
+| `visits [--days N] [--detail]` | 网页每天的访问次数（默认最近 14 天），按入口分：`quote.kvstek.com`、ts.net 公网、ts.net 内网、本机；`--detail` 逐条列出（时间、IP、国家、浏览器） |
 | `hash-password` | 从标准输入读密码，输出填进 `config.json`「password」的哈希（不连服务） |
 
 供应商只认注册表里的（HC、SKW、CL…），不在表里的一律拒绝；单价列认不出或表头没认准时不并入，要先 `dump` 看原表再指定。
@@ -111,7 +112,11 @@ node dist-server/cli.mjs --help                           # 全部命令
 - 总表的每次改动都是一步「操作」（改格 / 删行 / 并入 / 整表导入），服务按顺序应用并记历史：
   后台并入和网页上的手工修改不会互相覆盖；基于旧版本的删行会被拒绝并提示重做；
 - 数据目录：`master.json`（总表 + 版本）、`master-file.json`（导出底版）、`store/`（供应商、映射模板）、
-  `history/YYYY-MM.jsonl`（每步改动：谁、何时、怎么撤销）、`snapshots/`（每天第一次改动前和整表导入前的整表，保留 60 天）；
+  `history/YYYY-MM.jsonl`（每步改动：谁、何时、怎么撤销）、`snapshots/`（每天第一次改动前和整表导入前的整表，保留 60 天）、
+  `access/YYYY-MM.jsonl`（网页访问记录，保留 13 个月）；
+- 访问记录只记几件事：已登录打开网页（刷新也算一次）、没登录看到登录页、输密码对 / 错、导出汇总表；网页资源、接口、实时推送不记。
+  每条记时间、入口（Cloudflare 通道 / Funnel 公网 / tailnet / 本机）、身份、访客 IP（Cloudflare 的 `Cf-Connecting-Ip`、
+  Tailscale 的 `X-Forwarded-For`）、国家、浏览器；`node cli.mjs visits` 或 `GET /api/visits?days=N`（只有 editor 能看）按天汇总；
 - 权限在数据目录的 `config.json`：本机直接访问为 `localRole`（默认 editor）；经 Tailscale Serve 来的按登录名查
   `editors` / `viewers`，名单外一律拒绝。viewer 只能看、复制、比价、导出，表里和 Excel 一样不显示 O、P、Q、S 列（U 列对客价谁都不显示，复制时现算）；
 - 只给自己的 tailnet 用时可以走 Tailscale Serve（不对公网）：`tailscale serve --bg --https=8443 http://127.0.0.1:8790`，
