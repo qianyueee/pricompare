@@ -13,13 +13,14 @@ export interface Vendor {
 /**
  * 依据真实样本播种：凯阔的文件名是 KV*、单号 KV*、落 KK 的 SKW 列；HC 文件名 HCQuote*、单号 KT*；
  * 宸立（CL）多在邮件正文报价。列位按 10-07 新布局：L 列 CL、M 列 BY、YJ 挪到 AG。
+ * 2026-11-06 起 M 列 BY 换成 XH（东莞兴华，钣金；它家 PO 上的公司名是东莞千昱精密五金）。
  */
 export const SEED_VENDORS: Vendor[] = [
   { id: 'mao', display: 'Mao', kkSlot: 'I', aliases: ['mao'] },
   { id: 'hc', display: 'HC', kkSlot: 'J', aliases: ['hc', 'hcquote', 'kt', 'kavis'] },
   { id: 'skw', display: 'SKW', kkSlot: 'K', aliases: ['skw', 'kv', '凯阔'] },
   { id: 'cl', display: 'CL', kkSlot: 'L', aliases: ['cl', '宸立', 'chenli'] },
-  { id: 'by', display: 'BY', kkSlot: 'M', aliases: ['by'] },
+  { id: 'xh', display: 'XH', kkSlot: 'M', aliases: ['xh', '兴华', '千昱'] },
   { id: 'jm', display: 'JM', kkSlot: 'N', aliases: ['jm'] },
   { id: 'yj', display: 'YJ', kkSlot: 'AG', aliases: ['yj'] },
 ]
@@ -28,17 +29,29 @@ export const SEED_VENDORS: Vendor[] = [
 const LEGACY_SLOT_MOVES: Record<string, string> = { L: 'M', M: 'AG' }
 
 /**
- * 旧版本存下的供应商注册表（没有 CL）迁移到新布局：各家的落列跟着原表头走，再补上 CL。
- * 已含 CL 的注册表视为新布局，原样返回。
+ * 旧版本存下的供应商注册表迁移到当前布局：
+ * - 没有 CL 的（10-07 之前）：各家的落列跟着原表头走，再补上 CL；
+ * - 还有 BY、没有 XH 的（11-06 之前）：BY 换成 XH，落列不变（M 列）。
+ * 已是当前布局的注册表原样返回。
  */
 export function migrateVendorRegistry(registry: Vendor[]): { registry: Vendor[]; migrated: boolean } {
-  if (registry.some((v) => v.id === 'cl')) return { registry, migrated: false }
-  const moved = registry.map((v) => {
-    const to = v.kkSlot ? LEGACY_SLOT_MOVES[v.kkSlot.toUpperCase()] : undefined
-    return to ? { ...v, kkSlot: to } : v
-  })
-  const cl = SEED_VENDORS.find((v) => v.id === 'cl')!
-  return { registry: [...moved, { ...cl, aliases: [...cl.aliases] }], migrated: true }
+  let out = registry
+  let migrated = false
+  if (!out.some((v) => v.id === 'cl')) {
+    const moved = out.map((v) => {
+      const to = v.kkSlot ? LEGACY_SLOT_MOVES[v.kkSlot.toUpperCase()] : undefined
+      return to ? { ...v, kkSlot: to } : v
+    })
+    const cl = SEED_VENDORS.find((v) => v.id === 'cl')!
+    out = [...moved, { ...cl, aliases: [...cl.aliases] }]
+    migrated = true
+  }
+  if (out.some((v) => v.id === 'by') && !out.some((v) => v.id === 'xh')) {
+    const xh = SEED_VENDORS.find((v) => v.id === 'xh')!
+    out = out.map((v) => (v.id === 'by' ? { ...xh, kkSlot: v.kkSlot ?? xh.kkSlot, aliases: [...xh.aliases] } : v))
+    migrated = true
+  }
+  return { registry: out, migrated }
 }
 
 export interface VendorGuessInput {

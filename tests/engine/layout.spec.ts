@@ -44,23 +44,23 @@ async function sheetOf(buffer: ArrayBuffer): Promise<ExcelJS.Worksheet> {
 }
 
 describe('10-07 新布局（34 列，L 列 CL，YJ 在 AG）', () => {
-  it('表头 34 列，供应商槽位 I–N 为 Mao/HC/SKW/CL/BY/JM，YJ 在 AG', () => {
+  it('表头 34 列，供应商槽位 I–N 为 Mao/HC/SKW/CL/XH/JM（M 列 11-06 起由 BY 换成 XH），YJ 在 AG', () => {
     expect(KK_HEADERS).toHaveLength(34)
     expect(KK_COL_COUNT).toBe(34)
-    expect(KK_HEADERS.slice(8, 14)).toEqual(['Mao', 'HC', 'SKW', 'CL', 'BY', 'JM'])
+    expect(KK_HEADERS.slice(8, 14)).toEqual(['Mao', 'HC', 'SKW', 'CL', 'XH', 'JM'])
     expect(KK_HEADERS[KK_COL.yj]).toBe('YJ')
     expect(KK_HEADERS[KK_COL.basePn]).toBe('Base P/N')
     expect(KK_HEADERS[KK_COL.baseId]).toBe('Base ID')
     expect(KK_LEGACY_HEADERS).toHaveLength(33)
   })
 
-  it('旧布局文件按表头对位导入：BY→M、YJ→AG、JM 留 N、Base ID→AH，CL 留空', async () => {
+  it('旧布局文件按表头对位导入：BY→M（XH 列）、YJ→AG、JM 留 N、Base ID→AH，CL 留空', async () => {
     const master = parseMasterWorkbook(readWorkbook(await makeLegacyMasterFile()), 'old.xlsx')!
     const cells = master.rows[0]!.cells
     expect(cells).toHaveLength(KK_COL_COUNT)
     expect(cells[9]).toBe(56.7)
     expect(cells[11]).toBeNull() // CL
-    expect(cells[12]).toBe(11) // BY
+    expect(cells[12]).toBe(11) // 原 L 列 BY → M 列 XH
     expect(cells[13]).toBe(33) // JM
     expect(cells[KK_COL.yj]).toBe(22)
     expect(cells[KK_COL.comment]).toBe('note')
@@ -115,14 +115,15 @@ describe('10-07 新布局（34 列，L 列 CL，YJ 在 AG）', () => {
     expect(migrateMasterLayout(next).migratedRows).toBe(0)
   })
 
-  it('以旧布局原文件为底补丁导出：改 BY 写回原 L 列；填了 CL（原表没有）→ 整本重写并换新表头', async () => {
+  it('以旧布局原文件为底补丁导出：改 XH 写回原 L 列（表头 BY 改写成 XH）；填了 CL（原表没有）→ 整本重写并换新表头', async () => {
     const original = await makeLegacyMasterFile()
     const master = parseMasterWorkbook(readWorkbook(original), 'old.xlsx')!
-    master.rows[0]!.cells[12] = 12.5 // BY
+    master.rows[0]!.cells[12] = 12.5 // XH
     const patched = await buildMasterWorkbook(master, original)
     expect(patched.mode).toBe('patch')
     const ws = await sheetOf(patched.buffer)
-    expect(ws.getCell('L1').value).toBe('BY') // 原表头不动
+    expect(ws.getCell('L1').value).toBe('XH') // 改过名的表头写成现名
+    expect(ws.getCell('M1').value).toBe('YJ') // 其余表头不动
     expect(ws.getCell('L2').value).toBe(12.5)
     expect(ws.getCell('M2').value).toBe(22) // YJ 原位
     expect(ws.getCell('N2').value).toBe(33)
@@ -140,7 +141,7 @@ describe('10-07 新布局（34 列，L 列 CL，YJ 在 AG）', () => {
 })
 
 describe('供应商注册表', () => {
-  it('旧注册表迁移：落列跟着原表头走（L→M、M→AG），补上 CL；已迁移的原样返回', () => {
+  it('旧注册表迁移：落列跟着原表头走（L→M、M→AG），补上 CL，BY 换成 XH；已迁移的原样返回', () => {
     const old: Vendor[] = [
       { id: 'hc', display: 'HC', kkSlot: 'J', aliases: ['hc'] },
       { id: 'by', display: 'BY', kkSlot: 'L', aliases: ['by'] },
@@ -151,10 +152,36 @@ describe('供应商注册表', () => {
     const { registry, migrated } = migrateVendorRegistry(old)
     expect(migrated).toBe(true)
     const slot = (id: string): string | undefined => registry.find((v) => v.id === id)?.kkSlot
-    expect([slot('hc'), slot('by'), slot('yj'), slot('jm'), slot('cl')]).toEqual(['J', 'M', 'AG', 'N', 'L'])
+    expect([slot('hc'), slot('xh'), slot('yj'), slot('jm'), slot('cl')]).toEqual(['J', 'M', 'AG', 'N', 'L'])
+    expect(slot('by')).toBeUndefined()
     expect(slot('custom')).toBeUndefined()
     expect(migrateVendorRegistry(registry)).toEqual({ registry, migrated: false })
     expect(migrateVendorRegistry(SEED_VENDORS).migrated).toBe(false)
+  })
+
+  it('11-06 BY 换成 XH：已有 CL 的注册表里的 BY 改成 XH（M 列，带兴华别名），其余不动；可重复执行', () => {
+    const saved: Vendor[] = [
+      ...SEED_VENDORS.filter((v) => v.id !== 'xh'),
+      { id: 'by', display: 'BY', kkSlot: 'M', aliases: ['by'] },
+      { id: 'custom', display: '自定义', aliases: ['zz'] },
+    ]
+    const { registry, migrated } = migrateVendorRegistry(saved)
+    expect(migrated).toBe(true)
+    // 原位替换：BY 那一项变成 XH，其余各项顺序和内容不变
+    expect(registry.map((v) => v.id)).toEqual(saved.map((v) => (v.id === 'by' ? 'xh' : v.id)))
+    registry.forEach((v, i) => {
+      if (v.id !== 'xh') expect(v).toBe(saved[i])
+    })
+    const xh = registry.find((v) => v.id === 'xh')!
+    expect(xh).toEqual({ id: 'xh', display: 'XH', kkSlot: 'M', aliases: ['xh', '兴华', '千昱'] })
+    expect(migrateVendorRegistry(registry)).toEqual({ registry, migrated: false })
+  })
+
+  it('兴华的报价文件认成 XH：文件名带「兴华」或 XH', () => {
+    const base = { quoteNos: [], nameValues: [], priceHeader: '' }
+    expect(guessVendor(SEED_VENDORS, { ...base, fileName: '兴华报价20261104.xlsx' }).vendorId).toBe('xh')
+    expect(guessVendor(SEED_VENDORS, { ...base, fileName: 'XH钣金报价_20261016.xlsx' }).vendorId).toBe('xh')
+    expect(guessVendor(SEED_VENDORS, { ...base, fileName: 'Bracket_by_side.xlsx' }).vendorId).toBeNull()
   })
 
   it('两个字母的别名不误伤零件名：Clamp 不是 CL；文件名带宸立才是', () => {

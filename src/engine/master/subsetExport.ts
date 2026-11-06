@@ -2,7 +2,15 @@ import { unzipSync, zipSync } from 'fflate'
 import { colLetter } from '../util'
 import { readWorkbook } from '../workbook'
 import { KK_COL_COUNT, isDataRow, parseMasterWorkbookDetailed, type MasterData } from './model'
-import { attrOf, buildCellXml, findSheetPath, parseRowCells, xmlEscape } from './patchExport'
+import {
+  attrOf,
+  buildCellXml,
+  findSheetPath,
+  parseRowCells,
+  renameTableColumns,
+  renamedHeaders,
+  xmlEscape,
+} from './patchExport'
 import { quoteEaCellXml } from './quoteEa'
 import { KK_COL } from '../export/kkLayout'
 
@@ -125,9 +133,22 @@ export function subsetMasterWorkbook(
     const r = Number(attrOf(m[0].match(/^<row\b[^>]*?\/?>/)![0], 'r'))
     if (Number.isFinite(r) && r <= origRows.length + 1) rowXmlByNum.set(r, m[0])
   }
-  const headerXml = rowXmlByNum.get(1)
-  if (!headerXml) return null
-  const headerCells = parseRowCells(headerXml)
+  const origHeaderXml = rowXmlByNum.get(1)
+  if (!origHeaderXml) return null
+  const headerCells = parseRowCells(origHeaderXml)
+  // 表头还是旧名的列（M1 的 BY → XH）改写成现名，样式照旧；表格列名下面一起改
+  const headerRenames = renamedHeaders(parsed)
+  let headerXml = origHeaderXml
+  if (headerRenames.size > 0) {
+    const cells = new Map(headerCells)
+    for (const [p, { to }] of headerRenames) {
+      const existing = cells.get(p)
+      const s = existing ? attrOf(existing.slice(0, existing.indexOf('>') + 1), 's') : null
+      cells.set(p, buildCellXml(`${colLetter(p)}1`, s, to))
+    }
+    const open = origHeaderXml.match(/^<row\b[^>]*?\/?>/)![0].replace(/\/>$/, '>')
+    headerXml = `${open}${[...cells.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c).join('')}</row>`
+  }
   // 表头用共享字符串时连同 sharedStrings 一起带上（数据格一律写内联字符串）
   const usesSharedStrings = [...headerCells.values()].some((c) => attrOf(c.slice(0, c.indexOf('>') + 1), 't') === 's')
 
@@ -191,7 +212,7 @@ export function subsetMasterWorkbook(
     const ref = attrOf(open, 'ref')?.match(/^([A-Z]+)1:([A-Z]+)\d+$/)
     if (!ref || (attrOf(open, 'headerRowCount') ?? '1') !== '1') continue
     const range = `${ref[1]}1:${ref[2]}${lastRow}`
-    tableXml = t
+    tableXml = renameTableColumns(t, headerRenames.values())
       .replace(/<table\b[^>]*>/, (tag) =>
         tag.replace(/(\sref=")[^"]*(")/, `$1${range}$2`).replace(/\stotalsRowCount="[^"]*"/, ''),
       )
