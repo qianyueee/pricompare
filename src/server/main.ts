@@ -7,6 +7,7 @@ import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { AccessLog } from './access'
 import { DEFAULT_AUTH, normalizeAuth, type AuthConfig } from './auth'
 import { createHandler } from './http'
 import { DataStore } from './store'
@@ -63,6 +64,8 @@ const { handler, close } = createHandler({
   store,
   auth: loadAuth,
   sessionKey: loadSessionKey(),
+  // 网页访问记录：数据目录 access/YYYY-MM.jsonl（node cli.mjs visits 按天汇总）
+  accessLog: new AccessLog(join(dataDir, 'access')),
   staticDir: existsSync(join(webDir, 'index.html')) ? webDir : undefined,
 })
 const servers = [createServer((req, res) => void handler(req, res, 'direct'))]

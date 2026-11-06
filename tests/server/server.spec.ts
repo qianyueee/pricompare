@@ -5,11 +5,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { KK_COL_COUNT, type MasterCell, type MasterData, type MasterOp } from '@engine/index'
+import { AccessLog } from '../../src/server/access'
 import { DEFAULT_AUTH, type AuthConfig } from '../../src/server/auth'
 import { createHandler } from '../../src/server/http'
 import { hashPassword } from '../../src/server/password'
 import { DataStore } from '../../src/server/store'
-import type { OpsSince, PostOpResponse, VersionEvent } from '@shared/serverApi'
+import type { OpsSince, PostOpResponse, VersionEvent, VisitsReport } from '@shared/serverApi'
 import { makeQuote } from '../fixtures/rows'
 
 function row(vals: Record<number, MasterCell>) {
@@ -34,6 +35,7 @@ let tunnelServer: Server
 let tunnelPort: number
 let auth: AuthConfig
 let closeHandler: () => void
+let accessLog: AccessLog
 
 async function start() {
   store = new DataStore(join(dir, 'data'))
@@ -42,7 +44,8 @@ async function start() {
   await mkdir(join(web, 'assets'), { recursive: true })
   await writeFile(join(web, 'index.html'), '<html><head><title>t</title></head><body></body></html>')
   await writeFile(join(web, 'assets', 'a.js'), 'console.log(1)')
-  const h = createHandler({ store, auth: () => auth, staticDir: web })
+  accessLog = new AccessLog(join(dir, 'data', 'access'))
+  const h = createHandler({ store, auth: () => auth, staticDir: web, accessLog })
   closeHandler = h.close
   server = createServer((req, res) => void h.handler(req, res))
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
@@ -363,6 +366,64 @@ describe('pricompare 服务', () => {
     snaps = (await readdir(join(dir, 'data', 'snapshots'))).sort()
     expect(snaps).toHaveLength(2)
     expect(snaps.filter((f) => /-v3\.json$/.test(f))).toHaveLength(1)
+  })
+
+  it('访问记录：打开网页、登录页、登录、导出按天按入口计数；资源、接口、HEAD 不算；只有编辑能看', async () => {
+    const domain = 'quote.example.com'
+    const ts = 'mac.tail0000.ts.net'
+    auth = { ...auth, hosts: [domain, ts], password: await hashPassword('KVS_test1') }
+    const cf = { host: domain, 'cf-ray': 'x', 'cf-connecting-ip': '203.0.113.9', 'cf-ipcountry': 'US', 'user-agent': 'iPhone Safari/1' }
+    const via = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
+      call(method, path, body, { ...cf, ...headers }, 'tunnel')
+    const login = (password: string) =>
+      via('POST', '/login', `password=${encodeURIComponent(password)}`, {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-pri-client': '',
+      })
+    // 经公司域名：先看到登录页，输错一次，再输对，打开网页，导出一次
+    expect((await via('GET', '/')).text).toContain('action="/login"')
+    expect((await via('HEAD', '/')).status).toBe(200)
+    expect((await login('wrong')).status).toBe(401)
+    const ok = await login('KVS_test1')
+    const me = { cookie: String(ok.headers['set-cookie']).split(';')[0]! }
+    expect((await via('GET', '/', undefined, me)).text).toContain('pri-server')
+    await via('GET', '/assets/a.js', undefined, me)
+    await via('GET', '/api/master', undefined, me)
+    await via('GET', '/api/session', undefined, me)
+    await via('HEAD', '/', undefined, me)
+    expect((await via('GET', '/api/master/file', undefined, me)).status).toBe(200)
+    // 只读的人看不了访问记录
+    expect((await via('GET', '/api/visits', undefined, me)).status).toBe(403)
+    // ts.net 内网（Zane 自己的设备）开两次，本机开一次
+    const zane = { host: ts, 'tailscale-user-login': 'zane@example.com', 'x-forwarded-for': '100.64.0.5', 'user-agent': 'Mac' }
+    await call('GET', '/', undefined, zane)
+    await call('GET', '/nego', undefined, zane)
+    await call('GET', '/')
+    // 被拒的请求不记
+    await call('GET', '/', undefined, { host: 'evil.example' })
+
+    const r = await call('GET', '/api/visits?days=7&detail=1')
+    expect(r.status).toBe(200)
+    const report = r.body as VisitsReport
+    expect(report.dates).toHaveLength(7)
+    const today = report.dates[0]!
+    expect(report.days.map((d) => [d.date, d.entry, d.pages])).toEqual([
+      [today, 'ts.net 内网', 2],
+      [today, domain, 1],
+      [today, '本机', 1],
+    ])
+    expect(report.days[1]).toMatchObject({ visitors: 1, loginOk: 1, loginFail: 1, loginPage: 1, exports: 1, users: ['密码登录'] })
+    expect(report.days[0]).toMatchObject({ visitors: 1, users: ['zane@example.com'] })
+    expect(report.events).toHaveLength(8)
+    expect(report.events!.find((e) => e.kind === 'page' && e.via === 'cloudflare')).toMatchObject({
+      ip: '203.0.113.9',
+      country: 'US',
+      user: '密码登录',
+      ua: 'iPhone Safari/1',
+    })
+    expect(report.events!.find((e) => e.via === 'tailnet')).toMatchObject({ ip: '100.64.0.5', user: 'zane@example.com' })
+    // 写在数据目录 access/YYYY-MM.jsonl
+    expect(await readdir(join(dir, 'data', 'access'))).toEqual([`${today.slice(0, 7)}.jsonl`])
   })
 
   it('改动通过 SSE 推给已打开的网页', async () => {

@@ -11,8 +11,10 @@ import {
   type PostOpRequest,
   type ServerSession,
   type ServerStoreKey,
+  type AccessKind,
 } from '../shared/serverApi'
-import { identify, passwordGate, type AuthConfig, type Caller, type Channel } from './auth'
+import type { AccessLog } from './access'
+import { describeRequest, identify, passwordGate, PASSWORD_USER, type AuthConfig, type Caller, type Channel } from './auth'
 import { loginPage, makeSession, sessionCookie, verifyPassword } from './password'
 import type { DataStore } from './store'
 
@@ -23,6 +25,8 @@ export interface HandlerOptions {
   staticDir?: string
   /** 密码登录 cookie 的签名密钥（数据目录里的 session.key）；不给则每次启动随机生成，重启后要重新输密码 */
   sessionKey?: Buffer
+  /** 网页访问记录（打开网页、登录、导出）；不给则不记 */
+  accessLog?: AccessLog
 }
 
 /** 总表 JSON 一千多行约 1–2 MB；导入时连原始 xlsm 的 base64 一起上来 */
@@ -127,6 +131,13 @@ export function createHandler(opts: HandlerOptions) {
   }, SSE_PING_MS)
   ping.unref()
 
+  /** 记一次访问（只记 GET 打开网页、登录、导出；HEAD 不记） */
+  const record = (req: IncomingMessage, channel: Channel, kind: AccessKind, user: string, path?: string) => {
+    if (!opts.accessLog) return
+    const info = describeRequest(req, channel)
+    opts.accessLog.record({ kind, user, path, ...info })
+  }
+
   const requireEditor = (caller: Caller) => {
     if (caller.role !== 'editor') throw new HttpError(403, '只读账号不能修改总表')
   }
@@ -138,7 +149,7 @@ export function createHandler(opts: HandlerOptions) {
     if (origin && URL.parse(origin)?.host !== req.headers.host) throw new HttpError(403, '来源不符')
   }
 
-  async function api(req: IncomingMessage, res: ServerResponse, url: URL, caller: Caller): Promise<void> {
+  async function api(req: IncomingMessage, res: ServerResponse, url: URL, caller: Caller, channel: Channel): Promise<void> {
     const path = url.pathname
     const method = req.method ?? 'GET'
     const source = String(req.headers['x-pri-source'] ?? 'web').slice(0, 32)
@@ -149,7 +160,17 @@ export function createHandler(opts: HandlerOptions) {
       return sendJson(res, 200, body)
     }
     if (path === '/api/master' && method === 'GET') return sendJson(res, 200, store.snapshot())
-    if (path === '/api/master/file' && method === 'GET') return sendJson(res, 200, await store.getMasterFile())
+    if (path === '/api/master/file' && method === 'GET') {
+      // 网页只在导出汇总表时取原件当底版
+      record(req, channel, 'export', caller.user)
+      return sendJson(res, 200, await store.getMasterFile())
+    }
+    if (path === '/api/visits' && method === 'GET') {
+      requireEditor(caller)
+      if (!opts.accessLog) throw new HttpError(404, '没有开访问记录')
+      const days = Number(url.searchParams.get('days')) || 14
+      return sendJson(res, 200, await opts.accessLog.report(days, url.searchParams.get('detail') === '1'))
+    }
     if (path === '/api/ops' && method === 'GET') {
       const since = Number(url.searchParams.get('since'))
       if (!Number.isInteger(since) || since < 0) throw new HttpError(400, 'since 参数无效')
@@ -205,9 +226,18 @@ export function createHandler(opts: HandlerOptions) {
   }
 
   /** GET 出登录页；POST 核对密码，对了发 cookie 回首页 */
-  async function login(req: IncomingMessage, res: ServerResponse, cfg: AuthConfig, caller: Caller | null): Promise<void> {
+  async function login(
+    req: IncomingMessage,
+    res: ServerResponse,
+    cfg: AuthConfig,
+    caller: Caller | null,
+    channel: Channel,
+  ): Promise<void> {
     if (req.method === 'GET' || req.method === 'HEAD') {
-      if (!caller) return sendLogin(res, 200)
+      if (!caller) {
+        if (req.method === 'GET') record(req, channel, 'login-page', '', '/login')
+        return sendLogin(res, 200)
+      }
       res.writeHead(303, { location: '/', 'cache-control': 'no-store' })
       return void res.end()
     }
@@ -215,12 +245,19 @@ export function createHandler(opts: HandlerOptions) {
     const password = new URLSearchParams(await readRaw(req, 4096)).get('password') ?? ''
     const now = Date.now()
     while (loginFailures.length > 0 && loginFailures[0] <= now - LOGIN_WINDOW_MS) loginFailures.shift()
-    if (loginFailures.length >= LOGIN_MAX_FAILURES) return sendLogin(res, 429, '试错次数太多，请 10 分钟后再试')
+    if (loginFailures.length >= LOGIN_MAX_FAILURES) {
+      record(req, channel, 'login-fail', '', 'locked')
+      return sendLogin(res, 429, '试错次数太多，请 10 分钟后再试')
+    }
     // 先按错一次记上，核对对了再撤掉：同时发来的一大批请求也绕不过上限
     loginFailures.push(now)
-    if (!(await verifyPassword(password, cfg.password))) return sendLogin(res, 401, '密码不对')
+    if (!(await verifyPassword(password, cfg.password))) {
+      record(req, channel, 'login-fail', '')
+      return sendLogin(res, 401, '密码不对')
+    }
     const mine = loginFailures.indexOf(now)
     if (mine >= 0) loginFailures.splice(mine, 1)
+    record(req, channel, 'login-ok', PASSWORD_USER)
     res.writeHead(303, {
       location: '/',
       'set-cookie': sessionCookie(makeSession(sessionKey, cfg.password, now)),
@@ -229,7 +266,8 @@ export function createHandler(opts: HandlerOptions) {
     res.end()
   }
 
-  async function serveStatic(res: ServerResponse, url: URL): Promise<void> {
+  /** 发网页文件；返回发的是不是网页入口 index.html（算一次打开网页） */
+  async function serveStatic(res: ServerResponse, url: URL): Promise<boolean> {
     const root = opts.staticDir
     if (!root) throw new HttpError(404, '没有网页文件')
     const rel = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '')
@@ -245,7 +283,8 @@ export function createHandler(opts: HandlerOptions) {
     }
     const ext = extname(file)
     let data: Buffer | string = await readFile(file)
-    if (file.endsWith('index.html')) data = injectServerMarker(data.toString('utf8'))
+    const isIndex = file.endsWith('index.html')
+    if (isIndex) data = injectServerMarker(data.toString('utf8'))
     res.writeHead(200, {
       'content-type': MIME[ext] ?? 'application/octet-stream',
       // private：只让浏览器缓存，Cloudflare 不在边缘缓存（否则没登录的人也能从边缘取到）
@@ -253,6 +292,7 @@ export function createHandler(opts: HandlerOptions) {
       'x-content-type-options': 'nosniff',
     })
     res.end(data)
+    return isIndex
   }
 
   /** channel：请求从哪个端口进来（主端口 / cloudflared 专用的通道端口），由 main 按监听的端口传入 */
@@ -267,16 +307,20 @@ export function createHandler(opts: HandlerOptions) {
       const cfg = opts.auth()
       const caller = identify(req, cfg, sessionKey, channel)
       const gate = passwordGate(req, cfg, channel)
-      if (url.pathname === '/login' && gate) return await login(req, res, cfg, caller)
+      if (url.pathname === '/login' && gate) return await login(req, res, cfg, caller, channel)
       if (!caller) {
         if (!gate) throw new HttpError(403, '没有访问权限')
         if (url.pathname.startsWith('/api/')) throw new HttpError(401, '需要先输入密码')
-        if (req.method === 'GET' || req.method === 'HEAD') return sendLogin(res, 200)
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          if (req.method === 'GET') record(req, channel, 'login-page', '', url.pathname)
+          return sendLogin(res, 200)
+        }
         throw new HttpError(401, '需要先输入密码')
       }
-      if (url.pathname.startsWith('/api/')) await api(req, res, url, caller)
-      else if (req.method === 'GET' || req.method === 'HEAD') await serveStatic(res, url)
-      else throw new HttpError(405, '不支持的请求')
+      if (url.pathname.startsWith('/api/')) await api(req, res, url, caller, channel)
+      else if (req.method === 'GET' || req.method === 'HEAD') {
+        if ((await serveStatic(res, url)) && req.method === 'GET') record(req, channel, 'page', caller.user)
+      } else throw new HttpError(405, '不支持的请求')
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500
       const message = err instanceof Error ? err.message : String(err)
