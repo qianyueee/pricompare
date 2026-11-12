@@ -112,7 +112,6 @@ function haystack(o) {
   if (!h) {
     const parts = [o.po, ...(o.aliases || []), o.supplier, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text];
     for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc);
-    for (const t of o.open_issues || []) parts.push(t);
     h = parts.filter(Boolean).join(' ').toLowerCase();
     haystacks.set(o, h);
   }
@@ -194,7 +193,6 @@ function cells(o) {
       : '';
   const aliases = (o.aliases || []).filter(Boolean);
   const lines = o.lines || [];
-  const issues = (o.open_issues || []).filter(Boolean);
   const amt = money(o.amount, o.currency);
   return `
     <td class="c-due">${dueHtml}${due ? '<br>' : ''}<span class="pill">${esc(u.pill)}</span></td>
@@ -204,8 +202,7 @@ function cells(o) {
     <td class="c-cust"><span>${o.customer_po ? esc(o.customer_po) : '<span class="none">—</span>'}</span>${o.end_user ? `<span class="muted">${esc(o.end_user)}</span>` : ''}</td>
     <td class="c-lines">${lines.length ? `${lines.length} 行<div class="muted">${esc(lines[0].pn || lines[0].desc || '')}${lines.length > 1 ? ' 等' : ''}</div>` : '<span class="none">—</span>'}</td>
     <td class="c-amt">${amt ? `<span class="amt">${esc(amt)}</span>${o.tax ? `<div class="tax">${esc(o.tax)}</div>` : ''}` : '<span class="none">—</span>'}</td>
-    <td class="c-ord">${o.order_date ? esc(fmtDay(o.order_date)) : '<span class="none">—</span>'}</td>
-    <td class="c-issue">${issues.length ? `<span class="issue-n">${issues.length}</span><span class="issue-text">${esc(issues[0])}</span>` : '<span class="none">—</span>'}</td>`;
+    <td class="c-ord">${o.order_date ? esc(fmtDay(o.order_date)) : '<span class="none">—</span>'}</td>`;
 }
 
 function detail(o) {
@@ -231,9 +228,6 @@ function detail(o) {
         .join('')}</tbody></table>`
     : '<p class="muted">邮件里没读到零件明细。</p>';
 
-  const issues = (o.open_issues || []).filter(Boolean);
-  const doubts = (o.doubts || []).filter(Boolean);
-  const issuesHtml = issues.length ? `<ul class="issues">${issues.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : '<p class="muted">没有。</p>';
 
   const mails = o.mails || [];
   const mailsHtml = mails.length
@@ -249,9 +243,7 @@ function detail(o) {
       <div class="facts">${facts.join('')}${fixed}</div>
       <div><h3>零件明细（${lines.length} 行）</h3>${linesHtml}</div>
       <div>
-        <h3>待跟进</h3>${issuesHtml}
         ${o.status_note ? `<h3>状态依据</h3><p class="muted">${esc(o.status_note)}</p>` : ''}
-        ${doubts.length ? `<h3>整理时拿不准的地方</h3><ul class="doubts">${doubts.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
         <h3>相关邮件（${mails.length}）</h3>${mailsHtml}
       </div>
     </div>`;
@@ -273,7 +265,7 @@ function render() {
     .map((o) => {
       const open = state.open.has(rowKey(o));
       const row = `<tr class="row u-${o._u.key}" data-key="${esc(rowKey(o))}" tabindex="0" aria-expanded="${open}">${cells(o)}</tr>`;
-      return open ? `${row}<tr class="detail u-${o._u.key}"><td colspan="9">${detail(o)}</td></tr>` : row;
+      return open ? `${row}<tr class="detail u-${o._u.key}"><td colspan="8">${detail(o)}</td></tr>` : row;
     })
     .join('');
 

@@ -181,7 +181,6 @@ tr.row.u-done td { color: var(--muted); }
 .c-amt { width: 110px; text-align: right; white-space: nowrap; }
 .grid th.c-amt { text-align: right; }
 .c-ord { width: 64px; white-space: nowrap; }
-.c-issue { min-width: 180px; max-width: 320px; }
 
 .due-date { font-weight: 600; }
 .wd { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 2px; }
@@ -214,11 +213,6 @@ tr.row.u-done td { color: var(--muted); }
 .amt { font-weight: 600; }
 .tax { color: var(--muted); font-size: 12px; }
 
-.issue-n {
-  display: inline-block; min-width: 20px; padding: 0 6px; margin-right: 6px; border-radius: 10px;
-  background: var(--warn-bg); color: var(--warn); font-size: 12px; line-height: 19px; font-weight: 650; text-align: center;
-}
-.issue-text { font-size: 13px; }
 .none { color: var(--faint); }
 
 /* ---------- 展开的明细 ---------- */
@@ -236,11 +230,7 @@ table.lines th, table.lines td { padding: 5px 8px; border-bottom: 1px solid var(
 table.lines th { font-size: 12px; color: var(--muted); font-weight: 500; }
 table.lines .num { text-align: right; white-space: nowrap; }
 table.lines .pn { white-space: nowrap; font-weight: 500; }
-ul.issues, ul.mails { margin: 0; padding: 0; list-style: none; font-size: 13px; }
-ul.doubts { margin: 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
-ul.doubts li { padding: 2px 0; }
-ul.issues li { position: relative; padding: 3px 0 3px 16px; }
-ul.issues li::before { content: ""; position: absolute; left: 3px; top: 11px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+ul.mails { margin: 0; padding: 0; list-style: none; font-size: 13px; }
 ul.mails li { display: grid; grid-template-columns: 86px 64px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
 ul.mails li:last-child { border-bottom: 0; }
 ul.mails .when { color: var(--muted); white-space: nowrap; }
@@ -282,7 +272,7 @@ ul.mails .subj { overflow-wrap: anywhere; }
   .grid thead { display: none; }
   .grid tr.row {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "po due" "status amt" "cust cust" "issue issue";
+    grid-template-areas: "po due" "status amt" "cust cust";
     gap: 2px 12px; margin-bottom: 10px; padding: 12px 14px 12px 18px;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
     box-shadow: inset 4px 0 0 var(--bar, transparent);
@@ -300,8 +290,6 @@ ul.mails .subj { overflow-wrap: anywhere; }
   .grid tr.row .c-amt { grid-area: amt; }
   .grid tr.row .c-cust { grid-area: cust; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
   .grid td.c-cust > span { display: inline; }
-  .grid tr.row .c-issue { grid-area: issue; margin-top: 4px; }
-  .grid tr.row .c-issue:empty, .grid tr.row .c-issue .none { display: none; }
   .grid tr.row .c-lines, .grid tr.row .c-ord { display: none; }
   .po-sup { display: inline; color: var(--muted); font-size: 13px; font-weight: 500; }
   .c-cust .muted { font-size: 13px; }
