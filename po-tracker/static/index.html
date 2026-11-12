@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>PO 跟单</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>PO 跟单</h1>
+    <p class="sub" id="sub">正在读取…</p>
+  </div>
+  <div class="top-actions">
+    <button type="button" class="btn" id="refresh" title="重新读取数据">刷新</button>
+    <a class="btn btn-quiet" href="/logout" id="logout" hidden>退出</a>
+  </div>
+</header>
+
+<p class="stale" id="stale" hidden></p>
+
+<nav class="chips" id="chips" aria-label="按交期筛选"></nav>
+
+<section class="toolbar">
+  <label class="search">
+    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 3a5.5 5.5 0 0 1 4.38 8.82l3.65 3.65-1.06 1.06-3.65-3.65A5.5 5.5 0 1 1 8.5 3Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/></svg>
+    <input type="search" id="q" placeholder="搜 PO 号、零件号、客户 PO、人名" autocomplete="off" />
+  </label>
+  <select id="supplier" aria-label="供应商"></select>
+  <select id="sort" aria-label="排序">
+    <option value="urgency">按紧急程度</option>
+    <option value="due">按交期（早→晚）</option>
+    <option value="order">按下单日期（新→旧）</option>
+    <option value="po">按 PO 号</option>
+    <option value="amount">按金额（大→小）</option>
+  </select>
+  <span class="count" id="count"></span>
+</section>
+
+<main>
+  <div class="table-wrap">
+    <table class="grid" id="grid">
+      <thead>
+        <tr>
+          <th class="c-due" data-sort="due">交期</th>
+          <th class="c-po" data-sort="po">PO</th>
+          <th class="c-sup">供应商</th>
+          <th class="c-status">状态</th>
+          <th class="c-cust">客户 PO / 下单人</th>
+          <th class="c-lines">零件</th>
+          <th class="c-amt" data-sort="amount">金额</th>
+          <th class="c-ord" data-sort="order">下单</th>
+          <th class="c-issue">待跟进</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="empty" hidden></div>
+</main>
+
+<footer class="legend">
+  颜色按供应商交期算（日历天）：
+  <span class="lg u-overdue">逾期</span>
+  <span class="lg u-red">3 天内</span>
+  <span class="lg u-amber">7 天内</span>
+  <span class="lg u-green">7 天以上</span>
+  <span class="lg u-nodate">没写交期</span>
+  <span class="lg u-done">已发货 / 完成 / 取消</span><br />
+  数据每小时从 zill@kvstek.com 的 PO 邮件整理一次；点一行看零件明细和相关邮件。
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
