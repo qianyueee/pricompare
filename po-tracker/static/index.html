@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>PO 跟单</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>PO 跟单</h1>
+    <p class="sub" id="sub">正在读取…</p>
+  </div>
+  <div class="top-actions">
+    <button type="button" class="btn btn-primary" id="add" hidden>新增 PO</button>
+    <button type="button" class="btn" id="edit" hidden title="输编辑密码后可以改状态、写跟进">编辑</button>
+    <button type="button" class="btn btn-quiet" id="edit-off" hidden title="这台设备不再能改">退出编辑</button>
+    <button type="button" class="btn" id="refresh" title="重新读取数据">刷新</button>
+    <a class="btn btn-quiet" href="/logout" id="logout" hidden>退出</a>
+  </div>
+</header>
+
+<p class="stale" id="stale" hidden></p>
+
+<nav class="chips" id="chips" aria-label="按交期筛选"></nav>
+
+<section class="toolbar">
+  <label class="search">
+    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 3a5.5 5.5 0 0 1 4.38 8.82l3.65 3.65-1.06 1.06-3.65-3.65A5.5 5.5 0 1 1 8.5 3Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/></svg>
+    <input type="search" id="q" placeholder="搜 PO 号、零件号、客户 PO、人名" autocomplete="off" />
+  </label>
+  <select id="supplier" aria-label="供应商"></select>
+  <select id="sort" aria-label="排序">
+    <option value="urgency">按紧急程度</option>
+    <option value="due">按交期（早→晚）</option>
+    <option value="order">按下单日期（新→旧）</option>
+    <option value="po">按 PO 号</option>
+    <option value="amount">按金额（大→小）</option>
+  </select>
+  <span class="count" id="count"></span>
+</section>
+
+<main>
+  <div class="table-wrap">
+    <table class="grid" id="grid">
+      <thead>
+        <tr>
+          <th class="c-due" data-sort="due">交期</th>
+          <th class="c-po" data-sort="po">PO</th>
+          <th class="c-sup">供应商</th>
+          <th class="c-status">状态</th>
+          <th class="c-cust">客户 PO / 下单人</th>
+          <th class="c-lines">零件</th>
+          <th class="c-amt" data-sort="amount">金额</th>
+          <th class="c-ord" data-sort="order">下单</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="empty" hidden></div>
+</main>
+
+<footer class="legend">
+  颜色按供应商交期算（日历天）：
+  <span class="lg u-overdue">逾期</span>
+  <span class="lg u-red">3 天内</span>
+  <span class="lg u-amber">7 天内</span>
+  <span class="lg u-green">7 天以上</span>
+  <span class="lg u-nodate">没写交期</span>
+  <span class="lg u-done">已发货 / 完成 / 取消</span><br />
+  起点数据来自跟单总表和 zill@kvstek.com 的 PO 邮件，之后由跟单的人在这里更新；点一行看跟进记录和零件明细。
+</footer>
+
+<dialog id="ed-dialog" class="dlg" aria-labelledby="ed-title">
+  <form id="ed-form" method="dialog">
+    <h2 id="ed-title">输入编辑密码</h2>
+    <p class="dlg-help">输对后这台设备 30 天内都能改状态、写跟进。编辑密码和查看密码不是同一个。</p>
+    <label class="dlg-field">编辑密码
+      <input type="password" id="ed-key" autocomplete="off" />
+    </label>
+    <p class="dlg-msg" id="ed-msg" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn btn-quiet" id="ed-cancel">取消</button>
+      <button type="submit" class="btn btn-primary" id="ed-go">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="add-dialog" class="dlg dlg-wide" aria-labelledby="add-title">
+  <form id="add-form" method="dialog" autocomplete="off">
+    <h2 id="add-title">新增 PO</h2>
+    <p class="dlg-help">邮件同步已经停了，新下的 PO 在这里手动加。带 * 的必填。</p>
+    <div class="dlg-grid">
+      <label class="dlg-field">PO 号 *<input name="po" maxlength="30" required /></label>
+      <label class="dlg-field">供应商 *<input name="supplier" maxlength="30" list="sup-list" required placeholder="华晨 / 凯维 / 兴华…" /></label>
+      <label class="dlg-field">状态<select name="status"></select></label>
+      <label class="dlg-field">供应商交期<input type="date" name="due_date" /></label>
+      <label class="dlg-field">下单日期<input type="date" name="order_date" /></label>
+      <label class="dlg-field">金额（RMB）<input name="amount" inputmode="decimal" /></label>
+      <label class="dlg-field">客户 PO<input name="customer_po" maxlength="60" /></label>
+      <label class="dlg-field">下单人<input name="end_user" maxlength="60" /></label>
+    </div>
+    <label class="dlg-field">零件（每行一个零件号，后面可以写数量，例如 0657863-001 10）<textarea name="lines" rows="3"></textarea></label>
+    <label class="dlg-field">备注<textarea name="note" rows="2" maxlength="500"></textarea></label>
+    <label class="dlg-field dlg-by">你的名字 *<input name="by" maxlength="20" /></label>
+    <p class="dlg-msg" id="add-msg" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn btn-quiet" id="add-cancel">取消</button>
+      <button type="submit" class="btn btn-primary" id="add-go">新增</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="sup-list"></datalist>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
