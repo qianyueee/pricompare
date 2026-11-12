@@ -29,12 +29,14 @@ class ServerTest(unittest.TestCase):
         cls.data.mkdir()
         (cls.data / "orders.json").write_text(json.dumps({
             "version": 1, "generated_at": "2026-11-12T13:00:00+09:00",
-            "orders": [{"po": "90001", "status": "已下单"}, {"po": "90002", "status": "已确认"}, {"po": "90003"}],
+            "orders": [{"po": "90001", "status": "已下单"}, {"po": "90002", "status": "已确认"}, {"po": "90003"},
+                       {"po": "90004", "supplier": "华晨", "status": "已下单"}, {"po": "90004", "supplier": "兴华", "status": "已下单"}],
         }), encoding="utf-8")
         (cls.data / "overrides.json").write_text(json.dumps({
             "_说明": "以下划线开头的键忽略",
             "90001": {"status": "已完成", "status_note": "手工"},
             "90003": {"hidden": True},
+            "90004|兴华": {"status": "已发货"},
         }), encoding="utf-8")
         cls.app = po_server.App(cls.data, cls.cfg, [HOST])
         cls.srv = po_server.make_server(cls.app, 0)
@@ -126,7 +128,9 @@ class ServerTest(unittest.TestCase):
         doc = json.loads(body)
         self.assertTrue(doc["meta"]["can_logout"])
         pos = {o["po"]: o for o in doc["orders"]}
-        self.assertEqual(sorted(pos), ["90001", "90002"])  # 90003 被 hidden
+        self.assertEqual(sorted(pos), ["90001", "90002", "90004"])  # 90003 被 hidden
+        by_sup = {o.get("supplier"): o["status"] for o in doc["orders"] if o["po"] == "90004"}
+        self.assertEqual(by_sup, {"华晨": "已下单", "兴华": "已发货"})  # 「PO|供应商」只改那一条
         self.assertEqual(pos["90001"]["status"], "已完成")
         self.assertEqual(pos["90001"]["overridden"], ["status", "status_note"])
         r, _ = self.req("GET", "/", {**CF, "Cookie": cookie})

@@ -10,6 +10,7 @@
 - 经 Cloudflare 来的请求（带 cf-* 头，或 Host 不是 localhost）一律要密码 cookie；
   Host 必须是 --host 列出的域名，否则拒绝。本机直接访问（Host 是 localhost、没有 cf-* 头）不用密码。
 - 数据：data/orders.json（po_sync.py 每小时写）+ data/overrides.json（手工更正，可选），读的时候合并。
+  overrides 的键是 PO 号；同一个 PO 号给了两家供应商时，可写成 "44278|兴华" 只改其中一条。
 - 访问记录：data/access/YYYY-MM.jsonl（打开页面、登录成功/失败）。
 """
 from __future__ import annotations
@@ -158,7 +159,8 @@ class App:
         if overrides:
             out = []
             for o in orders:
-                ov = overrides.get(str(o.get("po", "")))
+                po = str(o.get("po", ""))
+                ov = overrides.get(f"{po}|{o.get('supplier') or ''}", overrides.get(po))
                 if isinstance(ov, dict):
                     if ov.get("hidden"):
                         continue

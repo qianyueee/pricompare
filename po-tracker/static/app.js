@@ -123,6 +123,11 @@ function supplierOf(o) {
   return o.supplier || '';
 }
 
+// 同一个 PO 号偶尔会给两家供应商用（如 44278），所以展开状态按「PO 号 + 供应商」记
+function rowKey(o) {
+  return `${o.po}|${supplierOf(o)}`;
+}
+
 // ---------------------------------------------------------------- 排序
 
 function byNullable(a, b, dir) {
@@ -227,6 +232,7 @@ function detail(o) {
     : '<p class="muted">邮件里没读到零件明细。</p>';
 
   const issues = (o.open_issues || []).filter(Boolean);
+  const doubts = (o.doubts || []).filter(Boolean);
   const issuesHtml = issues.length ? `<ul class="issues">${issues.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : '<p class="muted">没有。</p>';
 
   const mails = o.mails || [];
@@ -245,6 +251,7 @@ function detail(o) {
       <div>
         <h3>待跟进</h3>${issuesHtml}
         ${o.status_note ? `<h3>状态依据</h3><p class="muted">${esc(o.status_note)}</p>` : ''}
+        ${doubts.length ? `<h3>整理时拿不准的地方</h3><ul class="doubts">${doubts.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
         <h3>相关邮件（${mails.length}）</h3>${mailsHtml}
       </div>
     </div>`;
@@ -264,8 +271,8 @@ function render() {
   const list = base.filter((o) => state.level === 'all' || o._u.key === state.level).sort(SORTS[state.sort] || SORTS.urgency);
   $('rows').innerHTML = list
     .map((o) => {
-      const open = state.open.has(o.po);
-      const row = `<tr class="row u-${o._u.key}" data-po="${esc(o.po)}" tabindex="0" aria-expanded="${open}">${cells(o)}</tr>`;
+      const open = state.open.has(rowKey(o));
+      const row = `<tr class="row u-${o._u.key}" data-key="${esc(rowKey(o))}" tabindex="0" aria-expanded="${open}">${cells(o)}</tr>`;
       return open ? `${row}<tr class="detail u-${o._u.key}"><td colspan="9">${detail(o)}</td></tr>` : row;
     })
     .join('');
@@ -335,11 +342,11 @@ async function load() {
 // ---------------------------------------------------------------- 交互
 
 function toggleRow(tr) {
-  const po = tr.dataset.po;
-  if (state.open.has(po)) state.open.delete(po);
-  else state.open.add(po);
+  const key = tr.dataset.key;
+  if (state.open.has(key)) state.open.delete(key);
+  else state.open.add(key);
   render();
-  const again = document.querySelector(`tr.row[data-po="${CSS.escape(po)}"]`);
+  const again = document.querySelector(`tr.row[data-key="${CSS.escape(key)}"]`);
   if (again) again.focus({ preventScroll: true });
 }
 

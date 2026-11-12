@@ -60,6 +60,10 @@ ORDERS = [
     dict(po="90099", supplier="华晨", buyer_entity="Kavis Tech LLC", customer_po="C-700201", customer="客户 A", end_user="Alex Moreno",
          order_date=d(-40), due_date=None, due_text="", amount=None, currency="", tax="", status="已下单", status_note="只在质量问题邮件里出现",
          lines=[], open_issues=["销子数量 20 还是 40 没说定"]),
+    dict(po="90150", supplier="兴华", buyer_entity="深圳凯阔", customer_po="TBD", customer="客户 B", end_user="Marco Li",
+         order_date=d(-2), due_date=d(18), amount=4300, currency="RMB", tax="未税", status="已下单", status_note="同号给了两家供应商",
+         lines=[line("9000551-000", "AA", "PANEL", 2, 2150)], open_issues=["PO 号和凯维那张重了"],
+         doubts=["标题写交期 11/28，PO 单写 11/30，取了后者"]),
     dict(po="90160", supplier="凯维", buyer_entity="Kavis Tech LLC", customer_po="C-700812", customer="客户 A", end_user="Lena Fischer",
          order_date=d(-1), due_date=d(4), amount=972, currency="RMB", tax="含税", status="已下单", status_note="", lines=[line("9000901-000", "AA", "WASHER", 3, 324)], open_issues=[]),
 ]
