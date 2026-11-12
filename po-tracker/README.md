@@ -1,18 +1,18 @@
 # PO 跟单列表页（po.kvstek.com）
 
-一个页面列出 PO，按供应商交期的紧急程度上色。数据以跟单人员每天上传的**跟单总表**为准（状态、备注全是人填的，页面不做判断）；还没上传过总表时，才显示从 zill@kvstek.com 邮件整理的旧数据。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
+一个页面列出 PO，按供应商交期的紧急程度上色。起点是 2026-11-12 从 zill@kvstek.com 邮件整理的 PO；之后不再自动判断状态（邮件同步已暂停），由跟单的人在页面上改状态、写跟进、手动新增 PO。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
 
 ```
 po-tracker/
-  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/tracker.json（没有就读 orders.json）
-  tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
+  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json + overrides.json + edits.json
+  edits.py            网页上的改动：检查、保存（data/edits.json）、跟进记录（data/history.jsonl）
   static/             页面（index.html、app.js、app.css、favicon.svg）
   deploy/             Mac 上的 LaunchAgent（local.po-tracker.plist）、健康检查、手动重启脚本
   sample/make_sample.py  生成假数据，本地看效果
   tests/               python3 -m unittest discover -s tests
 ```
 
-数据由 Mac 上的 `~/apps/po-tracker/po_sync.py` 每小时生成（只读 zill@ 邮箱 → `claude -p` 整理 → `data/orders.json`）。那个脚本含邮件细节，只放在 Mac 上，不进这个公开仓库；**任何邮件内容、订单数据都不要提交到这里。**
+起点数据由 Mac 上的 `~/apps/po-tracker/po_sync.py` 生成（只读 zill@ 邮箱 → `claude -p` 整理 → `data/orders.json`；2026-11-12 起暂停）。那个脚本含邮件细节，只放在 Mac 上，不进这个公开仓库；**任何邮件内容、订单数据都不要提交到这里。**
 
 ## 运行
 
@@ -29,15 +29,15 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - hermes 每 10 分钟跑 `deploy/po_tracker_check.sh`：只查 `/healthz`，不重启；连续两次不通才发一条 Telegram，恢复时再发一条。
 - `GET /healthz` 给健康检查用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
 
-## 上传跟单总表
+## 在网页上改状态
 
-- 页面右上角「上传总表」→ 选 .xlsx → 输上传密码。上传密码和查看密码分开（查看密码 Tony 也有）。
-- 设上传密码（只存 scrypt 哈希到 `data/config.json`，权限 600）：
-  `python3 po_server.py set-upload-password --data ~/apps/po-tracker/data`
-- 接口：`POST /api/upload`，要登录 cookie（本机不用），请求体就是文件本身，`X-Upload-Key` = 上传密码的 UTF-8 再 base64，`X-Filename` = URL 编码的文件名；上限 30 MB；输错算进全站的 10 次限速。
-- 读的是「订单明细」：前 10 行里有 `WO#` 和 `WO Due` 的那行是表头，必须有 `WO#`、`WO Due`、`Vendor`、`P/N`、`备注`。按 (WO#, Vendor) 汇总成一个 PO；Vendor 英文名换成 华晨/凯维/兴华。
-- 一行算结束：`备注` 就是「完成」，或 `备注` 含「取消」，或填了 `发货日期`（1/1/2000 这种占位不算）。一个 PO 的所有行都结束才算结束（灰色、排最后）；其余按没结束的行里最早的 `WO Due` 上色，`备注` 和 `预计发货日期` 原文照样显示。
-- 结果写 `data/tracker.json`（`source: "tracker"`, `uploaded_at`, `filename`, `sheet_note`, `rows`, `wo_count`, `open_count`, `orders`）；原文件留在 `data/tracker/`，保留最近 90 份。格式不对时原样告诉上传的人，页面不变。
+- 编辑密码和查看密码分开（查看密码 Tony 也有，只能看）。设编辑密码（只存 scrypt 哈希到 `data/config.json`，权限 600）：
+  `python3 po_server.py set-edit-password --data ~/apps/po-tracker/data`
+- 页面右上角「编辑」→ 输编辑密码 → 这台设备 30 天内能改（cookie `po_edit`，换编辑密码后全部作废）。本机直接打开不用密码。
+- 展开一个 PO：改状态（未定/已下单/已确认/已发货/已完成/已取消）、供应商交期、预计发货（日期或文字）、运单号，写「这次跟进了什么」，填名字（浏览器记住），保存。每次保存在 `data/history.jsonl` 记一行（谁、什么时候、改了什么旧→新、备注），页面上显示成「跟进记录」。
+- 「新增 PO」：PO 号 + 供应商必填（同一对不能重复），可填交期、金额、客户 PO、零件（每行「零件号 数量」）。手动加的可以删，邮件来的不能删（不要的改成「已取消」）。
+- 当前值存在 `data/edits.json`（`patches` 按 `PO|供应商`，`added` 是手动新增的），优先级最高：盖过 orders.json 和 overrides.json。
+- 接口（都要登录 + 编辑权限，`Content-Type: application/json`，带 Origin 时必须是本站）：`POST /api/edit-login {password}`、`/api/edit-logout`、`/api/order/update {key, by, changes, note}`、`/api/order/add {by, order}`、`/api/order/delete {key, by}`。编辑密码输错算进全站 10 次限速。
 
 ## orders.json 格式（从邮件整理的旧数据）
 
@@ -88,7 +88,7 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 
 同一个 PO 号给了两家供应商时（如 44278），键写成 `"44278|兴华"` 只改那一条；只写 PO 号就两条都改。页面上被更正过的 PO 展开后会标「手工更正过」。
 
-`orders.json` 里的 `open_issues`、`doubts` 页面已经不显示（2026-11-12 起状态改由人跟进）。
+`orders.json` 里的 `open_issues`、`doubts` 页面已经不显示（2026-11-12 起状态改由人跟进）。网页上的改动优先于这里的手工更正。
 
 ## 本地看效果
 
@@ -99,4 +99,4 @@ python3 po_server.py --data /tmp/po-data --password-from /tmp/po-cfg.json --host
 # 打开 http://localhost:8792/
 ```
 
-看总表模式：先 `python3 po_server.py set-upload-password --data /tmp/po-data`，再在页面上点「上传总表」传一份。
+本机打开就能改；要试编辑密码，用 `--host localhost` 启动、请求带一个 `cf-ray` 头（当成公网），先 `set-edit-password`。

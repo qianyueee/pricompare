@@ -15,7 +15,9 @@
     <p class="sub" id="sub">正在读取…</p>
   </div>
   <div class="top-actions">
-    <button type="button" class="btn btn-primary" id="upload" hidden>上传总表</button>
+    <button type="button" class="btn btn-primary" id="add" hidden>新增 PO</button>
+    <button type="button" class="btn" id="edit" hidden title="输编辑密码后可以改状态、写跟进">编辑</button>
+    <button type="button" class="btn btn-quiet" id="edit-off" hidden title="这台设备不再能改">退出编辑</button>
     <button type="button" class="btn" id="refresh" title="重新读取数据">刷新</button>
     <a class="btn btn-quiet" href="/logout" id="logout" hidden>退出</a>
   </div>
@@ -70,26 +72,50 @@
   <span class="lg u-green">7 天以上</span>
   <span class="lg u-nodate">没写交期</span>
   <span class="lg u-done">已发货 / 完成 / 取消</span><br />
-  <span id="src"></span>点一行看零件明细。
+  状态最初从 zill@kvstek.com 的 PO 邮件整理，之后由跟单的人在这里更新；点一行看跟进记录、零件明细和相关邮件。
 </footer>
 
-<dialog id="up-dialog" class="up-dialog" aria-labelledby="up-title">
-  <form id="up-form" method="dialog">
-    <h2 id="up-title">上传跟单总表</h2>
-    <p class="up-help">选最新的跟单总表 .xlsx。页面会读「订单明细」这张表，换掉现在显示的内容；以前上传的文件在 Mac 上留着。</p>
-    <label class="up-field">文件
-      <input type="file" id="up-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+<dialog id="ed-dialog" class="dlg" aria-labelledby="ed-title">
+  <form id="ed-form" method="dialog">
+    <h2 id="ed-title">输入编辑密码</h2>
+    <p class="dlg-help">输对后这台设备 30 天内都能改状态、写跟进。编辑密码和查看密码不是同一个。</p>
+    <label class="dlg-field">编辑密码
+      <input type="password" id="ed-key" autocomplete="off" />
     </label>
-    <label class="up-field">上传密码
-      <input type="password" id="up-key" autocomplete="off" />
-    </label>
-    <p class="up-msg" id="up-msg" role="status"></p>
-    <div class="up-actions">
-      <button type="button" class="btn btn-quiet" id="up-cancel">关闭</button>
-      <button type="submit" class="btn btn-primary" id="up-go">上传</button>
+    <p class="dlg-msg" id="ed-msg" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn btn-quiet" id="ed-cancel">取消</button>
+      <button type="submit" class="btn btn-primary" id="ed-go">确定</button>
     </div>
   </form>
 </dialog>
+
+<dialog id="add-dialog" class="dlg dlg-wide" aria-labelledby="add-title">
+  <form id="add-form" method="dialog" autocomplete="off">
+    <h2 id="add-title">新增 PO</h2>
+    <p class="dlg-help">邮件同步已经停了，新下的 PO 在这里手动加。带 * 的必填。</p>
+    <div class="dlg-grid">
+      <label class="dlg-field">PO 号 *<input name="po" maxlength="30" required /></label>
+      <label class="dlg-field">供应商 *<input name="supplier" maxlength="30" list="sup-list" required placeholder="华晨 / 凯维 / 兴华…" /></label>
+      <label class="dlg-field">状态<select name="status"></select></label>
+      <label class="dlg-field">供应商交期<input type="date" name="due_date" /></label>
+      <label class="dlg-field">下单日期<input type="date" name="order_date" /></label>
+      <label class="dlg-field">金额（RMB）<input name="amount" inputmode="decimal" /></label>
+      <label class="dlg-field">客户 PO<input name="customer_po" maxlength="60" /></label>
+      <label class="dlg-field">下单人<input name="end_user" maxlength="60" /></label>
+    </div>
+    <label class="dlg-field">零件（每行一个零件号，后面可以写数量，例如 0657863-001 10）<textarea name="lines" rows="3"></textarea></label>
+    <label class="dlg-field">备注<textarea name="note" rows="2" maxlength="500"></textarea></label>
+    <label class="dlg-field dlg-by">你的名字 *<input name="by" maxlength="20" /></label>
+    <p class="dlg-msg" id="add-msg" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn btn-quiet" id="add-cancel">取消</button>
+      <button type="submit" class="btn btn-primary" id="add-go">新增</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="sup-list"></datalist>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script src="/static/app.js"></script>
 </body>

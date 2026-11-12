@@ -1,9 +1,10 @@
 'use strict';
-// PO 跟单列表页：读 /api/orders，按供应商交期的紧急程度上色、筛选、排序；点一行展开零件明细。
-// 数据有两种来源：跟单人员上传的跟单总表（source: "tracker"，状态全看表里人填的），或从邮件整理的（旧）。
+// PO 跟单列表页：读 /api/orders，按供应商交期的紧急程度上色、筛选、排序；点一行展开零件明细、相关邮件和跟进记录。
+// 状态最初从 zill@ 邮件整理，之后由跟单的人在展开的表单里改（要编辑密码；本机直接打开不用）。
 
 const RED_DAYS = 3; // 0–3 天：红
 const AMBER_DAYS = 7; // 4–7 天：黄
+const STATUSES = ['未定', '已下单', '已确认', '已发货', '已完成', '已取消'];
 const DONE = new Set(['已发货', '已完成', '已取消']);
 const LEVELS = [
   { key: 'open', label: '未完成' },
@@ -18,6 +19,9 @@ const LEVELS = [
 const RANK = { overdue: 0, red: 1, amber: 2, green: 3, nodate: 4, done: 5 };
 const WEEK = '日一二三四五六';
 const PREF_KEY = 'po-tracker-prefs-2';
+const NAME_KEY = 'po-tracker-name';
+const FIELD_LABEL = { status: '状态', due_date: '交期', eta: '预计发货', tracking: '运单号' };
+const EDIT_FIELDS = ['status', 'due_date', 'eta', 'tracking'];
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -28,7 +32,9 @@ const state = {
   q: '',
   sort: 'urgency',
   open: new Set(),
+  drafts: new Map(), // 展开后填了还没保存的内容，重新渲染时不丢
   loadedAt: 0,
+  me: '',
 };
 
 // ---------------------------------------------------------------- 小工具
@@ -65,13 +71,9 @@ function fmtDateTime(iso) {
   return `${md(d)} ${hh}:${mm}`;
 }
 
-// 总表里的「预计发货日期」可能是日期，也可能是「随时」「待定」这种字
+// 预计发货可以是日期，也可以是「随时」「待定」这种字
 function dayOrText(s) {
   return parseDay(s) ? fmtDay(s) : s || '';
-}
-
-function isTracker(o) {
-  return o.source === 'tracker';
 }
 
 function money(amount, currency) {
@@ -84,29 +86,57 @@ function num(v) {
   return v === null || v === undefined || v === '' ? '' : (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
+function store(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch (e) {
+    /* 隐私模式等读写不了就算了 */
+  }
+  return null;
+}
+
 function loadPrefs() {
   try {
-    const p = JSON.parse(localStorage.getItem(PREF_KEY) || '{}');
+    const p = JSON.parse(store(PREF_KEY) || '{}');
     if (typeof p.level === 'string') state.level = p.level;
     if (typeof p.supplier === 'string') state.supplier = p.supplier;
     if (typeof p.sort === 'string') state.sort = p.sort;
   } catch (e) {
-    /* 隐私模式等读不了就用默认 */
+    /* 用默认 */
   }
+  state.me = store(NAME_KEY) || '';
 }
 
 function savePrefs() {
+  store(PREF_KEY, JSON.stringify({ level: state.level, supplier: state.supplier, sort: state.sort }));
+}
+
+async function postJSON(url, obj) {
+  const r = await fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(obj || {}),
+  });
+  let doc = {};
   try {
-    localStorage.setItem(PREF_KEY, JSON.stringify({ level: state.level, supplier: state.supplier, sort: state.sort }));
+    doc = await r.json();
   } catch (e) {
-    /* 忽略 */
+    /* 不是 JSON 就看状态码 */
   }
+  if (r.status === 401) {
+    location.href = '/login';
+    throw new Error('需要重新登录');
+  }
+  if (!r.ok) throw new Error(doc.error || `HTTP ${r.status}`);
+  return doc;
 }
 
 // ---------------------------------------------------------------- 紧急程度
 
 function classify(o) {
-  if (o.closed || DONE.has(o.status)) return { key: 'done', pill: o.status || '完成', days: null };
+  if (DONE.has(o.status)) return { key: 'done', pill: o.status, days: null };
   const due = parseDay(o.due_date);
   if (!due) return { key: 'nodate', pill: '没写交期', days: null };
   const days = Math.round((due - today()) / 864e5);
@@ -121,8 +151,8 @@ const haystacks = new WeakMap();
 function haystack(o) {
   let h = haystacks.get(o);
   if (!h) {
-    const parts = [o.po, ...(o.aliases || []), o.supplier, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text, ...(o.notes || []), ...(o.eta || [])];
-    for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc, l.note, l.customer_po, l.invoice, l.next_step, l.clean_no, l.logistics);
+    const parts = [o.po, ...(o.aliases || []), o.supplier, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text, o.note, o.eta];
+    for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc);
     h = parts.filter(Boolean).join(' ').toLowerCase();
     haystacks.set(o, h);
   }
@@ -133,9 +163,9 @@ function supplierOf(o) {
   return o.supplier || '';
 }
 
-// 同一个 PO 号偶尔会给两家供应商用（如 44278），所以展开状态按「PO 号 + 供应商」记
+// 同一个 PO 号偶尔会给两家供应商用（如 44278），所以用「PO 号|供应商」当键（服务器给的 key 也是这个）
 function rowKey(o) {
-  return `${o.po}|${supplierOf(o)}`;
+  return o.key || `${o.po}|${supplierOf(o)}`;
 }
 
 // ---------------------------------------------------------------- 排序
@@ -167,13 +197,13 @@ const SORTS = {
   amount: (a, b) => byNullable(a.amount ?? null, b.amount ?? null, -1) || poCmp(a, b),
 };
 
-// ---------------------------------------------------------------- 渲染
+// ---------------------------------------------------------------- 渲染：列表
 
 function renderChips(counts) {
   $('chips').innerHTML = LEVELS.map((lv) => {
     const n = counts[lv.key] || 0;
-    const cls = ['chip', lv.key === 'all' ? '' : `u-${lv.key}`, n ? '' : 'zero'].join(' ');
-    const dot = lv.key === 'all' ? '' : '<span class="dot"></span>';
+    const cls = ['chip', lv.key === 'all' || lv.key === 'open' ? '' : `u-${lv.key}`, n ? '' : 'zero'].join(' ');
+    const dot = lv.key === 'all' || lv.key === 'open' ? '' : '<span class="dot"></span>';
     return `<button type="button" class="${cls}" data-level="${lv.key}" aria-pressed="${state.level === lv.key}">${dot}${esc(lv.label)} <span class="n">${n}</span></button>`;
   }).join('');
 }
@@ -192,22 +222,20 @@ function renderSuppliers() {
       })
       .join('');
   $('supplier').value = state.supplier;
+  $('sup-list').innerHTML = names.filter(Boolean).map((n) => `<option value="${esc(n)}"></option>`).join('');
 }
 
-// 状态格：总表来的显示人填的备注原文和预计发货；邮件来的显示整理出的状态
 function statusCell(o) {
-  if (!isTracker(o)) {
-    return `<span class="st st-${esc(o.status || '')}">${esc(o.status || '—')}</span>${o.status_note ? `<span class="muted st-note clip">${esc(o.status_note)}</span>` : ''}`;
+  const parts = [`<span class="st st-${esc(o.status || '')}">${esc(o.status || '—')}</span>`];
+  if (o.note) {
+    parts.push(`<span class="note clip" title="${esc(o.note)}">${esc(o.note)}</span>`);
+    parts.push(`<span class="muted">${esc([o.note_by, fmtDateTime(o.note_at)].filter(Boolean).join(' '))}</span>`);
+  } else if (o.status_note) {
+    parts.push(`<span class="muted st-note clip">${esc(o.status_note)}</span>`);
   }
-  if (o.closed) return `<span class="st st-${esc(o.status)}">${esc(o.status || '完成')}</span>`;
-  const parts = [];
-  const notes = o.notes || [];
-  if (notes.length) parts.push(`<span class="note clip" title="${esc(notes.join('\n'))}">${notes.map(esc).join('<br>')}</span>`);
-  const eta = (o.eta || []).map(dayOrText).filter(Boolean);
-  if (eta.length) parts.push(`<span class="eta">预计发货 ${esc(eta.join('、'))}</span>`);
-  const total = (o.lines || []).length;
-  if (total > 1 && o.open_lines < total) parts.push(`<span class="muted">${total - o.open_lines}/${total} 行已结束</span>`);
-  return parts.length ? parts.join('') : '<span class="none">没写备注</span>';
+  const extra = [o.eta && `预计发货 ${dayOrText(o.eta)}`, o.tracking && `运单 ${o.tracking}`].filter(Boolean);
+  if (extra.length) parts.push(`<span class="eta">${esc(extra.join(' · '))}</span>`);
+  return parts.join('');
 }
 
 function cells(o) {
@@ -221,9 +249,10 @@ function cells(o) {
   const aliases = (o.aliases || []).filter(Boolean);
   const lines = o.lines || [];
   const amt = money(o.amount, o.currency);
+  const manual = o.source === 'manual' ? '<span class="tag-manual" title="网页上手动加的">手动</span>' : '';
   return `
     <td class="c-due">${dueHtml}${due ? '<br>' : ''}<span class="pill">${esc(u.pill)}</span></td>
-    <td class="c-po"><span class="po">${esc(o.po)}</span><span class="po-sup">${esc(o.supplier || '供应商未定')}</span>${aliases.length ? `<span class="alias">原 ${esc(aliases.join('、'))}</span>` : ''}</td>
+    <td class="c-po"><span class="po">${esc(o.po)}</span>${manual}<span class="po-sup">${esc(o.supplier || '供应商未定')}</span>${aliases.length ? `<span class="alias">原 ${esc(aliases.join('、'))}</span>` : ''}</td>
     <td class="c-sup">${o.supplier ? esc(o.supplier) : '<span class="none">未定</span>'}</td>
     <td class="c-status">${statusCell(o)}</td>
     <td class="c-cust"><span>${o.customer_po ? esc(o.customer_po) : '<span class="none">—</span>'}</span>${o.end_user ? `<span class="muted">${esc(o.end_user)}</span>` : ''}</td>
@@ -232,52 +261,64 @@ function cells(o) {
     <td class="c-ord">${o.order_date ? esc(fmtDay(o.order_date)) : '<span class="none">—</span>'}</td>`;
 }
 
-function lineShip(l) {
-  if (l.shipped) return `<span class="ship">已发 ${esc(fmtDay(l.shipped))}</span>`;
-  return l.eta ? `预计 ${esc(dayOrText(l.eta))}` : '';
+// ---------------------------------------------------------------- 渲染：展开
+
+function fmtValue(field, v) {
+  if (!v) return '空';
+  return field === 'due_date' ? fmtDay(v) : field === 'eta' ? dayOrText(v) : v;
 }
 
-function trackerDetail(o) {
-  const facts = [];
-  const add = (k, v) => v && facts.push(`<span>${esc(k)} <b>${esc(v)}</b></span>`);
-  add('下单', fmtDay(o.order_date));
-  add('各行交期', o.due_text);
-  add('客户交期', fmtDay(o.customer_due));
-  add('已发货', (o.shipped || []).map(fmtDay).join('、'));
-  const fixed = (o.overridden || []).length ? `<span class="tag-fixed" title="${esc(o.overridden.join('、'))}">手工更正过</span>` : '';
-  const lines = o.lines || [];
-  const rows = lines
-    .map((l) => {
-      const extra = [
-        l.next_step && `下一站 ${l.next_step}`,
-        l.logistics && `物流 ${l.logistics}`,
-        l.clean_no && `清洗单 ${l.clean_no}`,
-        l.invoice && `Invoice ${l.invoice}`,
-      ].filter(Boolean);
-      const cpo = [l.customer_po, l.customer_line].filter(Boolean).join(' / ');
-      return `<tr class="${l.closed ? 'ln-closed' : ''}">
-        <td class="pn">${esc(l.pn)}${l.rev ? ` <span class="muted">Rev ${esc(l.rev)}</span>` : ''}</td>
-        <td class="desc">${esc(l.desc)}</td>
-        <td class="num qty" data-label="数量 ">${esc(num(l.qty))}</td>
-        <td class="num up">${esc(num(l.unit_price))}</td>
-        <td class="num amt-l">${esc(num(l.amount))}</td>
-        <td class="nowrap due-l" data-label="交期 ">${esc(fmtDay(l.wo_due))}</td>
-        <td class="cpo">${esc(cpo)}</td>
-        <td class="nowrap ship-l">${lineShip(l)}</td>
-        <td class="ln-note">${esc(l.note)}${extra.length ? `<div class="muted">${esc(extra.join(' · '))}</div>` : ''}</td>
-      </tr>`;
-    })
-    .join('');
-  return `<div class="dl dl-full">
-      <div class="facts">${facts.join('')}${fixed}</div>
-      <div><h3>零件明细（${lines.length} 行${o.open_lines && o.open_lines < lines.length ? `，${o.open_lines} 行未结束` : ''}）</h3>
-        <div class="lines-wrap"><table class="lines"><thead><tr><th>零件号</th><th class="desc">描述</th><th class="num">数量</th><th class="num up">单价</th><th class="num amt-l">金额</th><th>交期</th><th class="cpo">客户 PO / Line</th><th>发货</th><th>备注</th></tr></thead><tbody>${rows}</tbody></table></div>
+function historyHtml(o) {
+  const hist = o.history || [];
+  const items = hist.map((h) => {
+    const what = [];
+    if (h.action === 'add') what.push('新增这个 PO');
+    for (const [f, [a, b]] of Object.entries(h.changes || {})) {
+      what.push(`${FIELD_LABEL[f] || f} ${esc(fmtValue(f, a))} → <b>${esc(fmtValue(f, b))}</b>`);
+    }
+    const note = h.note ? `<div class="h-note">${esc(h.note)}</div>` : '';
+    return `<li><span class="when">${esc(fmtDateTime(h.at))}</span><span class="who">${esc(h.by)}</span><span class="what">${what.join('；')}${note}</span></li>`;
+  });
+  const origin =
+    o.source === 'manual'
+      ? ''
+      : `<li class="h-origin"><span class="when">${esc(fmtDateTime(state.meta.generated_at))}</span><span class="who">邮件</span><span class="what">从 zill@ 邮件整理：状态 <b>${esc(firstStatus(o))}</b>${o.status_note ? `<div class="h-note">${esc(o.status_note)}</div>` : ''}</span></li>`;
+  return `<ul class="hist">${items.join('')}${origin}</ul>`;
+}
+
+// 被网页改过状态时，邮件整理的原始状态 = 最早一条改状态记录里的「旧」值
+function firstStatus(o) {
+  const hist = o.history || [];
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const c = hist[i].changes && hist[i].changes.status;
+    if (c) return c[0] || '—';
+  }
+  return o.status || '—';
+}
+
+function editForm(o) {
+  const key = rowKey(o);
+  const d = state.drafts.get(key) || {};
+  const val = (f) => (f in d ? d[f] : o[f] || '');
+  const statusOpts = STATUSES.map((s) => `<option${val('status') === s ? ' selected' : ''}>${esc(s)}</option>`).join('');
+  return `<form class="fu-form" data-key="${esc(key)}" autocomplete="off">
+      <div class="fu-grid">
+        <label>状态<select name="status">${statusOpts}</select></label>
+        <label>供应商交期<input type="date" name="due_date" value="${esc(val('due_date'))}" /></label>
+        <label>预计发货<input name="eta" maxlength="40" placeholder="日期或「随时」" value="${esc(val('eta'))}" /></label>
+        <label>运单号<input name="tracking" maxlength="80" value="${esc(val('tracking'))}" /></label>
       </div>
-    </div>`;
+      <label class="fu-note">这次跟进了什么<textarea name="note" rows="2" maxlength="500" placeholder="例如：凯维说 11/20 发货">${esc(d.note || '')}</textarea></label>
+      <div class="fu-actions">
+        <label class="fu-by">你的名字<input name="by" maxlength="20" value="${esc(state.me)}" /></label>
+        <button type="submit" class="btn btn-primary">保存</button>
+        <span class="fu-msg" role="status"></span>
+        ${o.source === 'manual' ? '<button type="button" class="btn-link danger" data-act="delete">删除这个手动加的 PO</button>' : ''}
+      </div>
+    </form>`;
 }
 
 function detail(o) {
-  if (isTracker(o)) return trackerDetail(o);
   const facts = [];
   const add = (k, v) => v && facts.push(`<span>${esc(k)} <b>${esc(v)}</b></span>`);
   add('下单', fmtDay(o.order_date));
@@ -285,9 +326,8 @@ function detail(o) {
   add('客户交期', fmtDay(o.customer_due));
   add('下单主体', o.buyer_entity);
   add('客户', o.customer);
-  add('运单号', o.tracking);
   add('最近邮件', fmtDateTime(o.last_mail_at));
-  add('整理于', fmtDateTime(o.updated_at));
+  add('手动新增', o.source === 'manual' ? [o.created_by, fmtDateTime(o.created_at)].filter(Boolean).join(' ') : '');
   const fixed = (o.overridden || []).length ? `<span class="tag-fixed" title="${esc(o.overridden.join('、'))}">手工更正过</span>` : '';
 
   const lines = o.lines || [];
@@ -298,25 +338,30 @@ function detail(o) {
             `<tr><td class="pn">${esc(l.pn)}</td><td>${esc(l.rev)}</td><td class="desc">${esc(l.desc)}</td><td class="num">${esc(num(l.qty))}</td><td class="num">${esc(num(l.unit_price))}</td><td class="num">${esc(num(l.amount))}</td></tr>`,
         )
         .join('')}</tbody></table>`
-    : '<p class="muted">邮件里没读到零件明细。</p>';
-
+    : '<p class="muted">没有零件明细。</p>';
 
   const mails = o.mails || [];
   const mailsHtml = mails.length
-    ? `<ul class="mails">${mails
+    ? `<h3>相关邮件（${mails.length}）</h3><ul class="mails">${mails
         .map(
           (m) =>
             `<li><span class="when">${esc(fmtDateTime(m.date))}</span><span class="who" title="${esc(m.from)}">${esc(m.from)}</span><span class="subj">${esc(m.subject)} <span class="muted">${esc(m.folder || '')}${m.uid ? ` #${esc(m.uid)}` : ''}</span></span></li>`,
         )
         .join('')}</ul>`
-    : '<p class="muted">没有。</p>';
+    : '';
 
+  const canEdit = !!state.meta.can_edit;
+  const lockHint = canEdit ? '' : '<p class="muted">要改状态或写跟进，点右上角「编辑」输编辑密码。</p>';
   return `<div class="dl">
       <div class="facts">${facts.join('')}${fixed}</div>
-      <div><h3>零件明细（${lines.length} 行）</h3>${linesHtml}</div>
-      <div>
-        ${o.status_note ? `<h3>状态依据</h3><p class="muted">${esc(o.status_note)}</p>` : ''}
-        <h3>相关邮件（${mails.length}）</h3>${mailsHtml}
+      <div class="fu">
+        <h3>跟进</h3>
+        ${canEdit ? editForm(o) : lockHint}
+        <h3>跟进记录</h3>${historyHtml(o)}
+      </div>
+      <div class="parts">
+        <h3>零件明细（${lines.length} 行）</h3>${linesHtml}
+        ${mailsHtml}
       </div>
     </div>`;
 }
@@ -349,7 +394,7 @@ function render() {
   const empty = $('empty');
   if (!state.orders.length) {
     empty.hidden = false;
-    empty.textContent = state.meta.missing ? '还没有数据：点右上角「上传总表」把跟单总表传上来。' : state.meta.error || '表里还没有 PO。';
+    empty.textContent = state.meta.missing ? '还没有数据。' : state.meta.error || '还没有 PO。';
   } else if (!list.length) {
     empty.hidden = false;
     empty.textContent = '没有符合条件的 PO。';
@@ -361,102 +406,26 @@ function render() {
 
 function renderHeader() {
   const m = state.meta;
-  const tracker = m.source === 'tracker';
-  document.querySelector('.grid th.c-status').textContent = tracker ? '跟单备注' : '状态';
-  $('src').textContent = tracker
-    ? '数据来自跟单人员上传的跟单总表（订单明细）：备注、预计发货、发货日期都是表里人填的原文；备注写「完成」、含「取消」或填了发货日期的行算结束。'
-    : '数据从 zill@kvstek.com 的 PO 邮件整理。';
-  $('upload').hidden = false;
+  const parts = [];
+  if (m.generated_at) parts.push(`${fmtDateTime(m.generated_at)} 从邮件整理`);
+  if (m.last_edit) parts.push(`最近跟进 ${fmtDateTime(m.last_edit.at)} ${m.last_edit.by || ''}`.trim());
+  parts.push(`共 ${state.orders.length} 个 PO`);
+  $('sub').textContent = parts.join(' · ');
   $('logout').hidden = !m.can_logout;
-  if (tracker) return renderTrackerHeader(m);
-  const when = fmtDateTime(m.generated_at || m.file_mtime);
-  $('sub').textContent = m.missing
-    ? 'zill@kvstek.com 的 PO 邮件 · 数据还没生成'
-    : `zill@kvstek.com 的 PO 邮件 · 更新于 ${when || '—'} · 共 ${state.orders.length} 个 PO`;
-  const gen = new Date(m.generated_at || m.file_mtime || NaN);
-  const now = new Date(m.server_time || Date.now());
-  const hours = (now - gen) / 36e5;
+  $('add').hidden = !m.can_edit;
+  $('edit').hidden = !!m.can_edit;
+  $('edit-off').hidden = !m.can_edit || !!m.edit_local;
   const stale = $('stale');
-  if (!isNaN(hours) && hours > 3) {
-    stale.hidden = false;
-    stale.textContent = `数据已经 ${Math.floor(hours)} 小时没更新了（正常每小时一次），可能是 Mac 没开或同步出错，列表可能不是最新的。`;
-  } else {
-    stale.hidden = true;
-  }
-}
-
-function renderTrackerHeader(m) {
-  const sheet = m.sheet_note ? m.sheet_note.replace(/^最后更新时间\s*/, '表内更新 ') : m.filename || '';
-  $('sub').textContent = [`跟单总表 ${fmtDateTime(m.uploaded_at)} 上传`, sheet, `共 ${state.orders.length} 个 PO`].filter(Boolean).join(' · ');
-  const up = new Date(m.uploaded_at || NaN);
-  const now = new Date(m.server_time || Date.now());
-  const days = Math.floor((now - up) / 864e5);
-  const stale = $('stale');
-  stale.hidden = !(days >= 2);
-  if (!stale.hidden) stale.textContent = `跟单总表已经 ${days} 天没上传了，下面是 ${md(up)} 那份的内容。`;
-}
-
-// ---------------------------------------------------------------- 上传跟单总表
-
-function b64utf8(s) {
-  let bin = '';
-  for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
-
-function openUpload() {
-  const dlg = $('up-dialog');
-  $('up-msg').textContent = state.meta.upload_ready ? '' : '还没有设上传密码，请 Zane 先在 Mac 上设一下。';
-  $('up-msg').className = state.meta.upload_ready ? 'up-msg' : 'up-msg bad';
-  $('up-go').disabled = false;
-  if (typeof dlg.showModal === 'function') dlg.showModal();
-  else dlg.setAttribute('open', '');
-  $('up-file').focus();
-}
-
-async function doUpload(e) {
-  e.preventDefault();
-  const file = $('up-file').files[0];
-  const msg = $('up-msg');
-  const say = (text, cls) => {
-    msg.textContent = text;
-    msg.className = `up-msg ${cls || ''}`;
-  };
-  if (!file) return say('先选一个 .xlsx 文件。', 'bad');
-  if (!/\.xlsx$/i.test(file.name)) return say('只能上传 .xlsx（.xls 或 .xlsm 请在 Excel 里另存为 .xlsx）。', 'bad');
-  const pw = $('up-key').value;
-  if (!pw) return say('请输入上传密码。', 'bad');
-  $('up-go').disabled = true;
-  say('正在上传和读取…');
-  try {
-    const r = await fetch('/api/upload', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/octet-stream', 'X-Upload-Key': b64utf8(pw), 'X-Filename': encodeURIComponent(file.name) },
-      body: file,
-    });
-    let doc = {};
-    try {
-      doc = await r.json();
-    } catch (err) {
-      /* 不是 JSON 就用状态码 */
-    }
-    if (r.status === 401) {
-      location.href = '/login';
-      return;
-    }
-    if (!r.ok) throw new Error(doc.error || `HTTP ${r.status}`);
-    $('up-key').value = '';
-    say(`已更新：${doc.wo_count} 个 PO，其中 ${doc.open_count} 个未完成（共 ${doc.rows} 行）。`, 'good');
-    await load();
-  } catch (err) {
-    say(`没有更新：${err.message || err}`, 'bad');
-  } finally {
-    $('up-go').disabled = false;
-  }
+  stale.hidden = !m.edit_error;
+  stale.textContent = m.edit_error || '';
 }
 
 // ---------------------------------------------------------------- 读数据
+
+function busy() {
+  const a = document.activeElement;
+  return !!(a && a.closest && a.closest('.fu-form, dialog[open]')) || !!document.querySelector('dialog[open]');
+}
 
 async function load() {
   const btn = $('refresh');
@@ -483,6 +452,177 @@ async function load() {
   }
 }
 
+// ---------------------------------------------------------------- 跟进表单
+
+function formMsg(form, text, cls) {
+  const el = form.querySelector('.fu-msg');
+  el.textContent = text;
+  el.className = `fu-msg ${cls || ''}`;
+}
+
+async function saveFollowUp(form) {
+  const key = form.dataset.key;
+  const o = state.orders.find((x) => rowKey(x) === key);
+  if (!o) return formMsg(form, '这个 PO 找不到了，请刷新', 'bad');
+  const by = form.by.value.trim();
+  if (!by) {
+    form.by.focus();
+    return formMsg(form, '先填你的名字', 'bad');
+  }
+  const changes = {};
+  for (const f of EDIT_FIELDS) {
+    const v = form[f].value.trim();
+    if (v !== (o[f] || '')) changes[f] = v;
+  }
+  const note = form.note.value.trim();
+  if (!note && !Object.keys(changes).length) return formMsg(form, '没有改动', 'bad');
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  formMsg(form, '正在保存…');
+  try {
+    await postJSON('/api/order/update', { key, by, changes, note });
+    state.drafts.delete(key);
+    await load();
+    const again = document.querySelector(`form.fu-form[data-key="${CSS.escape(key)}"]`);
+    if (again) formMsg(again, '已保存', 'good');
+    else {
+      const now = state.orders.find((x) => rowKey(x) === key);
+      const where = now ? LEVELS.find((lv) => lv.key === now._u.key) : null;
+      toast(`已保存 ${o.po}（${o.supplier || '供应商未定'}）${where ? `，现在在「${where.label}」里` : ''}`);
+    }
+  } catch (e) {
+    formMsg(form, `没保存：${e.message || e}`, 'bad');
+    btn.disabled = false;
+  }
+}
+
+async function deleteManual(form) {
+  const key = form.dataset.key;
+  const by = form.by.value.trim();
+  if (!by) return formMsg(form, '先填你的名字', 'bad');
+  if (!confirm(`删除手动加的 ${key.replace('|', '（')}）？跟进记录会留着，但列表里就看不到了。`)) return;
+  try {
+    await postJSON('/api/order/delete', { key, by });
+    state.drafts.delete(key);
+    state.open.delete(key);
+    await load();
+  } catch (e) {
+    formMsg(form, `没删掉：${e.message || e}`, 'bad');
+  }
+}
+
+let toastTimer = 0;
+function toast(text) {
+  const el = $('toast');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 5000);
+}
+
+// ---------------------------------------------------------------- 编辑密码、新增 PO
+
+function showDialog(id) {
+  const dlg = $(id);
+  if (typeof dlg.showModal === 'function') dlg.showModal();
+  else dlg.setAttribute('open', '');
+}
+
+function dialogMsg(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = `dlg-msg ${cls || ''}`;
+}
+
+function openEditLogin() {
+  dialogMsg('ed-msg', state.meta.edit_ready ? '' : '还没有设编辑密码，请 Zane 先在 Mac 上设一下。', state.meta.edit_ready ? '' : 'bad');
+  $('ed-key').value = '';
+  showDialog('ed-dialog');
+  $('ed-key').focus();
+}
+
+async function doEditLogin(e) {
+  e.preventDefault();
+  const pw = $('ed-key').value;
+  if (!pw) return dialogMsg('ed-msg', '请输入编辑密码。', 'bad');
+  $('ed-go').disabled = true;
+  try {
+    await postJSON('/api/edit-login', { password: pw });
+    $('ed-key').value = '';
+    $('ed-dialog').close();
+    await load();
+  } catch (err) {
+    dialogMsg('ed-msg', err.message || String(err), 'bad');
+  } finally {
+    $('ed-go').disabled = false;
+  }
+}
+
+async function editLogout() {
+  try {
+    await postJSON('/api/edit-logout', {});
+  } catch (e) {
+    /* 照样刷新 */
+  }
+  await load();
+}
+
+function openAdd() {
+  const f = $('add-form');
+  f.reset();
+  f.by.value = state.me;
+  dialogMsg('add-msg', '');
+  showDialog('add-dialog');
+  f.po.focus();
+}
+
+function parseLines(text) {
+  const out = [];
+  for (const raw of text.split('\n')) {
+    const m = /^\s*(\S+)(?:\s+[x×*]?\s*(\d+(?:\.\d+)?))?\s*$/i.exec(raw);
+    if (m) out.push({ pn: m[1], qty: m[2] ? +m[2] : null });
+    else if (raw.trim()) out.push({ pn: raw.trim().split(/\s+/)[0], qty: null });
+  }
+  return out;
+}
+
+async function doAdd(e) {
+  e.preventDefault();
+  const f = $('add-form');
+  const by = f.by.value.trim();
+  if (!by) return dialogMsg('add-msg', '先填你的名字。', 'bad');
+  state.me = by;
+  store(NAME_KEY, by);
+  const order = {
+    po: f.po.value.trim(),
+    supplier: f.supplier.value.trim(),
+    status: f.status.value,
+    order_date: f.order_date.value,
+    due_date: f.due_date.value,
+    customer_po: f.customer_po.value.trim(),
+    end_user: f.end_user.value.trim(),
+    amount: f.amount.value.trim(),
+    lines: parseLines(f.lines.value),
+    note: f.note.value.trim(),
+  };
+  $('add-go').disabled = true;
+  try {
+    await postJSON('/api/order/add', { by, order });
+    const key = `${order.po}|${order.supplier}`;
+    $('add-dialog').close();
+    state.open.add(key);
+    state.q = '';
+    $('q').value = '';
+    await load();
+    const tr = document.querySelector(`tr.row[data-key="${CSS.escape(key)}"]`);
+    if (tr) tr.scrollIntoView({ block: 'center' });
+  } catch (err) {
+    dialogMsg('add-msg', err.message || String(err), 'bad');
+  } finally {
+    $('add-go').disabled = false;
+  }
+}
+
 // ---------------------------------------------------------------- 交互
 
 function toggleRow(tr) {
@@ -496,6 +636,7 @@ function toggleRow(tr) {
 
 function init() {
   loadPrefs();
+  $('add-form').status.innerHTML = STATUSES.map((s) => `<option${s === '已下单' ? ' selected' : ''}>${esc(s)}</option>`).join('');
   $('chips').addEventListener('click', (e) => {
     const b = e.target.closest('.chip');
     if (!b) return;
@@ -528,26 +669,51 @@ function init() {
     savePrefs();
     render();
   });
-  $('rows').addEventListener('click', (e) => {
+  const rows = $('rows');
+  rows.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act="delete"]');
+    if (act) return deleteManual(act.closest('form'));
     if (e.target.closest('tr.detail')) return;
     const tr = e.target.closest('tr.row');
     if (tr && !window.getSelection().toString()) toggleRow(tr);
   });
-  $('rows').addEventListener('keydown', (e) => {
+  rows.addEventListener('keydown', (e) => {
     const tr = e.target.closest('tr.row');
-    if (tr && (e.key === 'Enter' || e.key === ' ')) {
+    if (tr && e.target === tr && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
       toggleRow(tr);
     }
   });
+  rows.addEventListener('input', (e) => {
+    const form = e.target.closest('form.fu-form');
+    if (!form || !e.target.name) return;
+    if (e.target.name === 'by') {
+      state.me = e.target.value.trim();
+      store(NAME_KEY, state.me);
+      return;
+    }
+    const d = state.drafts.get(form.dataset.key) || {};
+    d[e.target.name] = e.target.value;
+    state.drafts.set(form.dataset.key, d);
+  });
+  rows.addEventListener('submit', (e) => {
+    const form = e.target.closest('form.fu-form');
+    if (!form) return;
+    e.preventDefault();
+    saveFollowUp(form);
+  });
   $('refresh').addEventListener('click', load);
-  $('upload').addEventListener('click', openUpload);
-  $('up-form').addEventListener('submit', doUpload);
-  $('up-cancel').addEventListener('click', () => $('up-dialog').close());
-  // 每 5 分钟自动刷新；切回这个标签页时，超过 1 分钟没读就重读
-  setInterval(() => document.visibilityState === 'visible' && load(), 5 * 60 * 1000);
+  $('edit').addEventListener('click', openEditLogin);
+  $('edit-off').addEventListener('click', editLogout);
+  $('add').addEventListener('click', openAdd);
+  $('ed-form').addEventListener('submit', doEditLogin);
+  $('ed-cancel').addEventListener('click', () => $('ed-dialog').close());
+  $('add-form').addEventListener('submit', doAdd);
+  $('add-cancel').addEventListener('click', () => $('add-dialog').close());
+  // 每 5 分钟自动刷新（正在填跟进或开着对话框时跳过）；切回这个标签页时，超过 1 分钟没读就重读
+  setInterval(() => document.visibilityState === 'visible' && !busy() && load(), 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && Date.now() - state.loadedAt > 60 * 1000) load();
+    if (document.visibilityState === 'visible' && Date.now() - state.loadedAt > 60 * 1000 && !busy()) load();
   });
   load();
 }

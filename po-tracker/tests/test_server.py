@@ -1,5 +1,4 @@
 """po_server.py 的测试：python3 -m unittest discover -s tests（在 po-tracker/ 里跑）。"""
-import base64
 import http.client
 import json
 import shutil
@@ -11,12 +10,10 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import po_server  # noqa: E402
-from xlsxmaker import sample_tracker  # noqa: E402
 
 PW = "测试 password-123"
 HOST = "po.kvstek.com"
@@ -210,10 +207,11 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(doc, {"meta": {"missing": True}, "orders": []})
 
 
-class UploadTest(unittest.TestCase):
-    """上传跟单总表：登录之外还要上传密码；上传后页面改用总表。"""
+class EditTest(unittest.TestCase):
+    """在网页上改状态：本机直接能改；经 Cloudflare 要先登录、再输编辑密码。"""
 
-    UPW = "上传 pass-456"
+    EPW = "编辑 pass-456"
+    LOCAL = {"Host": "localhost"}
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -221,111 +219,182 @@ class UploadTest(unittest.TestCase):
         self.cfg = self.tmp / "config.json"
         self.cfg.write_text(json.dumps({"password": po_server.hash_password(PW)}), encoding="utf-8")
         self.data.mkdir()
-        (self.data / "orders.json").write_text(json.dumps({"orders": [{"po": "1", "status": "已下单"}]}), encoding="utf-8")
-        (self.data / "overrides.json").write_text(json.dumps({"90101|华晨": {"hidden": True}, "90102": {"note": "x"}}),
-                                                  encoding="utf-8")
+        (self.data / "orders.json").write_text(json.dumps({"orders": [
+            {"po": "90001", "supplier": "华晨", "status": "已下单", "due_date": "2026-11-20"},
+            {"po": "90002", "supplier": "凯维", "status": "已确认"},
+        ]}), encoding="utf-8")
+        (self.data / "overrides.json").write_text(json.dumps({"90002": {"status": "已发货"}}), encoding="utf-8")
         self.app = po_server.App(self.data, self.cfg, [HOST])
         self.srv = po_server.make_server(self.app, 0)
         self.port = self.srv.server_address[1]
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         r, _ = ServerTest.req(self, "POST", "/login", CF, urlencode({"password": PW}))
-        self.cookie = ServerTest.cookie_from(self, r)
+        self.view = ServerTest.cookie_from(self, r)
 
     def tearDown(self):
         self.srv.shutdown()
         self.srv.server_close()
         shutil.rmtree(self.tmp)
 
-    def post(self, body, key=None, headers=None, filename="跟单总表 1112.xlsx"):
-        h = {**CF, "Cookie": self.cookie, "Content-Type": "application/octet-stream",
-             "X-Filename": quote(filename)} if headers is None else dict(headers)
-        if key is not None:
-            h["X-Upload-Key"] = base64.b64encode(key.encode()).decode()
+    def post(self, path, obj, headers=None, raw=None, ctype="application/json"):
+        h = dict(self.LOCAL if headers is None else headers)
+        h["Content-Type"] = ctype
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        c.request("POST", "/api/upload", body=body, headers=h)
+        c.request("POST", path, body=raw if raw is not None else json.dumps(obj).encode(), headers=h)
         r = c.getresponse()
         doc = json.loads(r.read() or b"{}")
         c.close()
-        return r.status, doc
+        return r, doc
 
-    def get_orders(self):
-        r, body = ServerTest.req(self, "GET", "/api/orders", {**CF, "Cookie": self.cookie})
+    def get(self, headers=None):
+        r, body = ServerTest.req(self, "GET", "/api/orders", dict(self.LOCAL if headers is None else headers))
         self.assertEqual(r.status, 200)
-        return json.loads(body)
+        doc = json.loads(body)
+        return doc["meta"], {o["key"]: o for o in doc["orders"]}
 
-    def events(self):
-        logs = list((self.data / "access").glob("*.jsonl"))
-        return [json.loads(x)["event"] for f in logs for x in f.read_text(encoding="utf-8").splitlines()]
+    def update(self, key="90001|华晨", by="小王", changes=None, note="", headers=None):
+        return self.post("/api/order/update", {"key": key, "by": by, "changes": changes or {}, "note": note}, headers)
 
-    def test_no_upload_password_yet(self):
-        self.assertFalse(self.get_orders()["meta"]["upload_ready"])
-        status, doc = self.post(sample_tracker(), "whatever")
-        self.assertEqual(status, 503)
-        self.assertIn("上传密码", doc["error"])
+    def test_local_edit_and_history(self):
+        meta, orders = self.get()
+        self.assertTrue(meta["can_edit"])
+        self.assertFalse(meta["edit_ready"])  # 没设编辑密码，本机照样能改
+        r, doc = self.update(changes={"status": "已确认", "due_date": "2026-11-25", "eta": "11/22"}, note="供应商回复 11/22 发")
+        self.assertEqual(r.status, 200, doc)
+        self.assertEqual(doc["record"]["changes"], {"status": ["已下单", "已确认"], "due_date": ["2026-11-20", "2026-11-25"],
+                                                    "eta": ["", "11/22"]})
+        r, doc = self.update(by="小李", changes={"status": "已确认", "tracking": "1234567890"})
+        self.assertEqual(doc["record"]["changes"], {"tracking": ["", "1234567890"]})  # 没变的不记
+        meta, orders = self.get()
+        o = orders["90001|华晨"]
+        self.assertEqual((o["status"], o["due_date"], o["eta"], o["tracking"]), ("已确认", "2026-11-25", "11/22", "1234567890"))
+        self.assertEqual((o["note"], o["note_by"], o["updated_by"]), ("供应商回复 11/22 发", "小王", "小李"))
+        self.assertEqual(o["edited"], ["due_date", "eta", "note", "status", "tracking"])
+        self.assertEqual([h["by"] for h in o["history"]], ["小李", "小王"])  # 新的在前
+        self.assertEqual(meta["last_edit"]["by"], "小李")
+        self.assertEqual(orders["90002|凯维"]["history"], [])
+        lines = (self.data / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 2)
 
-    def test_upload_flow(self):
-        self.app.set_upload_password(self.UPW)
+    def test_web_edit_beats_overrides(self):
+        _, orders = self.get()
+        self.assertEqual(orders["90002|凯维"]["status"], "已发货")
+        self.update(key="90002|凯维", changes={"status": "已完成"})
+        _, orders = self.get()
+        self.assertEqual(orders["90002|凯维"]["status"], "已完成")
+
+    def test_validation(self):
+        cases = [
+            ({"changes": {"status": "飞了"}}, 400, "状态只能是"),
+            ({"changes": {"due_date": "2026-13-01"}}, 400, "不是有效日期"),
+            ({"changes": {"amount": 1}}, 400, "不能改这些字段"),
+            ({"changes": {"status": "已下单"}}, 400, "没有改动"),
+            ({"by": "", "note": "x"}, 400, "名字"),
+            ({"note": "x" * 501}, 400, "太长"),
+            ({"key": "nope|", "note": "x"}, 404, "找不到"),
+        ]
+        for kw, status, msg in cases:
+            r, doc = self.update(**kw)
+            self.assertEqual(r.status, status, kw)
+            self.assertIn(msg, doc["error"], kw)
+        self.assertFalse((self.data / "history.jsonl").exists())
+
+    def test_add_and_delete(self):
+        new = {"po": "90150", "supplier": "兴华", "due_date": "2026-12-01", "amount": "1,200", "status": "已下单",
+               "lines": [{"pn": "0123-001", "qty": 4}, {"pn": " "}], "note": "电话下的单"}
+        r, doc = self.post("/api/order/add", {"by": "小王", "order": new})
+        self.assertEqual(r.status, 200, doc)
+        r, doc = self.post("/api/order/add", {"by": "小王", "order": new})
+        self.assertEqual(r.status, 409)
+        r, doc = self.post("/api/order/add", {"by": "小王", "order": {**new, "po": ""}})
+        self.assertEqual(r.status, 400)
+        _, orders = self.get()
+        o = orders["90150|兴华"]
+        self.assertEqual((o["source"], o["amount"], o["lines"], o["note"]), ("manual", 1200, [{"pn": "0123-001", "qty": 4}], "电话下的单"))
+        self.assertEqual(o["history"][0]["action"], "add")
+        r, doc = self.post("/api/order/delete", {"key": "90001|华晨", "by": "小王"})
+        self.assertEqual(r.status, 403)  # 邮件里来的不能删
+        r, doc = self.post("/api/order/delete", {"key": "90150|兴华", "by": "小王"})
+        self.assertEqual(r.status, 200, doc)
+        _, orders = self.get()
+        self.assertNotIn("90150|兴华", orders)
+
+    def test_public_needs_edit_password(self):
+        pub = {**CF, "Cookie": self.view, "Origin": "https://po.kvstek.com"}
+        meta, _ = self.get(pub)
+        self.assertFalse(meta["can_edit"])
+        r, doc = self.update(note="x", headers=pub)
+        self.assertEqual(r.status, 403)
+        r, doc = self.post("/api/edit-login", {"password": self.EPW}, pub)
+        self.assertEqual(r.status, 503)
+        self.app.set_edit_password(self.EPW)
         self.assertEqual((self.data / "config.json").stat().st_mode & 0o777, 0o600)
-        self.assertTrue(self.get_orders()["meta"]["upload_ready"])
+        r, doc = self.post("/api/edit-login", {"password": PW}, pub)  # 查看密码不能拿来改
+        self.assertEqual((r.status, doc["error"]), (403, "编辑密码不对"))
+        r, doc = self.post("/api/edit-login", {"password": self.EPW}, {**CF, "Origin": "https://po.kvstek.com"})
+        self.assertEqual(r.status, 401)  # 没登录查看也不行
+        r, doc = self.post("/api/edit-login", {"password": self.EPW}, pub)
+        self.assertEqual(r.status, 200, doc)
+        sc = r.getheader("Set-Cookie")
+        self.assertIn("po_edit=", sc)
+        self.assertIn("HttpOnly", sc)
+        edit = sc.split(";", 1)[0]
+        both = {**pub, "Cookie": f"{self.view}; {edit}"}
+        meta, _ = self.get(both)
+        self.assertTrue(meta["can_edit"])
+        r, doc = self.update(note="催了", headers=both)
+        self.assertEqual(r.status, 200, doc)
+        r, doc = self.update(note="催了", headers={**both, "Cookie": edit})  # 只有编辑 cookie 不够
+        self.assertEqual(r.status, 401)
+        self.app.set_edit_password("another one")  # 换编辑密码后旧的编辑 cookie 作废
+        r, doc = self.update(note="再催", headers=both)
+        self.assertEqual(r.status, 403)
+        events = [json.loads(x)["event"] for f in (self.data / "access").glob("*.jsonl")
+                  for x in f.read_text(encoding="utf-8").splitlines()]
+        for e in ("edit_login_fail", "edit_login_ok", "edit_update"):
+            self.assertIn(e, events)
 
-        status, _ = self.post(sample_tracker(), self.UPW, headers={**CF, "X-Upload-Key": ""})
-        self.assertEqual(status, 401)  # 没登录
-        status, doc = self.post(sample_tracker(), PW)  # 查看密码不能拿来上传
-        self.assertEqual((status, doc["error"]), (403, "上传密码不对"))
-        status, doc = self.post(b"PK not really", self.UPW)
-        self.assertEqual(status, 422)
-        self.assertIn(".xlsx", doc["error"])
-        self.assertEqual(self.get_orders()["orders"][0]["po"], "1")  # 失败时页面不变
+    def test_cross_site_and_wrong_type_refused(self):
+        r, doc = self.update(note="x", headers={"Host": "localhost", "Origin": "https://evil.example.com"})
+        self.assertEqual(r.status, 403)
+        r, doc = self.post("/api/order/update", None, raw=b"key=1", ctype="application/x-www-form-urlencoded")
+        self.assertEqual(r.status, 415)
+        r, doc = self.post("/api/order/update", None, raw=b"[1]")
+        self.assertEqual(r.status, 400)
 
-        status, doc = self.post(sample_tracker(), self.UPW)
-        self.assertEqual(status, 200, doc)
-        self.assertEqual((doc["wo_count"], doc["open_count"], doc["rows"]), (3, 1, 4))
-        saved = list((self.data / "tracker").iterdir())
-        self.assertEqual(len(saved), 1)
-        self.assertTrue(saved[0].name.endswith("-跟单总表_1112.xlsx"), saved[0].name)
-        self.assertEqual(saved[0].read_bytes(), sample_tracker())
-
-        got = self.get_orders()
-        self.assertEqual(got["meta"]["source"], "tracker")
-        self.assertEqual(got["meta"]["filename"], "跟单总表 1112.xlsx")
-        self.assertEqual(got["meta"]["sheet_note"], "最后更新时间 2026/11/12 09：30")
-        self.assertNotIn("uploaded_from", got["meta"])
-        keys = sorted((o["po"], o["supplier"]) for o in got["orders"])
-        self.assertEqual(keys, [("90102", "凯维"), ("90103", "兴华")])  # 90101|华晨 被 overrides 隐藏
-        self.assertEqual([o.get("note") for o in got["orders"] if o["po"] == "90102"], ["x"])
-        ev = self.events()
-        for e in ("upload_fail", "upload_bad_file", "upload_ok"):
-            self.assertIn(e, ev)
-
-    def test_wrong_upload_password_counts_toward_lockout(self):
-        self.app.set_upload_password(self.UPW)
+    def test_edit_login_counts_toward_lockout(self):
+        self.app.set_edit_password(self.EPW)
+        pub = {**CF, "Cookie": self.view}
         for _ in range(po_server.FAIL_LIMIT):
-            self.assertEqual(self.post(b"x", "bad")[0], 403)
-        self.assertEqual(self.post(sample_tracker(), self.UPW)[0], 429)
+            self.assertEqual(self.post("/api/edit-login", {"password": "bad"}, pub)[0].status, 403)
+        self.assertEqual(self.post("/api/edit-login", {"password": self.EPW}, pub)[0].status, 429)
 
-    def test_too_big(self):
-        self.app.set_upload_password(self.UPW)
-        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        c.putrequest("POST", "/api/upload", skip_host=True)
-        for k, v in {**CF, "Cookie": self.cookie, "Content-Length": str(po_server.MAX_UPLOAD + 1)}.items():
-            c.putheader(k, v)
-        c.endheaders()
-        r = c.getresponse()
-        self.assertEqual(r.status, 413)
-        c.close()
+    def test_logout_clears_both_cookies(self):
+        r, _ = ServerTest.req(self, "GET", "/logout", CF)
+        cookies = r.headers.get_all("Set-Cookie")
+        self.assertEqual(sorted(c.split("=", 1)[0] for c in cookies), ["po_auth", "po_edit"])
+
+    def test_corrupt_edits_file_is_left_alone(self):
+        (self.data / "edits.json").write_text("{oops", encoding="utf-8")
+        meta, orders = self.get()
+        self.assertIn("edits.json 读不了", meta["edit_error"])
+        self.assertEqual(len(orders), 2)
+        r, doc = self.update(note="x")
+        self.assertEqual(r.status, 500)
+        self.assertEqual((self.data / "edits.json").read_text(encoding="utf-8"), "{oops")
 
     def test_cli_sets_hash_only(self):
-        answers = iter([self.UPW, self.UPW])
+        answers = iter([self.EPW, self.EPW])
         with mock.patch.object(po_server.getpass, "getpass", lambda prompt="": next(answers)), \
                 mock.patch("builtins.print"):
-            po_server.main(["set-upload-password", "--data", str(self.data)])
+            po_server.main(["set-edit-password", "--data", str(self.data)])
         cfg = json.loads((self.data / "config.json").read_text(encoding="utf-8"))
-        self.assertNotIn(self.UPW, json.dumps(cfg, ensure_ascii=False))
-        self.assertTrue(po_server.verify_password(self.UPW, cfg["upload_password"]))
+        self.assertNotIn(self.EPW, json.dumps(cfg, ensure_ascii=False))
+        self.assertTrue(po_server.verify_password(self.EPW, cfg["edit_password"]))
         answers = iter(["short"])
         with mock.patch.object(po_server.getpass, "getpass", lambda prompt="": next(answers)):
             with self.assertRaises(SystemExit):
-                po_server.main(["set-upload-password", "--data", str(self.data)])
+                po_server.main(["set-edit-password", "--data", str(self.data)])
 
 
 class NodeCompatTest(unittest.TestCase):
