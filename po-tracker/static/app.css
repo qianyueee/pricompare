@@ -239,6 +239,10 @@ ul.mails li:last-child { border-bottom: 0; }
 ul.mails .when { color: var(--muted); white-space: nowrap; }
 ul.mails .who { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ul.mails .subj { overflow-wrap: anywhere; }
+.lines-wrap { overflow-x: auto; }
+table.lines .nowrap { white-space: nowrap; }
+table.lines .ln-note { min-width: 160px; overflow-wrap: anywhere; }
+table.lines tr.ln-closed td, table.lines tr.ln-closed .muted { color: var(--faint); }
 .tag-fixed { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
 
 .empty { padding: 48px 16px; text-align: center; color: var(--muted); }
@@ -372,7 +376,15 @@ ul.hist .h-origin .h-note { color: var(--muted); font-size: 12px; }
   .dlg-grid { grid-template-columns: minmax(0, 1fr); }
   .top-actions { flex-wrap: wrap; justify-content: flex-end; }
   #edit-off { display: none; }
-  table.lines .desc { display: none; }
+  table.lines .desc, table.lines .up { display: none; }
+  /* 总表导入的零件明细列多，手机上每行改成一小段 */
+  .lines-wrap.rich table.lines, .lines-wrap.rich table.lines tbody { display: block; }
+  .lines-wrap.rich table.lines thead, .lines-wrap.rich table.lines .amt-l { display: none; }
+  .lines-wrap.rich table.lines tr { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .lines-wrap.rich table.lines td { padding: 0; border: 0; }
+  .lines-wrap.rich table.lines td.pn, .lines-wrap.rich table.lines td.ln-note { flex-basis: 100%; min-width: 0; }
+  .lines-wrap.rich table.lines td:empty { display: none; }
+  .lines-wrap.rich table.lines td[data-label]::before { content: attr(data-label); color: var(--muted); }
   ul.mails li { grid-template-columns: 74px minmax(0, 1fr); }
   ul.mails .who { display: none; }
 }

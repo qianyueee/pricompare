@@ -235,6 +235,10 @@ function statusCell(o) {
   }
   const extra = [o.eta && `预计发货 ${dayOrText(o.eta)}`, o.tracking && `运单 ${o.tracking}`].filter(Boolean);
   if (extra.length) parts.push(`<span class="eta">${esc(extra.join(' · '))}</span>`);
+  const total = (o.lines || []).length;
+  if (!DONE.has(o.status) && typeof o.open_lines === 'number' && total > 1 && o.open_lines < total) {
+    parts.push(`<span class="muted">${total - o.open_lines}/${total} 行已结束</span>`);
+  }
   return parts.join('');
 }
 
@@ -279,10 +283,13 @@ function historyHtml(o) {
     const note = h.note ? `<div class="h-note">${esc(h.note)}</div>` : '';
     return `<li><span class="when">${esc(fmtDateTime(h.at))}</span><span class="who">${esc(h.by)}</span><span class="what">${what.join('；')}${note}</span></li>`;
   });
-  const origin =
-    o.source === 'manual'
-      ? ''
-      : `<li class="h-origin"><span class="when">${esc(fmtDateTime(state.meta.generated_at))}</span><span class="who">邮件</span><span class="what">从 zill@ 邮件整理：状态 <b>${esc(firstStatus(o))}</b>${o.status_note ? `<div class="h-note">${esc(o.status_note)}</div>` : ''}</span></li>`;
+  let origin = '';
+  if (o.source === 'tracker') {
+    origin = `<li class="h-origin"><span class="when">${esc(fmtDateTime(state.meta.generated_at))}</span><span class="who">总表</span><span class="what">从${esc(state.meta.sheet_label || '跟单总表')}导入：状态 <b>${esc(firstStatus(o))}</b></span></li>`;
+  } else if (o.source !== 'manual') {
+    const when = state.meta.mail_generated_at || state.meta.generated_at;
+    origin = `<li class="h-origin"><span class="when">${esc(fmtDateTime(when))}</span><span class="who">邮件</span><span class="what">从 zill@ 邮件整理：状态 <b>${esc(firstStatus(o))}</b>${o.status_note ? `<div class="h-note">${esc(o.status_note)}</div>` : ''}</span></li>`;
+  }
   return `<ul class="hist">${items.join('')}${origin}</ul>`;
 }
 
@@ -318,27 +325,43 @@ function editForm(o) {
     </form>`;
 }
 
+// 总表导入的行带交期、发货、备注，多显示三列；结束的行变灰
+function linesTable(lines) {
+  const rich = lines.some((l) => l.wo_due || l.shipped || l.eta || l.note);
+  const head = `<tr><th>零件号</th><th class="desc">描述</th><th class="num">数量</th><th class="num up">单价</th><th class="num">金额</th>${
+    rich ? '<th>交期</th><th>发货</th><th>备注</th>' : ''
+  }</tr>`;
+  const body = lines
+    .map((l) => {
+      const pn = `${esc(l.pn)}${l.rev ? ` <span class="muted">${esc(l.rev)}</span>` : ''}`;
+      const ship = l.shipped ? `已发 ${esc(fmtDay(l.shipped))}` : l.eta ? `预计 ${esc(dayOrText(l.eta))}` : '';
+      const extra = [l.customer_po && `客户 PO ${l.customer_po}${l.customer_line ? ` / ${l.customer_line}` : ''}`, l.next_step && `下一站 ${l.next_step}`, l.invoice && `Invoice ${l.invoice}`].filter(Boolean);
+      const richCells = rich
+        ? `<td class="nowrap" data-label="交期 ">${esc(fmtDay(l.wo_due))}</td><td class="nowrap ship-l">${ship}</td><td class="ln-note">${esc(l.note)}${extra.length ? `<div class="muted">${esc(extra.join(' · '))}</div>` : ''}</td>`
+        : '';
+      return `<tr class="${l.closed ? 'ln-closed' : ''}"><td class="pn">${pn}</td><td class="desc">${esc(l.desc)}</td><td class="num" data-label="数量 ">${esc(num(l.qty))}</td><td class="num up">${esc(num(l.unit_price))}</td><td class="num amt-l">${esc(num(l.amount))}</td>${richCells}</tr>`;
+    })
+    .join('');
+  return `<div class="lines-wrap${rich ? ' rich' : ''}"><table class="lines"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
 function detail(o) {
   const facts = [];
   const add = (k, v) => v && facts.push(`<span>${esc(k)} <b>${esc(v)}</b></span>`);
   add('下单', fmtDay(o.order_date));
-  add('交期原文', o.due_text && o.due_text !== fmtDay(o.due_date) ? o.due_text : '');
+  add(o.source === 'tracker' ? '各行交期' : '交期原文', o.due_text && o.due_text !== fmtDay(o.due_date) ? o.due_text : '');
   add('客户交期', fmtDay(o.customer_due));
   add('下单主体', o.buyer_entity);
   add('客户', o.customer);
+  add('已发货', (o.shipped || []).map(fmtDay).join('、'));
+  add('邮件里是', o.mail_status && o.mail_status !== firstStatus(o) ? o.mail_status : '');
+  add('旧号', (o.aliases || []).join('、'));
   add('最近邮件', fmtDateTime(o.last_mail_at));
   add('手动新增', o.source === 'manual' ? [o.created_by, fmtDateTime(o.created_at)].filter(Boolean).join(' ') : '');
   const fixed = (o.overridden || []).length ? `<span class="tag-fixed" title="${esc(o.overridden.join('、'))}">手工更正过</span>` : '';
 
   const lines = o.lines || [];
-  const linesHtml = lines.length
-    ? `<table class="lines"><thead><tr><th>零件号</th><th>Rev</th><th class="desc">描述</th><th class="num">数量</th><th class="num">单价</th><th class="num">金额</th></tr></thead><tbody>${lines
-        .map(
-          (l) =>
-            `<tr><td class="pn">${esc(l.pn)}</td><td>${esc(l.rev)}</td><td class="desc">${esc(l.desc)}</td><td class="num">${esc(num(l.qty))}</td><td class="num">${esc(num(l.unit_price))}</td><td class="num">${esc(num(l.amount))}</td></tr>`,
-        )
-        .join('')}</tbody></table>`
-    : '<p class="muted">没有零件明细。</p>';
+  const linesHtml = lines.length ? linesTable(lines) : '<p class="muted">没有零件明细。</p>';
 
   const mails = o.mails || [];
   const mailsHtml = mails.length
@@ -407,7 +430,8 @@ function render() {
 function renderHeader() {
   const m = state.meta;
   const parts = [];
-  if (m.generated_at) parts.push(`${fmtDateTime(m.generated_at)} 从邮件整理`);
+  if (m.base === 'tracker') parts.push(`${fmtDateTime(m.generated_at)} 导入${m.sheet_label || '跟单总表'}`);
+  else if (m.generated_at) parts.push(`${fmtDateTime(m.generated_at)} 从邮件整理`);
   if (m.last_edit) parts.push(`最近跟进 ${fmtDateTime(m.last_edit.at)} ${m.last_edit.by || ''}`.trim());
   parts.push(`共 ${state.orders.length} 个 PO`);
   $('sub').textContent = parts.join(' · ');

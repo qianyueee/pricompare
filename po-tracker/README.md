@@ -1,11 +1,13 @@
 # PO 跟单列表页（po.kvstek.com）
 
-一个页面列出 PO，按供应商交期的紧急程度上色。起点是 2026-11-12 从 zill@kvstek.com 邮件整理的 PO；之后不再自动判断状态（邮件同步已暂停），由跟单的人在页面上改状态、写跟进、手动新增 PO。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
+一个页面列出 PO，按供应商交期的紧急程度上色。起点是跟单总表（2026-11-11 那份，用 import_tracker.py 导入）加上从 zill@kvstek.com 邮件整理的 PO；之后不再自动判断状态（邮件同步已暂停），由跟单的人在页面上改状态、写跟进、手动新增 PO。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
 
 ```
 po-tracker/
   po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json + overrides.json + edits.json
   edits.py            网页上的改动：检查、保存（data/edits.json）、跟进记录（data/history.jsonl）
+  tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
+  import_tracker.py   把跟单总表导入成起点数据 data/orders.json（邮件那份另存 orders.mail.json）
   static/             页面（index.html、app.js、app.css、favicon.svg）
   deploy/             Mac 上的 LaunchAgent（local.po-tracker.plist）、健康检查、手动重启脚本
   sample/make_sample.py  生成假数据，本地看效果
@@ -28,6 +30,18 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - Mac 上由 LaunchAgent 常驻：`deploy/local.po-tracker.plist` 放到 `~/Library/LaunchAgents/`，`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.po-tracker.plist`；开机自启，退出后 10 秒自动拉起。改了代码后跑 `deploy/po_tracker_up.sh`（kickstart -k）让新代码生效。
 - hermes 每 10 分钟跑 `deploy/po_tracker_check.sh`：只查 `/healthz`，不重启；连续两次不通才发一条 Telegram，恢复时再发一条。
 - `GET /healthz` 给健康检查用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
+
+## 导入跟单总表（起点数据）
+
+```
+python3 import_tracker.py 跟单总表20261111.xlsx --data ~/apps/po-tracker/data --dry-run   # 先看对得上多少
+python3 import_tracker.py 跟单总表20261111.xlsx --data ~/apps/po-tracker/data
+```
+
+- 读「订单明细」：前 10 行里有 `WO#` 和 `WO Due` 的那行是表头；按 (WO#, Vendor) 汇总，Vendor 英文名换成 华晨/凯维/兴华。
+- 一行算结束：`备注` 是「完成」、含「取消」，或填了 `发货日期`（1/1/2000 这种占位不算）。一个 WO 全部行结束才算结束：全取消 → 已取消，全完成/取消 → 已完成，其余 → 已发货。没结束的：邮件里已是「已确认」的保留，其余「已下单」；交期取没结束那些行里最早的 `WO Due`；`备注` 原文放进跟进备注，`预计发货日期` 放进预计发货。
+- 邮件整理的 PO：同号同供应商（或总表把重号改成 `44278A` 这种多一个字母的）的把相关邮件和旧号带过来；总表里没有的原样保留。打印的结果里列出对不上的、状态或交期跟邮件不一样的，供人工核对。
+- 网页上的改动（edits.json）不动，照样盖在导入的数据上。
 
 ## 在网页上改状态
 
