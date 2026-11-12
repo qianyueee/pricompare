@@ -73,6 +73,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body { margin: 0; }
 
@@ -102,6 +103,8 @@ button, input, select { font: inherit; color: inherit; }
 .btn:hover { background: var(--hover); }
 .btn-quiet { color: var(--muted); }
 .btn[disabled] { opacity: 0.6; cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
 
 .stale {
   margin: 0 0 12px; padding: 8px 12px; border-radius: 6px;
@@ -209,6 +212,10 @@ tr.row.u-done td { color: var(--muted); }
 .st-已发货 { background: var(--st-teal-bg); color: var(--st-teal); }
 .st-已取消 { text-decoration: line-through; }
 .st-note { display: block; margin-top: 3px; }
+.st-完成 { background: var(--st-green-bg); color: var(--st-green); }
+.c-status .note { font-size: 13px; overflow-wrap: anywhere; }
+.c-status .eta { display: block; margin-top: 3px; font-size: 12px; color: var(--st-blue); }
+.c-status > .muted { display: block; margin-top: 2px; }
 
 .amt { font-weight: 600; }
 .tax { color: var(--muted); font-size: 12px; }
@@ -236,6 +243,14 @@ ul.mails li:last-child { border-bottom: 0; }
 ul.mails .when { color: var(--muted); white-space: nowrap; }
 ul.mails .who { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ul.mails .subj { overflow-wrap: anywhere; }
+.dl-full { grid-template-columns: minmax(0, 1fr); }
+.lines-wrap { overflow-x: auto; }
+table.lines .nowrap { white-space: nowrap; }
+table.lines .ln-note { min-width: 160px; overflow-wrap: anywhere; }
+table.lines .cpo { white-space: nowrap; }
+table.lines tr.ln-closed td { color: var(--faint); }
+table.lines tr.ln-closed .muted { color: var(--faint); }
+table.lines .ship { color: var(--st-teal); }
 .tag-fixed { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
 
 .empty { padding: 48px 16px; text-align: center; color: var(--muted); }
@@ -249,6 +264,23 @@ ul.mails .subj { overflow-wrap: anywhere; }
 .lg.u-green { --c: var(--u-green); }
 .lg.u-nodate { --c: var(--u-nodate); }
 .lg.u-done { --c: var(--u-done); }
+
+/* ---------- 上传 ---------- */
+.up-dialog {
+  width: min(460px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--text); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+.up-dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.up-dialog form { padding: 18px 20px 16px; }
+.up-dialog h2 { margin: 0 0 6px; font-size: 17px; font-weight: 650; }
+.up-help { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.up-field { display: grid; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+.up-field input { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+.up-field input[type="file"] { padding: 5px 8px; height: auto; }
+.up-msg { min-height: 20px; margin: 0 0 10px; font-size: 13px; }
+.up-msg.bad { color: var(--u-overdue); }
+.up-msg.good { color: var(--st-green); }
+.up-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ---------- 中等宽度：收起次要列 ---------- */
 @media (max-width: 1180px) {
@@ -304,6 +336,15 @@ ul.mails .subj { overflow-wrap: anywhere; }
   tr.detail.u-done { --bar: var(--u-done); }
   .dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   table.lines .desc { display: none; }
+  /* 总表的零件明细列太多，手机上每行改成一小段 */
+  .lines-wrap table.lines, .lines-wrap table.lines tbody { display: block; }
+  .lines-wrap table.lines thead, .lines-wrap table.lines .up, .lines-wrap table.lines .cpo, .lines-wrap table.lines .amt-l { display: none; }
+  .lines-wrap table.lines tr { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .lines-wrap table.lines td { padding: 0; border: 0; }
+  .lines-wrap table.lines td.pn, .lines-wrap table.lines td.ln-note { flex-basis: 100%; min-width: 0; }
+  .lines-wrap table.lines td.ln-note:empty { display: none; }
+  .lines-wrap table.lines td[data-label]::before { content: attr(data-label); color: var(--muted); }
+  .lines-wrap table.lines td[data-label]:empty { display: none; }
   ul.mails li { grid-template-columns: 74px minmax(0, 1fr); }
   ul.mails .who { display: none; }
 }

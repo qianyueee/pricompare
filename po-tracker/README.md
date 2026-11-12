@@ -1,14 +1,15 @@
 # PO 跟单列表页（po.kvstek.com）
 
-一个页面列出 zill@kvstek.com 邮箱里已有的 PO，按供应商交期的紧急程度上色。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
+一个页面列出 PO，按供应商交期的紧急程度上色。数据以跟单人员每天上传的**跟单总表**为准（状态、备注全是人填的，页面不做判断）；还没上传过总表时，才显示从 zill@kvstek.com 邮件整理的旧数据。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
 
 ```
 po-tracker/
-  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json
+  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/tracker.json（没有就读 orders.json）
+  tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
   static/             页面（index.html、app.js、app.css、favicon.svg）
   deploy/             Mac 上的保活脚本样板
   sample/make_sample.py  生成假数据，本地看效果
-  tests/test_server.py   python3 -m unittest discover -s tests
+  tests/               python3 -m unittest discover -s tests
 ```
 
 数据由 Mac 上的 `~/apps/po-tracker/po_sync.py` 每小时生成（只读 zill@ 邮箱 → `claude -p` 整理 → `data/orders.json`）。那个脚本含邮件细节，只放在 Mac 上，不进这个公开仓库；**任何邮件内容、订单数据都不要提交到这里。**
@@ -26,7 +27,17 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - 全站 10 分钟内输错 10 次密码就先停 10 分钟。http 自动转 https（看 `X-Forwarded-Proto`）。
 - `GET /healthz` 给保活用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
 
-## orders.json 格式
+## 上传跟单总表
+
+- 页面右上角「上传总表」→ 选 .xlsx → 输上传密码。上传密码和查看密码分开（查看密码 Tony 也有）。
+- 设上传密码（只存 scrypt 哈希到 `data/config.json`，权限 600）：
+  `python3 po_server.py set-upload-password --data ~/apps/po-tracker/data`
+- 接口：`POST /api/upload`，要登录 cookie（本机不用），请求体就是文件本身，`X-Upload-Key` = 上传密码的 UTF-8 再 base64，`X-Filename` = URL 编码的文件名；上限 30 MB；输错算进全站的 10 次限速。
+- 读的是「订单明细」：前 10 行里有 `WO#` 和 `WO Due` 的那行是表头，必须有 `WO#`、`WO Due`、`Vendor`、`P/N`、`备注`。按 (WO#, Vendor) 汇总成一个 PO；Vendor 英文名换成 华晨/凯维/兴华。
+- 一行算结束：`备注` 就是「完成」，或 `备注` 含「取消」，或填了 `发货日期`（1/1/2000 这种占位不算）。一个 PO 的所有行都结束才算结束（灰色、排最后）；其余按没结束的行里最早的 `WO Due` 上色，`备注` 和 `预计发货日期` 原文照样显示。
+- 结果写 `data/tracker.json`（`source: "tracker"`, `uploaded_at`, `filename`, `sheet_note`, `rows`, `wo_count`, `open_count`, `orders`）；原文件留在 `data/tracker/`，保留最近 90 份。格式不对时原样告诉上传的人，页面不变。
+
+## orders.json 格式（从邮件整理的旧数据）
 
 ```jsonc
 {
@@ -75,7 +86,7 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 
 同一个 PO 号给了两家供应商时（如 44278），键写成 `"44278|兴华"` 只改那一条；只写 PO 号就两条都改。页面上被更正过的 PO 展开后会标「手工更正过」。
 
-`orders.json` 里每条还可以有 `doubts`（整理时拿不准的地方，字符串数组），展开后显示在「整理时拿不准的地方」。
+`orders.json` 里的 `open_issues`、`doubts` 页面已经不显示（2026-11-12 起状态改由人跟进）。
 
 ## 本地看效果
 
@@ -85,3 +96,5 @@ echo '{}' > /tmp/po-cfg.json
 python3 po_server.py --data /tmp/po-data --password-from /tmp/po-cfg.json --host po.kvstek.com
 # 打开 http://localhost:8792/
 ```
+
+看总表模式：先 `python3 po_server.py set-upload-password --data /tmp/po-data`，再在页面上点「上传总表」传一份。

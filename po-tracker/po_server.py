@@ -9,15 +9,17 @@
   每次登录都重新读，报价页换了密码这里马上跟着换，已登录的人全部作废。
 - 经 Cloudflare 来的请求（带 cf-* 头，或 Host 不是 localhost）一律要密码 cookie；
   Host 必须是 --host 列出的域名，否则拒绝。本机直接访问（Host 是 localhost、没有 cf-* 头）不用密码。
-- 数据：data/orders.json（po_sync.py 每小时写）+ data/overrides.json（手工更正，可选），读的时候合并。
-  overrides 的键是 PO 号；同一个 PO 号给了两家供应商时，可写成 "44278|兴华" 只改其中一条。
-- 访问记录：data/access/YYYY-MM.jsonl（打开页面、登录成功/失败）。
+- 数据：有 data/tracker.json（跟单的人在页面上传的跟单总表）就用它；没有才用 data/orders.json（从邮件整理的）。
+  两种都会合并 data/overrides.json（手工更正，可选）；键是 PO 号，同号两家供应商时可写 "44278|兴华"。
+- 上传跟单总表要另一个「上传密码」（查看密码 Tony 也有）：python3 po_server.py set-upload-password --data <数据目录>
+- 访问记录：data/access/YYYY-MM.jsonl（打开页面、登录成功/失败、上传）。
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import datetime as dt
+import getpass
 import hashlib
 import hmac
 import html
@@ -30,7 +32,9 @@ import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
+
+import tracker
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -38,6 +42,8 @@ STATIC = HERE / "static"
 COOKIE = "po_auth"
 SESSION_MAX_AGE = 30 * 24 * 3600
 FAIL_LIMIT, FAIL_WINDOW = 10, 600  # 全站 10 分钟内错 10 次就先停 10 分钟
+MAX_UPLOAD = 30 * 1024 * 1024
+KEEP_UPLOADS = 90
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 STATIC_TYPES = {
@@ -99,6 +105,14 @@ def check_session(token: str, key: bytes, password_hash: str, now: float | None 
 
 # ---------------------------------------------------------------- 配置和数据
 
+def write_atomic(path: Path, text: str, mode: int = 0o644) -> None:
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 class App:
     def __init__(self, data: Path, password_from: Path, hosts: list[str]):
         self.data = data
@@ -107,6 +121,7 @@ class App:
         self.data.mkdir(parents=True, exist_ok=True)
         self.key = self._session_key()
         self.lock = threading.Lock()
+        self.upload_lock = threading.Lock()
         self.fails: list[float] = []
 
     def _session_key(self) -> bytes:
@@ -141,13 +156,15 @@ class App:
             self.fails.append(time.time())
 
     def orders(self) -> dict:
-        p = self.data / "orders.json"
+        p = self.data / "tracker.json"
+        if not p.exists():
+            p = self.data / "orders.json"
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {"meta": {"missing": True}, "orders": []}
         except (OSError, ValueError) as e:
-            return {"meta": {"error": f"orders.json 读不了：{e.__class__.__name__}"}, "orders": []}
+            return {"meta": {"error": f"{p.name} 读不了：{e.__class__.__name__}"}, "orders": []}
         orders = doc.get("orders") if isinstance(doc, dict) else None
         orders = [o for o in orders if isinstance(o, dict)] if isinstance(orders, list) else []
         meta = {k: v for k, v in doc.items() if k != "orders"} if isinstance(doc, dict) else {}
@@ -176,6 +193,53 @@ class App:
         except (OSError, ValueError):
             return {}
         return {str(k): v for k, v in ov.items() if not str(k).startswith("_")} if isinstance(ov, dict) else {}
+
+    # ---- 上传跟单总表
+    def _config(self) -> dict:
+        try:
+            cfg = json.loads((self.data / "config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return cfg if isinstance(cfg, dict) else {}
+
+    def upload_hash(self) -> str:
+        pw = self._config().get("upload_password")
+        return pw if isinstance(pw, str) else ""
+
+    def set_upload_password(self, password: str) -> None:
+        cfg = self._config()
+        cfg["upload_password"] = hash_password(password)
+        write_atomic(self.data / "config.json", json.dumps(cfg, ensure_ascii=False, indent=1), mode=0o600)
+
+    def save_upload(self, body: bytes, filename: str) -> dict:
+        parsed = tracker.parse_tracker(body)  # 格式不对会抛 TrackerError，原样告诉用户
+        if not parsed["orders"]:
+            raise tracker.TrackerError("「订单明细」里一个 WO 都没有读到")
+        with self.upload_lock:
+            return self._save_upload(body, filename, parsed)
+
+    def _save_upload(self, body: bytes, filename: str, parsed: dict) -> dict:
+        now = dt.datetime.now().astimezone()
+        safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in Path(filename or "跟单总表.xlsx").name)[:80]
+        d = self.data / "tracker"
+        d.mkdir(exist_ok=True)
+        (d / f"{now:%Y%m%d-%H%M%S}-{safe}").write_bytes(body)
+        for old in sorted(d.iterdir())[:-KEEP_UPLOADS]:
+            old.unlink(missing_ok=True)
+        open_n = sum(1 for o in parsed["orders"] if not o["closed"])
+        doc = {
+            "version": 1,
+            "source": "tracker",
+            "uploaded_at": now.isoformat(timespec="seconds"),
+            "filename": filename,
+            "sheet_note": parsed["note"],
+            "rows": parsed["rows"],
+            "wo_count": len(parsed["orders"]),
+            "open_count": open_n,
+            "orders": parsed["orders"],
+        }
+        write_atomic(self.data / "tracker.json", json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
+        return {"ok": True, "wo_count": len(parsed["orders"]), "open_count": open_n, "rows": parsed["rows"], "sheet_note": parsed["note"]}
 
     def log_access(self, event: str, req: "Handler") -> None:
         now = dt.datetime.now().astimezone()
@@ -285,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Robots-Tag", "noindex, nofollow")
         self.send_header("Content-Security-Policy", CSP)
+        if self.command == "POST":  # 提前拒绝时请求体可能没读完，不能在同一连接上接着读
+            self.send_header("Connection", "close")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -347,6 +413,7 @@ class Handler(BaseHTTPRequestHandler):
             doc = self.app.orders()
             doc["meta"]["server_time"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
             doc["meta"]["can_logout"] = self.public
+            doc["meta"]["upload_ready"] = bool(self.app.upload_hash())
             body = json.dumps(doc, ensure_ascii=False, separators=(",", ":"))
             return self.send(200, body, "application/json; charset=utf-8")
         if path.startswith("/static/"):
@@ -359,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/logout":
             return self.redirect("/login", headers={"Set-Cookie": self.cookie_header("", 0)})
+        if path == "/api/upload":
+            return self.upload()
         if path != "/login":
             return self.send(404, "not found", "text/plain; charset=utf-8")
         try:
@@ -383,6 +452,48 @@ class Handler(BaseHTTPRequestHandler):
         token = make_session(self.app.key, stored)
         self.redirect("/", headers={"Set-Cookie": self.cookie_header(token, SESSION_MAX_AGE)})
 
+    def json_reply(self, status: int, obj: dict) -> None:
+        self.send(status, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
+
+    def upload(self) -> None:
+        """上传跟单总表：要先登录（看得到页面），再加上传密码（X-Upload-Key，UTF-8 再 base64）。"""
+        if not self.authed():
+            return self.json_reply(401, {"error": "需要先登录"})
+        try:
+            n = int(self.header("content-length") or "0")
+        except ValueError:
+            n = 0
+        if n <= 0:
+            return self.json_reply(400, {"error": "没有收到文件"})
+        if n > MAX_UPLOAD:
+            return self.json_reply(413, {"error": "文件太大（上限 30 MB）"})
+        body = self.rfile.read(n)
+        if self.app.locked_out():
+            self.app.log_access("upload_locked", self)
+            return self.json_reply(429, {"error": "试错次数太多，请 10 分钟后再试"})
+        stored = self.app.upload_hash()
+        if not stored:
+            return self.json_reply(503, {"error": "还没有设上传密码，请 Zane 在 Mac 上设一下"})
+        try:
+            password = base64.b64decode(self.header("x-upload-key"), validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            password = ""
+        if not password or not verify_password(password, stored):
+            self.app.note_fail()
+            self.app.log_access("upload_fail", self)
+            return self.json_reply(403, {"error": "上传密码不对"})
+        filename = unquote(self.header("x-filename"))[:200]
+        try:
+            result = self.app.save_upload(body, filename)
+        except tracker.TrackerError as e:
+            self.app.log_access("upload_bad_file", self)
+            return self.json_reply(422, {"error": str(e)})
+        except Exception as e:  # noqa: BLE001 - 坏文件不能把服务弄挂
+            self.log_error("upload failed: %r", e)
+            return self.json_reply(422, {"error": f"这个文件读不了（{e.__class__.__name__}），请确认是跟单总表的 .xlsx"})
+        self.app.log_access("upload_ok", self)
+        return self.json_reply(200, result)
+
     def static(self, name: str) -> None:
         p = (STATIC / name).resolve()
         if STATIC.resolve() not in p.parents or not p.is_file() or p.suffix not in STATIC_TYPES:
@@ -397,7 +508,23 @@ def make_server(app: App, port: int) -> ThreadingHTTPServer:
     return srv
 
 
+def set_upload_password_cli(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(prog="po_server.py set-upload-password", description="设置上传跟单总表用的密码（只存哈希）")
+    ap.add_argument("--data", type=Path, required=True)
+    a = ap.parse_args(argv)
+    pw = getpass.getpass("新的上传密码：")
+    if len(pw) < 6:
+        raise SystemExit("太短了，至少 6 个字符")
+    if getpass.getpass("再输一次：") != pw:
+        raise SystemExit("两次不一样，没有保存")
+    App(a.data.expanduser(), Path("/nonexistent"), []).set_upload_password(pw)
+    print("已保存。之后在页面上传跟单总表时输入这个密码。")
+
+
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["set-upload-password"]:
+        return set_upload_password_cli(argv[1:])
     ap = argparse.ArgumentParser(description="PO 跟单列表页服务")
     ap.add_argument("--port", type=int, default=8792)
     ap.add_argument("--data", type=Path, required=True, help="数据目录（orders.json、overrides.json、session.key、access/）")

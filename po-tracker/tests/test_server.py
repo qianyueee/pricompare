@@ -1,4 +1,5 @@
 """po_server.py 的测试：python3 -m unittest discover -s tests（在 po-tracker/ 里跑）。"""
+import base64
 import http.client
 import json
 import shutil
@@ -9,10 +10,13 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from urllib.parse import urlencode
+from unittest import mock
+from urllib.parse import quote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import po_server  # noqa: E402
+from xlsxmaker import sample_tracker  # noqa: E402
 
 PW = "测试 password-123"
 HOST = "po.kvstek.com"
@@ -204,6 +208,124 @@ class ServerTest(unittest.TestCase):
         app = po_server.App(self.tmp / "empty", self.cfg, [HOST])
         doc = app.orders()
         self.assertEqual(doc, {"meta": {"missing": True}, "orders": []})
+
+
+class UploadTest(unittest.TestCase):
+    """上传跟单总表：登录之外还要上传密码；上传后页面改用总表。"""
+
+    UPW = "上传 pass-456"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.data = self.tmp / "data"
+        self.cfg = self.tmp / "config.json"
+        self.cfg.write_text(json.dumps({"password": po_server.hash_password(PW)}), encoding="utf-8")
+        self.data.mkdir()
+        (self.data / "orders.json").write_text(json.dumps({"orders": [{"po": "1", "status": "已下单"}]}), encoding="utf-8")
+        (self.data / "overrides.json").write_text(json.dumps({"90101|华晨": {"hidden": True}, "90102": {"note": "x"}}),
+                                                  encoding="utf-8")
+        self.app = po_server.App(self.data, self.cfg, [HOST])
+        self.srv = po_server.make_server(self.app, 0)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        r, _ = ServerTest.req(self, "POST", "/login", CF, urlencode({"password": PW}))
+        self.cookie = ServerTest.cookie_from(self, r)
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        shutil.rmtree(self.tmp)
+
+    def post(self, body, key=None, headers=None, filename="跟单总表 1112.xlsx"):
+        h = {**CF, "Cookie": self.cookie, "Content-Type": "application/octet-stream",
+             "X-Filename": quote(filename)} if headers is None else dict(headers)
+        if key is not None:
+            h["X-Upload-Key"] = base64.b64encode(key.encode()).decode()
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", "/api/upload", body=body, headers=h)
+        r = c.getresponse()
+        doc = json.loads(r.read() or b"{}")
+        c.close()
+        return r.status, doc
+
+    def get_orders(self):
+        r, body = ServerTest.req(self, "GET", "/api/orders", {**CF, "Cookie": self.cookie})
+        self.assertEqual(r.status, 200)
+        return json.loads(body)
+
+    def events(self):
+        logs = list((self.data / "access").glob("*.jsonl"))
+        return [json.loads(x)["event"] for f in logs for x in f.read_text(encoding="utf-8").splitlines()]
+
+    def test_no_upload_password_yet(self):
+        self.assertFalse(self.get_orders()["meta"]["upload_ready"])
+        status, doc = self.post(sample_tracker(), "whatever")
+        self.assertEqual(status, 503)
+        self.assertIn("上传密码", doc["error"])
+
+    def test_upload_flow(self):
+        self.app.set_upload_password(self.UPW)
+        self.assertEqual((self.data / "config.json").stat().st_mode & 0o777, 0o600)
+        self.assertTrue(self.get_orders()["meta"]["upload_ready"])
+
+        status, _ = self.post(sample_tracker(), self.UPW, headers={**CF, "X-Upload-Key": ""})
+        self.assertEqual(status, 401)  # 没登录
+        status, doc = self.post(sample_tracker(), PW)  # 查看密码不能拿来上传
+        self.assertEqual((status, doc["error"]), (403, "上传密码不对"))
+        status, doc = self.post(b"PK not really", self.UPW)
+        self.assertEqual(status, 422)
+        self.assertIn(".xlsx", doc["error"])
+        self.assertEqual(self.get_orders()["orders"][0]["po"], "1")  # 失败时页面不变
+
+        status, doc = self.post(sample_tracker(), self.UPW)
+        self.assertEqual(status, 200, doc)
+        self.assertEqual((doc["wo_count"], doc["open_count"], doc["rows"]), (3, 1, 4))
+        saved = list((self.data / "tracker").iterdir())
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].name.endswith("-跟单总表_1112.xlsx"), saved[0].name)
+        self.assertEqual(saved[0].read_bytes(), sample_tracker())
+
+        got = self.get_orders()
+        self.assertEqual(got["meta"]["source"], "tracker")
+        self.assertEqual(got["meta"]["filename"], "跟单总表 1112.xlsx")
+        self.assertEqual(got["meta"]["sheet_note"], "最后更新时间 2026/11/12 09：30")
+        self.assertNotIn("uploaded_from", got["meta"])
+        keys = sorted((o["po"], o["supplier"]) for o in got["orders"])
+        self.assertEqual(keys, [("90102", "凯维"), ("90103", "兴华")])  # 90101|华晨 被 overrides 隐藏
+        self.assertEqual([o.get("note") for o in got["orders"] if o["po"] == "90102"], ["x"])
+        ev = self.events()
+        for e in ("upload_fail", "upload_bad_file", "upload_ok"):
+            self.assertIn(e, ev)
+
+    def test_wrong_upload_password_counts_toward_lockout(self):
+        self.app.set_upload_password(self.UPW)
+        for _ in range(po_server.FAIL_LIMIT):
+            self.assertEqual(self.post(b"x", "bad")[0], 403)
+        self.assertEqual(self.post(sample_tracker(), self.UPW)[0], 429)
+
+    def test_too_big(self):
+        self.app.set_upload_password(self.UPW)
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.putrequest("POST", "/api/upload", skip_host=True)
+        for k, v in {**CF, "Cookie": self.cookie, "Content-Length": str(po_server.MAX_UPLOAD + 1)}.items():
+            c.putheader(k, v)
+        c.endheaders()
+        r = c.getresponse()
+        self.assertEqual(r.status, 413)
+        c.close()
+
+    def test_cli_sets_hash_only(self):
+        answers = iter([self.UPW, self.UPW])
+        with mock.patch.object(po_server.getpass, "getpass", lambda prompt="": next(answers)), \
+                mock.patch("builtins.print"):
+            po_server.main(["set-upload-password", "--data", str(self.data)])
+        cfg = json.loads((self.data / "config.json").read_text(encoding="utf-8"))
+        self.assertNotIn(self.UPW, json.dumps(cfg, ensure_ascii=False))
+        self.assertTrue(po_server.verify_password(self.UPW, cfg["upload_password"]))
+        answers = iter(["short"])
+        with mock.patch.object(po_server.getpass, "getpass", lambda prompt="": next(answers)):
+            with self.assertRaises(SystemExit):
+                po_server.main(["set-upload-password", "--data", str(self.data)])
 
 
 class NodeCompatTest(unittest.TestCase):

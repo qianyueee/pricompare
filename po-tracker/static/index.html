@@ -15,6 +15,7 @@
     <p class="sub" id="sub">正在读取…</p>
   </div>
   <div class="top-actions">
+    <button type="button" class="btn btn-primary" id="upload" hidden>上传总表</button>
     <button type="button" class="btn" id="refresh" title="重新读取数据">刷新</button>
     <a class="btn btn-quiet" href="/logout" id="logout" hidden>退出</a>
   </div>
@@ -69,8 +70,26 @@
   <span class="lg u-green">7 天以上</span>
   <span class="lg u-nodate">没写交期</span>
   <span class="lg u-done">已发货 / 完成 / 取消</span><br />
-  数据每小时从 zill@kvstek.com 的 PO 邮件整理一次；点一行看零件明细和相关邮件。
+  <span id="src"></span>点一行看零件明细。
 </footer>
+
+<dialog id="up-dialog" class="up-dialog" aria-labelledby="up-title">
+  <form id="up-form" method="dialog">
+    <h2 id="up-title">上传跟单总表</h2>
+    <p class="up-help">选最新的跟单总表 .xlsx。页面会读「订单明细」这张表，换掉现在显示的内容；以前上传的文件在 Mac 上留着。</p>
+    <label class="up-field">文件
+      <input type="file" id="up-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+    </label>
+    <label class="up-field">上传密码
+      <input type="password" id="up-key" autocomplete="off" />
+    </label>
+    <p class="up-msg" id="up-msg" role="status"></p>
+    <div class="up-actions">
+      <button type="button" class="btn btn-quiet" id="up-cancel">关闭</button>
+      <button type="submit" class="btn btn-primary" id="up-go">上传</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="/static/app.js"></script>
 </body>
