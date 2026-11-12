@@ -7,7 +7,7 @@ po-tracker/
   po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/tracker.json（没有就读 orders.json）
   tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
   static/             页面（index.html、app.js、app.css、favicon.svg）
-  deploy/             Mac 上的保活脚本样板
+  deploy/             Mac 上的 LaunchAgent（local.po-tracker.plist）、健康检查、手动重启脚本
   sample/make_sample.py  生成假数据，本地看效果
   tests/               python3 -m unittest discover -s tests
 ```
@@ -25,7 +25,9 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - 密码和报价页同一个：每次登录都重新读 pricompare `config.json` 的 `password`（scrypt 哈希，和 `src/server/password.ts` 同格式）。报价页换密码后，这里马上要用新密码，旧登录全部失效。登录 cookie `po_auth`，30 天，用 `data/session.key` 签名。
 - 带 `cf-*` / `tailscale-*` 头或 Host 不是 localhost 的请求都要登录，且 Host 必须是 `--host` 里的域名；本机直接打开 `http://localhost:8792/` 不用密码。
 - 全站 10 分钟内输错 10 次密码就先停 10 分钟。http 自动转 https（看 `X-Forwarded-Proto`）。
-- `GET /healthz` 给保活用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
+- Mac 上由 LaunchAgent 常驻：`deploy/local.po-tracker.plist` 放到 `~/Library/LaunchAgents/`，`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.po-tracker.plist`；开机自启，退出后 10 秒自动拉起。改了代码后跑 `deploy/po_tracker_up.sh`（kickstart -k）让新代码生效。
+- hermes 每 10 分钟跑 `deploy/po_tracker_check.sh`：只查 `/healthz`，不重启；连续两次不通才发一条 Telegram，恢复时再发一条。
+- `GET /healthz` 给健康检查用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
 
 ## 上传跟单总表
 
