@@ -276,6 +276,36 @@ class EditTest(unittest.TestCase):
         lines = (self.data / "history.jsonl").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(lines), 2)
 
+    def test_mail_sync_adds_new_and_keeps_human_edits(self):
+        self.update(changes={"status": "已确认"}, note="人写的")
+        (self.data / "mail_orders.json").write_text(json.dumps({"generated_at": "2026-11-15T18:07:00+09:00", "orders": [
+            {"po": "90001", "supplier": "华晨", "status": "已取消", "due_date": "2026-12-31", "status_note": "邮件说取消",
+             "mails": [{"folder": "收件箱", "uid": 7, "date": "2026-11-15T10:00:00+09:00", "subject": "Re: PO 90001"}]},
+            {"po": "90009", "supplier": "兴华", "status": "已确认", "status_note": "x", "open_issues": ["y"], "due_date": "2026-12-05"},
+        ]}), encoding="utf-8")
+        meta, orders = self.get()
+        self.assertEqual((meta["mail_synced_at"], meta["mail_new_count"]), ("2026-11-15T18:07:00+09:00", 1))
+        o = orders["90001|华晨"]
+        self.assertEqual((o["status"], o["due_date"], o["note"]), ("已确认", "2026-11-20", "人写的"))
+        self.assertNotIn("status_note", o)
+        self.assertEqual([m["uid"] for m in o["mails"]], [7])
+        n = orders["90009|兴华"]
+        self.assertEqual((n["status"], n["mail_new"], n["due_date"]), ("已下单", True, "2026-12-05"))
+        self.assertNotIn("status_note", n)
+        self.assertNotIn("open_issues", n)
+        r, doc = self.update(key="90009|兴华", changes={"status": "已确认"}, note="兴华回了")
+        self.assertEqual(r.status, 200, doc)
+        r, doc = self.post("/api/order/add", {"by": "小王", "order": {"po": "90009", "supplier": "兴华"}})
+        self.assertEqual(r.status, 409, doc)
+        r, doc = self.post("/api/order/delete", {"by": "小王", "key": "90009|兴华"})
+        self.assertEqual(r.status, 403, doc)
+        _, orders = self.get()
+        self.assertEqual((orders["90009|兴华"]["status"], orders["90009|兴华"]["note"]), ("已确认", "兴华回了"))
+        (self.data / "mail_orders.json").write_text("{坏了", encoding="utf-8")
+        meta, orders = self.get()
+        self.assertIn("mail_orders.json", meta["mail_error"])
+        self.assertEqual(orders["90001|华晨"]["status"], "已确认")
+
     def test_web_edit_beats_overrides(self):
         _, orders = self.get()
         self.assertEqual(orders["90002|凯维"]["status"], "已发货")

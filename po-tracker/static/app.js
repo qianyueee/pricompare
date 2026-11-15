@@ -22,6 +22,7 @@ const PREF_KEY = 'po-tracker-prefs-2';
 const NAME_KEY = 'po-tracker-name';
 const FIELD_LABEL = { status: '状态', due_date: '交期', eta: '预计发货', tracking: '运单号' };
 const EDIT_FIELDS = ['status', 'due_date', 'eta', 'tracking'];
+const MAIL_STALE_HOURS = 3; // 邮件同步每小时一次，超过这么久没更新就在顶上提示
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -253,7 +254,11 @@ function cells(o) {
   const aliases = (o.aliases || []).filter(Boolean);
   const lines = o.lines || [];
   const amt = money(o.amount, o.currency);
-  const manual = o.source === 'manual' ? '<span class="tag-manual" title="网页上手动加的">手动</span>' : '';
+  const manual = o.source === 'manual'
+    ? '<span class="tag-manual" title="网页上手动加的">手动</span>'
+    : o.mail_new
+      ? '<span class="tag-mail" title="邮件里新出现、总表和网页上原来没有的 PO，状态先记已下单">邮件新单</span>'
+      : '';
   return `
     <td class="c-due">${dueHtml}${due ? '<br>' : ''}<span class="pill">${esc(u.pill)}</span></td>
     <td class="c-po"><span class="po">${esc(o.po)}</span>${manual}<span class="po-sup">${esc(o.supplier || '供应商未定')}</span>${aliases.length ? `<span class="alias">原 ${esc(aliases.join('、'))}</span>` : ''}</td>
@@ -286,6 +291,10 @@ function historyHtml(o) {
   let origin = '';
   if (o.source === 'tracker') {
     origin = `<li class="h-origin"><span class="when">${esc(fmtDateTime(state.meta.generated_at))}</span><span class="who">总表</span><span class="what">从${esc(state.meta.sheet_label || '跟单总表')}导入：状态 <b>${esc(firstStatus(o))}</b></span></li>`;
+  } else if (o.mail_new) {
+    const dates = (o.mails || []).map((x) => x.date).filter(Boolean).sort();
+    const when = dates[0] || state.meta.mail_synced_at;
+    origin = `<li class="h-origin"><span class="when">${esc(fmtDateTime(when))}</span><span class="who">邮件</span><span class="what">zill@ 邮件里出现的新 PO（总表和网页上原来没有）：状态先记 <b>${esc(firstStatus(o))}</b></span></li>`;
   } else if (o.source !== 'manual') {
     const when = state.meta.mail_generated_at || state.meta.generated_at;
     origin = `<li class="h-origin"><span class="when">${esc(fmtDateTime(when))}</span><span class="who">邮件</span><span class="what">从 zill@ 邮件整理：状态 <b>${esc(firstStatus(o))}</b>${o.status_note ? `<div class="h-note">${esc(o.status_note)}</div>` : ''}</span></li>`;
@@ -432,6 +441,7 @@ function renderHeader() {
   const parts = [];
   if (m.base === 'tracker') parts.push(`${fmtDateTime(m.generated_at)} 导入${m.sheet_label || '跟单总表'}`);
   else if (m.generated_at) parts.push(`${fmtDateTime(m.generated_at)} 从邮件整理`);
+  if (m.mail_synced_at) parts.push(`邮件同步 ${fmtDateTime(m.mail_synced_at)}`);
   if (m.last_edit) parts.push(`最近跟进 ${fmtDateTime(m.last_edit.at)} ${m.last_edit.by || ''}`.trim());
   parts.push(`共 ${state.orders.length} 个 PO`);
   $('sub').textContent = parts.join(' · ');
@@ -439,9 +449,14 @@ function renderHeader() {
   $('add').hidden = !m.can_edit;
   $('edit').hidden = !!m.can_edit;
   $('edit-off').hidden = !m.can_edit || !!m.edit_local;
+  const warn = [m.edit_error, m.mail_error];
+  const synced = m.mail_synced_at ? Date.parse(m.mail_synced_at) : NaN;
+  if (synced && Date.now() - synced > MAIL_STALE_HOURS * 3600e3) {
+    warn.push(`邮件同步停在 ${fmtDateTime(m.mail_synced_at)}，超过 ${MAIL_STALE_HOURS} 小时没更新，新邮件可能还没进来`);
+  }
   const stale = $('stale');
-  stale.hidden = !m.edit_error;
-  stale.textContent = m.edit_error || '';
+  stale.textContent = warn.filter(Boolean).join('；');
+  stale.hidden = !stale.textContent;
 }
 
 // ---------------------------------------------------------------- 读数据

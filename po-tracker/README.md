@@ -1,10 +1,11 @@
 # PO 跟单列表页（po.kvstek.com）
 
-一个页面列出 PO，按供应商交期的紧急程度上色。起点是跟单总表（2026-11-11 那份，用 import_tracker.py 导入）加上从 zill@kvstek.com 邮件整理的 PO；之后不再自动判断状态（邮件同步已暂停），由跟单的人在页面上改状态、写跟进、手动新增 PO。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
+一个页面列出 PO，按供应商交期的紧急程度上色。起点是跟单总表（2026-11-11 那份，用 import_tracker.py 导入）加上从 zill@kvstek.com 邮件整理的 PO；之后状态由跟单的人在页面上改、写跟进、手动新增 PO。zill@ 的 PO 邮件每小时同步一次，只记原始信息（挂上相关邮件、加新 PO），不加备注、不判断状态（Zane 2026-11-15）。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
 
 ```
 po-tracker/
-  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json + overrides.json + edits.json
+  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json + mail_orders.json + overrides.json + edits.json
+  mailsync.py         把每小时邮件同步的 data/mail_orders.json 合进来：只挂邮件、只加新单
   edits.py            网页上的改动：检查、保存（data/edits.json）、跟进记录（data/history.jsonl）
   tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
   import_tracker.py   把跟单总表导入成起点数据 data/orders.json（邮件那份另存 orders.mail.json）
@@ -14,7 +15,7 @@ po-tracker/
   tests/               python3 -m unittest discover -s tests
 ```
 
-起点数据由 Mac 上的 `~/apps/po-tracker/po_sync.py` 生成（只读 zill@ 邮箱 → `claude -p` 整理 → `data/orders.json`；2026-11-12 起暂停）。那个脚本含邮件细节，只放在 Mac 上，不进这个公开仓库；**任何邮件内容、订单数据都不要提交到这里。**
+邮件同步是 Mac 上的 `~/apps/po-tracker/po_sync.py`（hermes 任务 po-sync 每小时跑：只读 zill@ 邮箱 → `claude -p` 抽原始字段 → `data/mail_orders.json`）。那个脚本含邮件细节，只放在 Mac 上，不进这个公开仓库；**任何邮件内容、订单数据都不要提交到这里。**
 
 ## 运行
 
@@ -30,6 +31,15 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - Mac 上由 LaunchAgent 常驻：`deploy/local.po-tracker.plist` 放到 `~/Library/LaunchAgents/`，`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.po-tracker.plist`；开机自启，退出后 10 秒自动拉起。改了代码后跑 `deploy/po_tracker_up.sh`（kickstart -k）让新代码生效。
 - hermes 每 10 分钟跑 `deploy/po_tracker_check.sh`：只查 `/healthz`，不重启；连续两次不通才发一条 Telegram，恢复时再发一条。
 - `GET /healthz` 给健康检查用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
+
+## 邮件同步（data/mail_orders.json）
+
+格式跟下面 orders.json 一样（`{"generated_at", "orders": [...]}`），但每次同步整份重写，`generated_at` 是这次同步的时间（没有新信也更新，页面顶上显示「邮件同步 …」，超过 3 小时没更新会提示）。合进页面的规则在 `mailsync.py`：
+
+- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：同号同供应商、同供应商且号多一个字母（44278 → 44278A）或对上旧号、或一边供应商没定且号对上，都算已经有。**只把新的相关邮件挂上去**（按 文件夹+UID 或 日期+标题 去重），状态、交期、备注等一律不动。
+- 都没有的：用邮件里的原始字段（PO 号、旧号、供应商、下单主体、客户、客户 PO、下单人、下单日期、交期、客户交期、金额、币种、含税、零件行、邮件）加成新的一行，**状态先记「已下单」**，标「邮件新单」。邮件里的 status / status_note / open_issues / tracking 之类一律不用。
+- 网页上的改动（edits.json）最后才盖上去，所以永远以人填的为准；邮件新单不能删（不要的改成「已取消」）。
+- 文件坏了不影响页面，只在顶上提示「mail_orders.json 读不了」。
 
 ## 导入跟单总表（起点数据）
 

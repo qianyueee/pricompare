@@ -9,7 +9,8 @@
   每次登录都重新读，报价页换了密码这里马上跟着换，已登录的人全部作废。
 - 经 Cloudflare 来的请求（带 cf-* 头，或 Host 不是 localhost）一律要密码 cookie；
   Host 必须是 --host 列出的域名，否则拒绝。本机直接访问（Host 是 localhost、没有 cf-* 头）不用密码。
-- 数据：data/orders.json（从邮件整理的起点，po_sync.py 已暂停）+ data/overrides.json（Zane 手工更正，可选；
+- 数据：data/orders.json（起点：跟单总表导入的）+ data/mail_orders.json（po_sync.py 每小时从 zill@ 抓的原始信息，
+  只挂邮件、只加新单，见 mailsync.py）+ data/overrides.json（Zane 手工更正，可选；
   键是 PO 号，同号两家供应商时可写 "44278|兴华"）+ data/edits.json（跟单的人在网页上的改动，见 edits.py）。
 - 在网页上改东西要另一个「编辑密码」（查看密码 Tony 也有）：python3 po_server.py set-edit-password --data <数据目录>
   本机直接访问不用。改动记在 data/history.jsonl，页面上显示成「跟进记录」。
@@ -36,6 +37,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import edits
+import mailsync
 from edits import EditError, write_atomic
 
 HERE = Path(__file__).resolve().parent
@@ -151,7 +153,7 @@ class App:
             self.fails.append(time.time())
 
     def _merged(self) -> tuple[dict, list[dict], dict]:
-        """(meta, orders, edits 文档)：邮件整理的 + 手动新增 → overrides → 网页改动。不含跟进记录。"""
+        """(meta, orders, edits 文档)：起点 + 手动新增 + 邮件新抓的 → overrides → 网页改动。不含跟进记录。"""
         p = self.data / "orders.json"
         meta: dict = {}
         try:
@@ -168,7 +170,8 @@ class App:
         except EditError as e:
             ed, meta["edit_error"] = {"patches": {}, "added": []}, str(e)
         orders = edits.Store.with_added(orders, ed)
-        if ed["added"]:
+        orders = self._with_mail(orders, meta)
+        if ed["added"] or meta.get("mail_new_count"):
             meta.pop("missing", None)
         overrides = self._overrides()
         if overrides:
@@ -184,6 +187,23 @@ class App:
             orders = out
             meta["overrides"] = len(overrides)
         return meta, edits.Store.apply_patches(orders, ed), ed
+
+    def _with_mail(self, orders: list[dict], meta: dict) -> list[dict]:
+        """po_sync.py 每小时写的 data/mail_orders.json：只挂邮件、只加新单（见 mailsync.py）。"""
+        try:
+            doc = json.loads((self.data / "mail_orders.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return orders
+        except (OSError, ValueError) as e:
+            meta["mail_error"] = f"mail_orders.json 读不了：{e.__class__.__name__}"
+            return orders
+        if not isinstance(doc, dict) or not isinstance(doc.get("orders"), list):
+            meta["mail_error"] = "mail_orders.json 格式不对"
+            return orders
+        orders, n = mailsync.merge(orders, doc["orders"])
+        meta["mail_synced_at"] = doc.get("generated_at")
+        meta["mail_new_count"] = n
+        return orders
 
     def orders(self) -> dict:
         meta, orders, _ = self._merged()
