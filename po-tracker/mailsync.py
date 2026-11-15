@@ -26,10 +26,26 @@ def _plus_letter(short: set[str], po: str) -> bool:
     return any(re.fullmatch(re.escape(n) + r"[A-Za-z]", po) for n in short)
 
 
+def _cust_pos(o: dict) -> set[str]:
+    toks = re.split(r"[\s/,，、;；]+", str(o.get("customer_po") or "").upper())
+    return {t for t in toks if len(t) >= 5 and "TBD" not in t}
+
+
+def _pns(o: dict) -> set[str]:
+    return {str(ln.get("pn") or "").strip().upper() for ln in o.get("lines") or [] if isinstance(ln, dict)} - {""}
+
+
+def _agree(m: dict, o: dict) -> bool:
+    """只靠旧号/加字母对上时，再看客户 PO、零件号：两边都有的，至少要重合一个，否则不是同一张单。
+    （例：标题把新单号的两位数字写反了，正好对上一张老单，但客户 PO 和零件都不一样。）哪一项都没法两边比的，算对上。"""
+    both = [(a, b) for a, b in ((_cust_pos(m), _cust_pos(o)), (_pns(m), _pns(o))) if a and b]
+    return not both or any(a & b for a, b in both)
+
+
 def find_matches(m: dict, orders: list[dict]) -> list[dict]:
     """邮件里的 PO 对页面上哪几行。
     1) 同号同供应商；2) 同供应商，号对得上（加了一个字母、旧号）；3) 有一边供应商没定，号对得上。
-    对不上就是空列表（= 新单）。"""
+    2)、3) 里号不完全相同的，还要客户 PO / 零件号不矛盾（见 _agree）。对不上就是空列表（= 新单）。"""
     po, sup = str(m.get("po") or ""), m.get("supplier") or ""
     exact = [o for o in orders if str(o.get("po") or "") == po and (o.get("supplier") or "") == sup]
     if exact:
@@ -37,7 +53,10 @@ def find_matches(m: dict, orders: list[dict]) -> list[dict]:
     nums = _nums(m)
 
     def related(o: dict) -> bool:
-        return bool(nums & _nums(o)) or _plus_letter(nums, str(o.get("po") or ""))
+        opo = str(o.get("po") or "")
+        if opo == po:
+            return True
+        return (bool(nums & _nums(o)) or _plus_letter(nums, opo)) and _agree(m, o)
 
     same_sup = [o for o in orders if sup and (o.get("supplier") or "") == sup and related(o)]
     if same_sup:

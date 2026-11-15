@@ -58,6 +58,25 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertEqual([x["uid"] for x in self.by(out)["44278A|兴华"]["mails"]], [41, 40])
 
+    def test_alias_match_needs_same_customer_po_or_part(self):
+        base = [{"po": "90137", "supplier": "华晨", "status": "已完成", "customer_po": "C-OLD-1",
+                 "lines": [{"pn": "P-OLD"}], "source": "tracker"},
+                {"po": "44278A", "supplier": "兴华", "customer_po": "C-X-01 / TBD", "lines": [{"pn": "X-1"}]}]
+        # 标题把 90317 写成了 90137：号对上老单，但客户 PO、零件都不一样 → 新单，老单不挂这些信
+        typo = {"po": "90317", "aliases": ["90137"], "supplier": "华晨", "customer_po": "C-NEW-1",
+                "lines": [{"pn": "P-NEW"}], "mails": [mail(60, "2026-11-13", "PO 90137")]}
+        # 加字母的：零件对得上就算同一张
+        suffix = {"po": "44278", "supplier": "兴华", "customer_po": "TBD", "lines": [{"pn": "x-1"}], "mails": [mail(61, "2026-11-13")]}
+        out, n = mailsync.merge(base, [typo, suffix])
+        by = self.by(out)
+        self.assertEqual(n, 1)
+        self.assertEqual((by["90317|华晨"]["status"], by["90317|华晨"]["mail_new"]), ("已下单", True))
+        self.assertNotIn("mails", by["90137|华晨"])
+        self.assertEqual(by["44278A|兴华"]["mails"][0]["uid"], 61)
+        # 同号只是供应商没定的，不看客户 PO
+        out, n = mailsync.merge(base, [{"po": "90137", "supplier": "", "customer_po": "C-OTHER-9", "mails": [mail(62, "2026-11-14")]}])
+        self.assertEqual((n, self.by(out)["90137|华晨"]["mails"][0]["uid"]), (0, 62))
+
     def test_supplier_unknown_on_one_side(self):
         out, n = mailsync.merge(BASE, [{"po": "44300", "supplier": "凯维", "mails": [mail(50, "2026-11-14")]},
                                        {"po": "44278A", "supplier": "", "mails": [mail(51, "2026-11-14")]}])
