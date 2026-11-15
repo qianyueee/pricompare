@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import po_server  # noqa: E402
 import purchase  # noqa: E402
 import purchase_xlsx  # noqa: E402
+import invoice_xlsx  # noqa: E402
 from edits import EditError  # noqa: E402
 import test_server as ts  # noqa: E402
 
@@ -27,6 +28,22 @@ ORDER = {"po": "90010", "supplier": "凯阔", "sub_vendor": "甲厂", "due_date"
          "lines": [{"pn": "P-1", "rev": "A", "desc": "PART ONE", "qty": 2, "unit_price": 226, "customer_line": "10"},
                    {"pn": "P-2", "qty": 1, "amount": 226}]}
 VENDORS = [{"name": "某某甲厂精密有限公司", "lines": ["地址：甲路 2 号", "税号：TEST123"], "names": []}]
+
+
+def png(w=4, h=2):
+    """一张 w×h 的小 PNG（假图）。"""
+    import struct
+    import zlib
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+
+    raw = b"".join(b"\x00" + b"\xff\x00\x00\x80" * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffc0000b080003000501011100ffd9")  # 5×3 的 JPEG 头
 
 
 class UpperTest(unittest.TestCase):
@@ -111,12 +128,45 @@ class XlsxTest(unittest.TestCase):
         z = zipfile.ZipFile(io.BytesIO(data))
         sheet = z.read("xl/worksheets/sheet1.xml").decode()
         self.assertIn("采 购 订 单", sheet)
+        self.assertIn("需方：测试买方公司", sheet)
+        self.assertIn("日期：2026年11月16日", sheet)  # 需方日期 = 订单日期
+        self.assertIn("第 &amp;P 页", sheet)
+        self.assertNotIn("<drawing", sheet)  # 没传 logo、公章就不放图
+        self.assertNotIn("xl/drawings/drawing1.xml", z.namelist())
         self.assertIn("ROUND(I", sheet)
         self.assertIn("人民币贰仟柒佰壹拾贰元整", sheet)  # 大写公式带着算好的值
         self.assertIn("[DBNum2]", sheet)
         self.assertIn("<b/>", sheet)  # 供方名称粗体
         self.assertIn('name="PO-90010"', z.read("xl/workbook.xml").decode())
         self.assertIn("等线", z.read("xl/styles.xml").decode())
+
+    def test_logo_and_seal(self):
+        doc = purchase.build(payload(), {"90010|凯阔": ORDER}, CFG)
+        self.assertTrue(doc["seal"])  # 需方默认盖公章
+        imgs = {"logo": png(8, 2), "seal": JPEG}
+        z = zipfile.ZipFile(io.BytesIO(purchase_xlsx.render(doc, CFG, imgs)))
+        self.assertIn('<drawing r:id="rId1"/>', z.read("xl/worksheets/sheet1.xml").decode())
+        self.assertEqual(sorted(n for n in z.namelist() if n.startswith("xl/media/")), ["xl/media/image1.png", "xl/media/image2.jpeg"])
+        drawing = z.read("xl/drawings/drawing1.xml").decode()
+        self.assertIn('name="logo"', drawing)
+        self.assertIn('name="公章"', drawing)
+        self.assertIn(f'<xdr:ext cx="{round(42 * 4 * 12700)}" cy="{42 * 12700}"/>', drawing)  # logo 高 42 磅，按比例
+        self.assertIn('<a:alphaModFix amt="92000"/>', drawing)
+        self.assertIn("image/jpeg", z.read("[Content_Types].xml").decode())
+        # 预览里去掉了公章：只剩 logo
+        doc = purchase.build(payload(seal=False), {"90010|凯阔": ORDER}, CFG)
+        self.assertFalse(doc["seal"])
+        z = zipfile.ZipFile(io.BytesIO(purchase_xlsx.render(doc, CFG, imgs)))
+        self.assertEqual([n for n in z.namelist() if n.startswith("xl/media/")], ["xl/media/image1.png"])
+        self.assertNotIn("公章", z.read("xl/drawings/drawing1.xml").decode())
+        # 没 logo：左上写公司名
+        z = zipfile.ZipFile(io.BytesIO(purchase_xlsx.render(doc, CFG, {})))
+        self.assertIn(">测试买方公司<", z.read("xl/worksheets/sheet1.xml").decode())
+
+    def test_image_size(self):
+        self.assertEqual(invoice_xlsx.image_size(png(7, 3)), (7, 3))
+        self.assertEqual(invoice_xlsx.image_size(JPEG), (5, 3))
+        self.assertEqual(invoice_xlsx.image_size(b"junk"), (1, 1))
 
 
 class PurchaseApiTest(unittest.TestCase):
@@ -197,6 +247,59 @@ class PurchaseApiTest(unittest.TestCase):
         self.assertEqual(r.status, 404)
         r, _ = ts.ServerTest.req(self, "GET", "/fonts/Deng.ttf", CF)  # 经 Cloudflare 没登录的不给
         self.assertNotEqual(r.status, 200)
+
+    def upload(self, kind, body, headers=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", f"/api/purchase/asset?kind={kind}", body=body, headers={"Host": "localhost", **(headers or {}), "Content-Type": "image/png"})
+        r = c.getresponse()
+        doc = json.loads(r.read() or b"{}")
+        c.close()
+        return r, doc
+
+    def test_assets_and_seal(self):
+        r, doc = self.get_json("/api/orders")
+        self.assertEqual(doc["meta"]["purchase"]["assets"], {"logo": 0, "seal": 0})
+        r, _ = ts.ServerTest.req(self, "GET", "/assets/seal", {"Host": "localhost"})
+        self.assertEqual(r.status, 404)
+        r, doc = self.upload("seal", b"GIF89a-not-allowed")
+        self.assertEqual(r.status, 400, doc)
+        r, doc = self.upload("stamp", png())
+        self.assertEqual(r.status, 400, doc)
+        r, doc = self.upload("seal", png())
+        self.assertEqual(r.status, 200, doc)
+        r, doc = self.upload("logo", JPEG)
+        self.assertEqual(r.status, 200, doc)
+        self.assertEqual(oct((self.data / "assets" / "seal.png").stat().st_mode & 0o777), "0o600")
+        r, body = ts.ServerTest.req(self, "GET", "/assets/seal", {"Host": "localhost"})
+        self.assertEqual((r.status, r.getheader("Content-Type"), body), (200, "image/png", png()))
+        r, body = ts.ServerTest.req(self, "GET", "/assets/logo", {"Host": "localhost"})
+        self.assertEqual(r.getheader("Content-Type"), "image/jpeg")
+        r, doc = self.upload("logo", png(9, 3))  # 换成 PNG：旧的 JPG 删掉
+        self.assertEqual(r.status, 200, doc)
+        self.assertEqual(sorted(p.name for p in (self.data / "assets").iterdir()), ["logo.png", "seal.png"])
+        r, doc = self.get_json("/api/orders")
+        self.assertTrue(all(doc["meta"]["purchase"]["assets"].values()))
+        # 导出的 Excel 带 logo 和公章；去掉公章再存，就只带 logo
+        r, d = self.get_json(f"/api/purchase/draft?key={quote('90010|凯阔')}")
+        self.assertTrue(d["doc"]["seal"])
+        self.assertEqual(self.post({"by": "小王", "purchase": payload()})[0].status, 200)
+        r, body = ts.ServerTest.req(self, "GET", "/api/purchase/xlsx?no=PO-90010", {"Host": "localhost"})
+        self.assertEqual(len([n for n in zipfile.ZipFile(io.BytesIO(body)).namelist() if n.startswith("xl/media/")]), 2)
+        self.assertEqual(self.post({"by": "小王", "purchase": payload(seal=False)})[0].status, 200)
+        r, d = self.get_json(f"/api/purchase/draft?key={quote('90010|凯阔')}")
+        self.assertFalse(d["doc"]["seal"])  # 再打开还是不盖
+        r, body = ts.ServerTest.req(self, "GET", "/api/purchase/xlsx?no=PO-90010", {"Host": "localhost"})
+        self.assertEqual(len([n for n in zipfile.ZipFile(io.BytesIO(body)).namelist() if n.startswith("xl/media/")]), 1)
+        # 公章图片只给有编辑权限的人看，只读的人也不能换图
+        r, _ = ts.ServerTest.req(self, "GET", "/assets/seal", CF)
+        self.assertNotEqual(r.status, 200)
+        r, _ = ts.ServerTest.req(self, "POST", "/login", CF, urlencode({"password": PW}))
+        view = {**CF, "Cookie": ts.ServerTest.cookie_from(self, r)}
+        r, _ = ts.ServerTest.req(self, "GET", "/assets/seal", view)
+        self.assertEqual(r.status, 403)
+        r, doc = self.upload("seal", png(2, 2), {**view, "Origin": f"https://{HOST}"})
+        self.assertEqual(r.status, 403, doc)
+        self.assertEqual((self.data / "assets" / "seal.png").read_bytes(), png())
 
     def test_viewers_cannot(self):
         r, _ = ts.ServerTest.req(self, "POST", "/login", CF, urlencode({"password": PW}))

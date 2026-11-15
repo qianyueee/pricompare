@@ -1,8 +1,10 @@
 'use strict';
 // ---------------------------------------------------------------- 做采购订单
-// 展开一个 PO →「做采购订单」→ 预览（版式照 Zane 11-15 给的样张，都能改）→ 导出 Excel / 打印（存 PDF）。保存时服务器重新算钱，
-// 记进 data/purchases.json；供方全称和地址电话税号记下来，下次同一家自动带出。
-// Zane 11-15：Tony 的 PO 价都是含税价，所以带出来的单价 = 含税单价 ÷ (1 + 税率)，四舍五入到分。字体全用等线。
+// 展开一个 PO →「做采购订单」→ 预览（内容都能改）→ 导出 Excel / 打印（存 PDF）。保存时服务器重新算钱，
+// 记进 data/purchases.json；供方全称和地址、联系人电话记下来，下次同一家自动带出。
+// Zane 11-15：Tony 的 PO 价都是含税价，所以带出来的单价 = 含税单价 ÷ (1 + 税率)，四舍五入到分。
+// 版式是 Zane 11-15 晚上定稿的正式单据：只用黑白灰，左上 logo、右边「采购订单」，标题和双方名称思源宋体、其余等线，
+// 底部双方只有盖章和日期（需方日期 = 订单日期，供方空着），需方默认盖公章。logo 和公章只放 Mac 的 data/assets/，网页上可以换图。
 // 用 app.js 里的 state、$、esc、postJSON、store、NAME_KEY、load 等。
 
 const PUR_DIGITS = '零壹贰叁肆伍陆柒捌玖';
@@ -68,6 +70,11 @@ function cnDate(iso) {
   return iso && iso.length >= 10 ? `${iso.slice(0, 4)}年${+iso.slice(5, 7)}月${+iso.slice(8, 10)}日` : '';
 }
 
+function purAsset(kind) {
+  const v = (purCfg().assets || {})[kind];
+  return v ? `/assets/${kind}?v=${encodeURIComponent(v)}` : '';
+}
+
 function purMsg(text, cls) {
   const el = $('pur-msg');
   el.textContent = text;
@@ -117,10 +124,35 @@ function closePurchase() {
   render();
 }
 
-function partyHead(c) {
+// 页眉：左边 logo（没传就用公司名），右边「采购订单」和地址、电话邮箱两行，下面一粗一细双线。预览（pur-hd）和打印（pd-hd）共用。
+// 打印版的 class 都带 pd- 前缀，免得跟列表页的 .grid、.top、.sub 这些撞上。
+function docHead(c, cls) {
   const b = c.buyer || {};
-  if (!b.name) return '<div class="pur-hd"><div class="pur-co need-text">抬头还没设（Mac 上 data/purchase.json）</div></div>';
-  return `<div class="pur-hd"><div class="pur-co">${esc(b.name)}</div>${(b.lines || []).map((x) => `<div class="pur-ln">${esc(x)}</div>`).join('')}</div>`;
+  const logo = purAsset('logo');
+  const left = logo
+    ? `<img src="${logo}" alt="${esc(b.name || 'logo')}" />`
+    : `<div class="pd-co${b.name ? '' : ' need-text'}">${esc(b.name || '抬头还没设（Mac 上 data/purchase.json）')}</div>`;
+  return `<div class="${cls}">${left}<div class="pd-hr"><div class="pd-name">采购订单</div>${(b.lines || []).map((x) => `<div class="pd-ln">${esc(x)}</div>`).join('')}</div></div>
+    <div class="pd-rule"></div><div class="pd-rule2"></div>`;
+}
+
+// 底部签章：需方、供方各只有「盖章」和「日期」；需方日期 = 订单日期，供方日期空着；需方默认盖公章
+function signHtml(d) {
+  const seal = d.seal && purAsset('seal') ? `<img class="pd-seal" src="${purAsset('seal')}" alt="公章" />` : '';
+  return `<div class="pd-sign">
+    <div>${seal}<div class="pd-p">需方：${esc((purCfg().buyer || {}).name || '')}</div><div class="pd-st">盖章：</div><div class="pd-f"><span>日期：</span><i>${esc(cnDate(d.date))}</i></div></div>
+    <div><div class="pd-p">供方：${esc(d.seller.name)}</div><div class="pd-st">盖章：</div><div class="pd-f"><span>日期：</span><i></i></div></div>
+  </div>`;
+}
+
+function assetBar() {
+  const a = purCfg().assets || {};
+  const one = (kind, label) =>
+    `<span class="pur-asset">${label}：${a[kind] ? '已有' : '<span class="need-text">还没有</span>'}
+      <button type="button" class="btn-link" data-act="pur-up" data-kind="${kind}">${a[kind] ? '换图' : '上传'}</button></span>`;
+  return `<div class="pur-assets muted">${one('logo', 'logo')}${one('seal', '凯阔公章')}
+    <span class="pur-asset-help">PNG 或 JPG，小于 3 MB；公章用透明底的 PNG。图片只存在 Mac 上。</span>
+    <input type="file" id="pur-file" accept="image/png,image/jpeg" hidden /></div>`;
 }
 
 function renderPurchase() {
@@ -143,8 +175,7 @@ function renderPurchase() {
     </tr>`,
     )
     .join('');
-  $('pur-sheet').innerHTML = `${partyHead(purCfg())}
-    <div class="pur-title">采 购 订 单</div>
+  $('pur-sheet').innerHTML = `${docHead(purCfg(), 'pur-hd')}
     <table class="pur-info">
       <tr><td class="k">订单编号</td><td><input id="pur-no" maxlength="40" value="${esc(p.no)}" /></td>
           <td class="k">订单日期</td><td><input id="pur-date" type="date" value="${esc(p.date)}" /></td></tr>
@@ -152,7 +183,7 @@ function renderPurchase() {
           <td class="k">客户订单号</td><td><input id="pur-cpo" maxlength="80" value="${esc(p.customer_po)}" /></td></tr>
       <tr><td class="k">供方（卖方）</td>
           <td><input id="pur-sname" maxlength="80" list="pur-vendors" value="${esc(p.seller.name)}" placeholder="供方全称${p.seller_short ? `（${esc(p.seller_short)}）` : ''}" class="${p.seller.name ? '' : 'need'}" />
-              <textarea id="pur-slines" rows="3" placeholder="地址、电话、税号、联系人，每行一项">${esc(p.seller.lines)}</textarea></td>
+              <textarea id="pur-slines" rows="3" placeholder="地址：…&#10;联系人：… ｜ 电话：…">${esc(p.seller.lines)}</textarea></td>
           <td class="k">收货信息</td>
           <td><input id="pur-tname" maxlength="80" value="${esc(p.ship_to.name)}" />
               <textarea id="pur-tlines" rows="3">${esc(p.ship_to.lines)}</textarea></td></tr>
@@ -170,8 +201,23 @@ function renderPurchase() {
     <p class="pur-cmp muted" id="pur-cmp"></p>
     <label class="pur-terms">订单条款与备注说明（每行一条，「标题：」打印成粗体）
       <textarea id="pur-terms" rows="6">${esc(p.terms)}</textarea></label>
+    <div class="pur-sign-pv">
+      <label class="pur-seal-ck"><input type="checkbox" id="pur-seal"${p.seal !== false ? ' checked' : ''} /> 需方盖凯阔公章</label>
+      <div id="pur-sign">${signHtml(purSignDoc())}</div>
+    </div>
+    ${assetBar()}
     <p class="muted inv-help">单价按未税填：从 PO 带出来的是 PO 上的含税单价 ÷ (1 + 税率)，四舍五入到分，可以直接改成供方报的未税价。导出或打印时会保存；供方全称和下面几行会记下来，下次同一家自动带出。</p>`;
   purTotals();
+}
+
+function purSignDoc() {
+  const p = state.pur;
+  return { seal: p.seal !== false, date: p.date, seller: { name: p.seller.name } };
+}
+
+function refreshSign() {
+  const el = $('pur-sign');
+  if (el) el.innerHTML = signHtml(purSignDoc());
 }
 
 function purCalc() {
@@ -231,6 +277,7 @@ function onPurInput(e) {
     purTotals();
     return;
   }
+  if (t.id === 'pur-seal' || t.id === 'pur-file') return; // change 事件里处理
   const map = { 'pur-date': 'date', 'pur-due': 'due', 'pur-cpo': 'customer_po', 'pur-rate': 'tax_rate', 'pur-terms': 'terms' };
   if (t.id === 'pur-no') {
     const old = p.no;
@@ -251,6 +298,51 @@ function onPurInput(e) {
   } else if (t.id === 'pur-tname') p.ship_to.name = t.value;
   else if (t.id === 'pur-tlines') p.ship_to.lines = t.value;
   if (t.id === 'pur-rate') purTotals();
+  if (t.id === 'pur-date' || t.id === 'pur-sname') refreshSign();
+}
+
+function onPurChange(e) {
+  const t = e.target;
+  if (t.id === 'pur-seal') {
+    state.pur.seal = t.checked;
+    refreshSign();
+  } else if (t.id === 'pur-file' && t.files && t.files[0]) {
+    uploadAsset(state.purUpKind, t.files[0]);
+    t.value = '';
+  }
+}
+
+async function uploadAsset(kind, file) {
+  const label = kind === 'seal' ? '公章' : 'logo';
+  if (!/^image\/(png|jpeg)$/.test(file.type)) {
+    purMsg('只收 PNG 或 JPG 图片', 'bad');
+    return;
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    purMsg('图片要小于 3 MB', 'bad');
+    return;
+  }
+  purMsg(`正在上传${label}…`);
+  try {
+    const r = await fetch(`/api/purchase/asset?kind=${encodeURIComponent(kind)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+    const doc = await r.json().catch(() => ({}));
+    if (r.status === 401) {
+      location.href = '/login';
+      return;
+    }
+    if (!r.ok) throw new Error(doc.error || `HTTP ${r.status}`);
+    await load();
+    if (!state.pur) return;
+    renderPurchase();
+    purMsg(`${label}已换好，导出和打印都会用新图`, 'good');
+  } catch (e) {
+    purMsg(`${label}没传上：${e.message || e}`, 'bad');
+  }
 }
 
 function onPurClick(e) {
@@ -264,6 +356,9 @@ function onPurClick(e) {
     }
     p.lines.splice(+act.closest('tr').dataset.i, 1);
     renderPurchase();
+  } else if (act.dataset.act === 'pur-up') {
+    state.purUpKind = act.dataset.kind;
+    $('pur-file').click();
   } else if (act.dataset.act === 'pur-add') {
     p.lines.push({ line: '', pn: '', rev: '', desc: '', qty: '', price: '', price_incl: null });
     renderPurchase();
@@ -316,6 +411,7 @@ async function savePurchase() {
       ship_to: { name: p.ship_to.name.trim(), lines: splitLines(p.ship_to.lines) },
       lines: p.lines.map((l) => ({ line: l.line.trim(), pn: l.pn.trim(), rev: l.rev.trim(), desc: l.desc.trim(), qty: String(l.qty).trim(), price: String(l.price).trim() })),
       terms: splitLines(p.terms),
+      seal: p.seal !== false,
     },
   });
   p.savedNo = no;
@@ -346,13 +442,16 @@ async function printPurchase() {
   try {
     const d = await savePurchase();
     if (!d) return;
-    $('inv-print').innerHTML = purPrintHtml(d);
-    if (document.fonts) {
-      // 等线字体文件大（Mac 上 data/fonts/ 有才有），等它下完再打印，不然 PDF 里会是别的字体
-      purMsg('正在准备打印（第一次要下载等线字体，稍等）…');
-      await Promise.all(['400', '700'].map((w) => document.fonts.load(`${w} 12px "PO DengXian"`, '采购订单'))).catch(() => {});
-      purMsg(`已保存 ${d.no}`, 'good');
-    }
+    const box = $('inv-print');
+    box.innerHTML = purPrintHtml(d);
+    // 等线字体文件大（Mac 上 data/fonts/ 有才有），等字体和 logo、公章都下完再打印，不然 PDF 里会是别的字体或者缺图
+    purMsg('正在准备打印（第一次要下载字体，稍等）…');
+    const fonts = document.fonts
+      ? ['400 12px "PO DengXian"', '700 12px "PO DengXian"', '700 12px "PO Serif"'].map((f) => document.fonts.load(f, '采购订单需方供方'))
+      : [];
+    const imgs = [...box.querySelectorAll('img')].map((i) => (i.decode ? i.decode() : Promise.resolve()));
+    await Promise.all([...fonts, ...imgs].map((x) => x.catch(() => {})));
+    purMsg(`已保存 ${d.no}`, 'good');
     const title = document.title;
     document.title = `采购订单-${d.no}${d.seller_short ? `-${d.seller_short}` : ''}`; // 存 PDF 时默认文件名
     window.print();
@@ -363,7 +462,7 @@ async function printPurchase() {
 }
 
 function partyHtml(party) {
-  return `<b>${esc(party.name)}</b>${(party.lines || []).map((x) => `<br>${esc(x)}`).join('')}`;
+  return `<b>${esc(party.name)}</b><div class="pd-sub">${(party.lines || []).map(esc).join('<br>')}</div>`;
 }
 
 function termHtml(t) {
@@ -371,29 +470,29 @@ function termHtml(t) {
   return m ? `<li><b>${esc(m[1])}</b>${esc(m[2])}</li>` : `<li>${esc(t)}</li>`;
 }
 
-// 打印用的静态版本（跟样张一个样子），用服务器算好的数
+// 打印用的静态版本（Zane 11-15 定稿版式），用服务器算好的数
 function purPrintHtml(d) {
   const y = (x) => fmtYuan(cents(x));
   const rows = d.lines
     .map(
-      (l, i) => `<tr><td class="r">${i + 1}</td><td class="r">${esc(l.line)}</td><td class="r">${esc(l.pn)}</td><td class="r">${esc(l.rev)}</td><td class="r d">${esc(l.desc)}</td><td class="r">${esc(l.qty)}</td><td class="r n">${y(l.price)}</td><td class="r n">${y(l.amount)}</td></tr>`,
+      (l, i) => `<tr><td>${i + 1}</td><td>${esc(l.line)}</td><td>${esc(l.pn)}</td><td>${esc(l.rev)}</td><td class="pd-d">${esc(l.desc)}</td><td>${esc(l.qty)}</td><td class="pd-n">${y(l.price)}</td><td class="pd-n">${y(l.amount)}</td></tr>`,
     )
     .join('');
-  return `<div class="pur-doc">${partyHead(purCfg())}
-    <div class="pur-title">采购订单</div>
-    <table class="pi">
-      <tr><td class="k">订单编号</td><td class="v">${esc(d.no)}</td><td class="k">订单日期</td><td class="v">${esc(cnDate(d.date))}</td></tr>
-      <tr><td class="k">交付日期</td><td class="v">${esc(cnDate(d.due))}</td><td class="k">客户订单号</td><td class="v">${esc(d.customer_po)}</td></tr>
-      <tr><td class="k">供方（卖方）</td><td class="v">${partyHtml(d.seller)}</td><td class="k">收货信息</td><td class="v">${partyHtml(d.ship_to)}</td></tr>
+  return `<div class="pur-doc">${docHead(purCfg(), 'pd-hd')}
+    <table class="pd-grid pd-info">
+      <tr><td class="pd-k">订单编号</td><td class="pd-v">${esc(d.no)}</td><td class="pd-k">订单日期</td><td class="pd-v">${esc(cnDate(d.date))}</td></tr>
+      <tr><td class="pd-k">交付日期</td><td class="pd-v">${esc(cnDate(d.due))}</td><td class="pd-k">客户订单号</td><td class="pd-v">${esc(d.customer_po)}</td></tr>
+      <tr><td class="pd-k pd-top">供方（卖方）</td><td class="pd-v pd-top">${partyHtml(d.seller)}</td><td class="pd-k pd-top">收货信息</td><td class="pd-v pd-top">${partyHtml(d.ship_to)}</td></tr>
     </table>
-    <table class="pt">
-      <colgroup><col style="width:6%"><col style="width:6%"><col style="width:12%"><col style="width:6%"><col><col style="width:6%"><col style="width:11%"><col style="width:11%"></colgroup>
+    <table class="pd-grid pd-items">
+      <colgroup><col style="width:6%"><col style="width:6%"><col style="width:13%"><col style="width:6%"><col><col style="width:7%"><col style="width:11%"><col style="width:13%"></colgroup>
       <tr><th>序号</th><th>行号</th><th>物料编码<br>(P/N)</th><th>版本</th><th>产品描述 (Description)</th><th>数量</th><th>单价 (RMB)</th><th>小计 (RMB)</th></tr>
       ${rows}
-      <tr class="t1"><td class="cap" colspan="5">合计金额（大写）：${esc(d.total_upper)}</td><td>${esc(d.qty_total)}</td><td class="lb">总计<br>(Total)</td><td class="amt">${y(d.total)}</td></tr>
-      <tr class="t2"><td class="cap" colspan="6">含税金额（大写）：${esc(d.taxed_upper)}</td><td class="lb">含税总计<br>(含${esc(d.tax_rate)}%税)</td><td class="amt">${y(d.taxed)}</td></tr>
+      <tr class="pd-t"><td class="pd-c" colspan="5"><b>合计金额（大写）：</b>${esc(d.total_upper)}</td><td>${esc(d.qty_total)}</td><td class="pd-l">总计</td><td class="pd-a">${y(d.total)}</td></tr>
+      <tr class="pd-t"><td class="pd-c" colspan="6"><b>含税金额（大写）：</b>${esc(d.taxed_upper)}</td><td class="pd-l">含税总计<br>(含${esc(d.tax_rate)}%税)</td><td class="pd-a">${y(d.taxed)}</td></tr>
     </table>
-    ${(d.terms || []).length ? `<div class="pterms"><div class="h">订单条款与备注说明：</div><ol>${d.terms.map(termHtml).join('')}</ol></div>` : ''}
+    ${(d.terms || []).length ? `<div class="pd-terms"><div class="pd-h">订单条款与备注说明</div><ol>${d.terms.map(termHtml).join('')}</ol></div>` : ''}
+    ${signHtml(d)}
   </div>`;
 }
 
@@ -404,6 +503,7 @@ function initPurchase() {
   const sheet = $('pur-sheet');
   sheet.addEventListener('input', onPurInput);
   sheet.addEventListener('click', onPurClick);
+  sheet.addEventListener('change', onPurChange);
   $('rows').addEventListener('click', (e) => {
     const b = e.target.closest('[data-pur]');
     if (b) openPurchase(b.dataset.pur);

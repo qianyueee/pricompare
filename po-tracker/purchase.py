@@ -5,7 +5,7 @@ Zane 2026-11-15：「po网页增加制作采购订单的功能，格式按照这
   零件行（行号、P/N、版本、描述、数量）从这个 PO 带出来；
 - 单价按未税填：PO 上的单价是含税价，÷ (1 + 税率) 四舍五入到分；预览里都能改；
 - 小计 = 数量 × 单价，含税总计 = 总计 × (1 + 税率)，跟样张一样。
-抬头、收货信息、条款放 data/purchase.json；供方（全称 + 地址、电话、税号这些行）存 data/purchase_vendors.json，
+抬头、收货信息、条款放 data/purchase.json；供方（全称 + 地址、联系人电话这些行）存 data/purchase_vendors.json，
 保存一次下次同一家自动带出。都只在 Mac 上，不进公开仓库。做过的采购订单存 data/purchases.json（按订单编号）。
 """
 from __future__ import annotations
@@ -188,6 +188,7 @@ def draft(o: dict, cfg: dict, vendors: list[dict], today: str) -> dict:
         "lines": lines or [{"line": "", "pn": "", "rev": "", "desc": "", "qty": "", "price": "", "price_incl": None}],
         "terms": [t.replace("{no}", f"{cfg['number_prefix']}{po}") for t in cfg["terms"]],
         "po_amount": o.get("amount"),  # PO 上的含税合计，预览里对照用
+        "seal": True,
     }
 
 
@@ -284,6 +285,7 @@ def build(payload, orders_by_key: dict[str, dict], cfg: dict) -> dict:
         "tax_rate": rate, "lines": lines, "qty_total": q,
         "total": money(total), "total_upper": rmb_upper(total), "taxed": money(taxed), "taxed_upper": rmb_upper(taxed),
         "terms": terms,
+        "seal": payload.get("seal") is not False,  # 需方默认盖公章（Zane 11-15），预览里可以去掉
     }
 
 

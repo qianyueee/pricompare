@@ -59,14 +59,18 @@ FAIL_LIMIT, FAIL_WINDOW = 10, 600  # 全站 10 分钟内错 10 次就先停 10 �
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 API_POST = {"/api/edit-login", "/api/edit-logout", "/api/order/update", "/api/order/add", "/api/order/delete",
-            "/api/invoice/save", "/api/purchase/save"}
+            "/api/invoice/save", "/api/purchase/save", "/api/purchase/asset"}
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
 }
-FONT_FILES = {"/fonts/Deng.ttf": "Deng.ttf", "/fonts/Dengb.ttf": "Dengb.ttf"}
+FONT_FILES = {"/fonts/Deng.ttf": "Deng.ttf", "/fonts/Dengb.ttf": "Dengb.ttf", "/fonts/NotoSerifSC-Bold.otf": "NotoSerifSC-Bold.otf"}
+FONT_TYPES = {".ttf": "font/ttf", ".otf": "font/otf"}
+ASSET_KINDS = ("logo", "seal")  # 采购订单的 logo 和公章：只在 Mac 的 data/assets/，网页上传（要编辑权限）
+ASSET_TYPES = {".png": "image/png", ".jpg": "image/jpeg"}
+MAX_ASSET = 3 * 1024 * 1024
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
@@ -313,7 +317,8 @@ class App:
         pcfg = purchase.load_config(self.data)
         plist, pmarks = self.purchases.summary()
         doc["meta"]["purchase"] = {**{k: pcfg[k] for k in ("buyer", "ship_to", "tax_rate", "tbd")},
-                                   "vendors": self.purchases.vendors(), "list": plist}
+                                   "vendors": self.purchases.vendors(), "list": plist,
+                                   "assets": {k: int(p.stat().st_mtime) if (p := self.asset_path(k)) else 0 for k in ASSET_KINDS}}
         for o in doc["orders"]:
             if pmarks.get(o["key"]):
                 o["purchased"] = pmarks[o["key"]]
@@ -376,13 +381,37 @@ class App:
                 self.store.append_history({"at": at, "by": by, "key": doc["key"], "action": "purchase", "no": doc["no"]})
         return saved[doc["no"]]
 
+    def asset_path(self, kind: str) -> Path | None:
+        for ext in ASSET_TYPES:
+            p = self.data / "assets" / f"{kind}{ext}"
+            if p.is_file():
+                return p
+        return None
+
+    def save_asset(self, kind: str, data: bytes) -> None:
+        if kind not in ASSET_KINDS:
+            raise EditError("只能传 logo 或公章")
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            ext = ".png"
+        elif data.startswith(b"\xff\xd8\xff"):
+            ext = ".jpg"
+        else:
+            raise EditError("只收 PNG 或 JPG 图片（公章最好是透明底的 PNG）")
+        d = self.data / "assets"
+        d.mkdir(exist_ok=True)
+        edits.write_bytes_atomic(d / f"{kind}{ext}", data)
+        for other in ASSET_TYPES:
+            if other != ext:
+                (d / f"{kind}{other}").unlink(missing_ok=True)
+
     def purchase_file(self, no: str) -> tuple[str, bytes]:
         doc = self.purchases.load().get(no)
         if not doc:
             raise EditError("找不到这张采购订单", 404)
         cfg = purchase.load_config(self.data)
         short = str(doc.get("seller_short") or "").strip()
-        return f"采购订单-{no}{'-' + short if short else ''}.xlsx", purchase_xlsx.render(doc, cfg)
+        images = {k: p.read_bytes() for k in ASSET_KINDS if (p := self.asset_path(k))}
+        return f"采购订单-{no}{'-' + short if short else ''}.xlsx", purchase_xlsx.render(doc, cfg, images)
 
     def _overrides(self) -> dict:
         try:
@@ -613,6 +642,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.purchase_get(path)
         if path in FONT_FILES:
             return self.font(path)
+        if path.startswith("/assets/") and path[len("/assets/"):] in ASSET_KINDS:
+            if not self.editor():  # 公章图片只给能做采购订单的人
+                return self.send(403, "forbidden", "text/plain; charset=utf-8")
+            p = self.app.asset_path(path[len("/assets/"):])
+            if not p:
+                return self.send(404, "not found", "text/plain; charset=utf-8")
+            return self.send(200, p.read_bytes(), ASSET_TYPES[p.suffix], {"Cache-Control": "private, max-age=2592000"})  # 网址带 ?v=改动时间
         if path.startswith("/static/"):
             return self.static(path[len("/static/"):])
         return self.send(404, "not found", "text/plain; charset=utf-8")
@@ -700,6 +736,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_reply(401, {"error": "需要先登录"})
         if path == "/api/edit-logout":
             return self.json_reply(200, {"ok": True}, {"Set-Cookie": self.cookie_header("", 0, EDIT_COOKIE)})
+        if path == "/api/purchase/asset":
+            return self.upload_asset()
         body = self.read_json()
         if body is None:
             return
@@ -733,6 +771,27 @@ class Handler(BaseHTTPRequestHandler):
         self.app.log_access(f"edit_{rec['action']}", self)
         return self.json_reply(200, {"ok": True, "record": rec})
 
+    def upload_asset(self) -> None:
+        """POST /api/purchase/asset?kind=logo|seal，请求体就是图片本身。"""
+        if not self.editor():
+            return self.json_reply(403, {"error": "需要编辑密码（点右上角「编辑」）"})
+        origin = self.header("origin")
+        if origin and (urlsplit(origin).hostname or "").lower() != self.host:
+            return self.json_reply(403, {"error": "来源不对"})
+        try:
+            n = int(self.header("content-length") or "0")
+        except ValueError:
+            n = -1
+        if not 0 < n <= MAX_ASSET:
+            return self.json_reply(413 if n > MAX_ASSET else 400, {"error": "图片要小于 3 MB"})
+        kind = (parse_qs(urlsplit(self.path).query).get("kind") or [""])[0]
+        try:
+            self.app.save_asset(kind, self.rfile.read(n))
+        except EditError as e:
+            return self.json_reply(e.status, {"error": str(e)})
+        self.app.log_access(f"purchase_asset_{kind}", self)
+        return self.json_reply(200, {"ok": True})
+
     def edit_login(self, body: dict) -> None:
         if self.app.locked_out():
             self.app.log_access("edit_login_locked", self)
@@ -754,7 +813,7 @@ class Handler(BaseHTTPRequestHandler):
         p = self.app.data / "fonts" / FONT_FILES[path]
         if not p.is_file():
             return self.send(404, "not found", "text/plain; charset=utf-8")
-        self.send(200, p.read_bytes(), "font/ttf", {"Cache-Control": "private, max-age=2592000"})
+        self.send(200, p.read_bytes(), FONT_TYPES[p.suffix], {"Cache-Control": "private, max-age=2592000"})
 
     def static(self, name: str) -> None:
         p = (STATIC / name).resolve()

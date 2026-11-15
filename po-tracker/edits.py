@@ -42,6 +42,14 @@ def write_atomic(path: Path, text: str, mode: int = 0o644) -> None:
     os.replace(tmp, path)
 
 
+def write_bytes_atomic(path: Path, data: bytes, mode: int = 0o600) -> None:
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
 def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import struct
 import zipfile
 from io import BytesIO
 from xml.sax.saxutils import escape
@@ -48,7 +49,7 @@ class Styles:
 
     def get(self, size=11, bold=False, color=None, fill=None, border=False, fmt=None, h=None, v="center",
             font=None, wrap=False, indent=0, line=LINE) -> int:
-        """border：True = 四边细线；或 {"l"/"r"/"t"/"b": "thin"/"medium"} 只画这几边。"""
+        """border：True = 四边细线；或 {"l"/"r"/"t"/"b": "thin"/"medium"} 只画这几边，也可以是 ("thin", "FF8C8C8C") 单给这一边颜色。"""
         if isinstance(border, dict):
             border = tuple(sorted((k, v_) for k, v_ in border.items() if v_))
         key = (size, bold, color, fill, border, fmt, h, v, font, wrap, indent, line)
@@ -63,7 +64,12 @@ class Styles:
             sides = dict(border) if isinstance(border, tuple) else {k: "thin" for k in "lrtb"}
             parts = []
             for k, name in (("l", "left"), ("r", "right"), ("t", "top"), ("b", "bottom")):
-                parts.append(f'<{name} style="{sides[k]}"><color rgb="{line}"/></{name}>' if sides.get(k) else f"<{name}/>")
+                side = sides.get(k)
+                if not side:
+                    parts.append(f"<{name}/>")
+                    continue
+                style_, rgb = side if isinstance(side, tuple) else (side, line)
+                parts.append(f'<{name} style="{style_}"><color rgb="{rgb}"/></{name}>')
             bid = self._idx(self.borders, "<border>" + "".join(parts) + "<diagonal/></border>")
         else:
             bid = 0
@@ -110,7 +116,9 @@ class Sheet:
                 if (r, c) not in self.cells:
                     self.put(r, c, None, style)
 
-    def xml(self, widths: list[float], fit_height: int = 0, margins: tuple = (0.4, 0.4, 0.5, 0.5)) -> str:
+    def xml(self, widths: list[float], fit_height: int = 0, margins: tuple = (0.4, 0.4, 0.5, 0.5),
+            footer: str = "", drawing: bool = False) -> str:
+        """footer：页脚（Excel 的 &C 之类代码）；drawing：这个表带图片（package 的 images）。"""
         rows: dict[int, list] = {}
         for (r, c), v in sorted(self.cells.items()):
             rows.setdefault(r, []).append((c, v))
@@ -146,7 +154,9 @@ class Sheet:
                 f'<sheetFormatPr defaultRowHeight="15"/><cols>{cols}</cols><sheetData>{"".join(out)}</sheetData>{merges}'
                 '<printOptions horizontalCentered="1"/>'
                 + ('<pageMargins left="%s" right="%s" top="%s" bottom="%s" header="0.3" footer="0.3"/>' % margins)
-                + f'<pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="{fit_height}"/></worksheet>')
+                + f'<pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="{fit_height}"/>'
+                + (f"<headerFooter><oddFooter>{escape(footer)}</oddFooter></headerFooter>" if footer else "")
+                + ('<drawing r:id="rId1"/>' if drawing else "") + "</worksheet>")
 
 
 def _run(text: str, fmt: dict) -> str:
@@ -280,8 +290,59 @@ def render(inv: dict, cfg: dict) -> bytes:
     return package(sh.xml(widths), st.xml(), "Invoice")
 
 
-def package(sheet_xml: str, styles_xml: str, sheet_name: str) -> bytes:
-    """一个工作表的 .xlsx（打开时让 Excel 重算公式）。"""
+EMU = 12700  # 1 磅
+
+
+def image_size(data: bytes) -> tuple[int, int]:
+    """PNG / JPEG 的像素宽高；认不出来就当正方形。"""
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        return struct.unpack(">II", data[16:24])
+    if data.startswith(b"\xff\xd8"):
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            seg = struct.unpack(">H", data[i + 2:i + 4])[0]
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                return w, h
+            i += 2 + seg
+    return 1, 1
+
+
+def image_ext(data: bytes) -> str:
+    return "png" if data.startswith(b"\x89PNG") else "jpeg"
+
+
+def _drawing(images: list[dict]) -> tuple[str, str]:
+    """图片定在某一格（col/row 从 0 数）再偏移 dx/dy 磅，宽高 w/h 磅；alpha 是不透明度（0–1）。返回 drawing 和它的 rels。"""
+    xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    anchors, rels = [], []
+    for i, im in enumerate(images, 1):
+        cx, cy = round(im["w"] * EMU), round(im["h"] * EMU)
+        alpha = f'<a:alphaModFix amt="{round(im["alpha"] * 100000)}"/>' if im.get("alpha", 1) < 1 else ""
+        anchors.append(
+            f'<xdr:oneCellAnchor><xdr:from><xdr:col>{im["col"]}</xdr:col><xdr:colOff>{round(im.get("dx", 0) * EMU)}</xdr:colOff>'
+            f'<xdr:row>{im["row"]}</xdr:row><xdr:rowOff>{round(im.get("dy", 0) * EMU)}</xdr:rowOff></xdr:from>'
+            f'<xdr:ext cx="{cx}" cy="{cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{i + 1}" name="{escape(im.get("name") or f"图片 {i}")}"/>'
+            '<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>'
+            f'<xdr:blipFill><a:blip r:embed="rId{i}">{alpha}</a:blip><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>'
+            f'<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>'
+            '</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>')
+        rels.append(f'<Relationship Id="rId{i}" Type="{REL}/image" Target="../media/image{i}.{image_ext(im["data"])}"/>')
+    drawing = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="{xdr}" xmlns:a="{a}" xmlns:r="{REL}">'
+               + "".join(anchors) + "</xdr:wsDr>")
+    return drawing, f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">{"".join(rels)}</Relationships>'
+
+
+def package(sheet_xml: str, styles_xml: str, sheet_name: str, images: list[dict] | None = None) -> bytes:
+    """一个工作表的 .xlsx（打开时让 Excel 重算公式）。images 见 _drawing；有图片时 sheet_xml 要用 drawing=True 生成。"""
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml",
@@ -292,7 +353,10 @@ def package(sheet_xml: str, styles_xml: str, sheet_name: str) -> bytes:
                    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
                    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
                    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-                   '</Types>')
+                   + ('<Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/>'
+                      '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+                      if images else "")
+                   + '</Types>')
         z.writestr("_rels/.rels", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">'
                    f'<Relationship Id="rId1" Type="{REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>')
         z.writestr("xl/workbook.xml", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{MAIN}" xmlns:r="{REL}">'
@@ -303,4 +367,12 @@ def package(sheet_xml: str, styles_xml: str, sheet_name: str) -> bytes:
                    f'<Relationship Id="rId2" Type="{REL}/styles" Target="styles.xml"/></Relationships>')
         z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
         z.writestr("xl/styles.xml", styles_xml)
+        if images:
+            drawing, rels = _drawing(images)
+            z.writestr("xl/worksheets/_rels/sheet1.xml.rels", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">'
+                       f'<Relationship Id="rId1" Type="{REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>')
+            z.writestr("xl/drawings/drawing1.xml", drawing)
+            z.writestr("xl/drawings/_rels/drawing1.xml.rels", rels)
+            for i, im in enumerate(images, 1):
+                z.writestr(f"xl/media/image{i}.{image_ext(im['data'])}", im["data"])
     return buf.getvalue()
