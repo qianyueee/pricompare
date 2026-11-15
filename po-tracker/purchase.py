@@ -133,6 +133,13 @@ def find_vendor(vendors: list[dict], short: str) -> dict | None:
     return None
 
 
+def customer_po_text(o: dict, tbd: str) -> str:
+    """客户订单号：没有、或者只写了 TBD 之类（没有一个像样的单号）的，写「待定 (TBD)」。"""
+    raw = str(o.get("customer_po") or "").strip()
+    toks = [t for t in re.split(r"[\s/,，、;；]+", raw.upper()) if len(t) >= 5 and "TBD" not in t]
+    return raw if toks else tbd
+
+
 def price_ex_tax(price_incl, rate) -> float | None:
     if price_incl in (None, ""):
         return None
@@ -173,7 +180,7 @@ def draft(o: dict, cfg: dict, vendors: list[dict], today: str) -> dict:
     return {
         "key": f"{po}|{o.get('supplier') or ''}", "po": po,
         "no": f"{cfg['number_prefix']}{po}", "date": today, "due": str(o.get("due_date") or "")[:10],
-        "customer_po": str(o.get("customer_po") or "").strip() or cfg["tbd"],
+        "customer_po": customer_po_text(o, cfg["tbd"]),
         "seller": {"name": v["name"], "lines": list(v.get("lines") or [])} if v else {"name": "", "lines": []},
         "seller_short": short,
         "ship_to": copy.deepcopy(cfg["ship_to"]),
@@ -328,6 +335,9 @@ class PurchaseStore:
         if short and short != seller["name"] and short not in names:
             names.append(short)
         cur["names"] = names
+        for v in vendors:  # 同一个简称只指一家：以最近这次选的为准
+            if v is not cur and short in (v.get("names") or []):
+                v["names"] = [x for x in v["names"] if x != short]
         write_atomic(self.vendor_path, json.dumps({"version": 1, "vendors": vendors}, ensure_ascii=False, indent=1))
 
     def summary(self) -> tuple[list[dict], dict[str, list[dict]]]:

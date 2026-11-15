@@ -50,6 +50,22 @@ class DraftTest(unittest.TestCase):
                          [("10", "P-1", "2", "200"), ("", "P-2", "1", "200")])
         self.assertIn("PO-90010", " ".join(d["terms"]))
 
+    def test_customer_po(self):
+        self.assertEqual(purchase.customer_po_text({"customer_po": "TBD 3"}, "待定"), "待定")
+        self.assertEqual(purchase.customer_po_text({"customer_po": ""}, "待定"), "待定")
+        self.assertEqual(purchase.customer_po_text({"customer_po": "C-X-01 / TBD"}, "待定"), "C-X-01 / TBD")
+
+    def test_alias_follows_latest_choice(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            st = purchase.PurchaseStore(tmp)
+            st.remember_vendor({"name": "甲公司", "lines": []}, "乙")
+            st.remember_vendor({"name": "乙公司", "lines": ["x"]}, "乙")
+            self.assertEqual([(v["name"], v["names"]) for v in st.vendors()], [("甲公司", []), ("乙公司", ["乙"])])
+            self.assertEqual(purchase.find_vendor(st.vendors(), "乙")["name"], "乙公司")
+        finally:
+            shutil.rmtree(tmp)
+
     def test_seller_short(self):
         self.assertEqual(purchase.seller_short({"supplier": "凯阔"}), "")
         self.assertEqual(purchase.seller_short({"supplier": "兴华"}), "兴华")
