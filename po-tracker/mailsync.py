@@ -1,7 +1,7 @@
 """把 po_sync.py 每小时从 zill@ 邮件抓到的 PO（data/mail_orders.json）合进页面数据。只用 Python 标准库。
 
 Zane 2026-11-15：自动抓取只记录邮件里的原始信息，不自动加备注，不判断状态。所以这里：
-- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：只把新的相关邮件挂上去（下级 vendor 原来没有的补上），别的字段一律不动；
+- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：只把新的相关邮件挂上去（下级 vendor、零件行的 Next Step 原来没有的补上），别的字段一律不动；
 - 都没有的 PO：用邮件里的原始字段加成新的一行，状态先记「已下单」，不带任何备注、待跟进、运单号；
 - 网页上人改的内容（edits.json）在这之后才盖上去，所以永远以人填的为准。
 """
@@ -88,6 +88,25 @@ def _attach(o: dict, mails: list[dict]) -> None:
     o["last_mail_at"] = max([str(o.get("last_mail_at") or ""), *(str(x.get("date") or "") for x in extra)]) or None
 
 
+def _fill_next_step(o: dict, m: dict) -> None:
+    """已有的行里，零件行没写 Next Step 的，按料号从邮件里贴的跟单表补上；写了的不动。"""
+    steps: dict[str, str] = {}
+    for ln in m.get("lines") or []:
+        pn = str(ln.get("pn") or "").strip().upper() if isinstance(ln, dict) else ""
+        if pn and ln.get("next_step"):
+            steps.setdefault(pn, ln["next_step"])
+    if not steps:
+        return
+    lines, changed = [], False
+    for ln in o.get("lines") or []:
+        pn = str(ln.get("pn") or "").strip().upper() if isinstance(ln, dict) else ""
+        if pn in steps and not ln.get("next_step"):
+            ln, changed = {**ln, "next_step": steps[pn]}, True
+        lines.append(ln)
+    if changed:
+        o["lines"] = lines
+
+
 def _clean_mails(m: dict) -> list[dict]:
     return [{k: x[k] for k in MAIL_FIELDS if x.get(k) not in (None, "")} for x in m.get("mails") or [] if isinstance(x, dict)]
 
@@ -105,6 +124,7 @@ def merge(orders: list[dict], mail_orders: list[dict]) -> tuple[list[dict], int]
             _attach(o, mails)
             if m.get("sub_vendor") and not o.get("sub_vendor"):  # 下级 vendor 原来没有才补（开 invoice 用），有了不动
                 o["sub_vendor"] = m["sub_vendor"]
+            _fill_next_step(o, m)
         if hits:
             continue
         new = {k: m[k] for k in RAW_FIELDS if m.get(k) not in (None, "", [])}

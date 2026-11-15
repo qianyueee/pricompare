@@ -103,6 +103,16 @@ class MergeTest(unittest.TestCase):
         self.assertEqual([o.get("sub_vendor") for o in out], ["ABC", "人填的", "ABC"])
         self.assertEqual(n, 1)
 
+    def test_next_step_only_filled_when_missing(self):
+        base = [{"po": "1", "supplier": "凯维", "source": "mail",
+                 "lines": [{"pn": "P-1", "qty": 1}, {"pn": "P-2", "next_step": "人填的"}, {"pn": "P-3"}]}]
+        out, n = mailsync.merge(base, [{"po": "1", "supplier": "凯维",
+                                        "lines": [{"pn": "p-1", "next_step": "STEP-1"}, {"pn": "P-2", "next_step": "STEP-2"}]}])
+        self.assertEqual(n, 0)
+        self.assertEqual([ln.get("next_step") for ln in out[0]["lines"]], ["STEP-1", "人填的", None])
+        self.assertEqual(out[0]["lines"][0]["qty"], 1)
+        self.assertNotIn("next_step", base[0]["lines"][0])  # 传进来的不改
+
     def test_junk_skipped(self):
         out, n = mailsync.merge(BASE, [None, {}, {"po": " "}, "x"])
         self.assertEqual((len(out), n), (3, 0))
