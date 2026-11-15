@@ -46,19 +46,25 @@ class Styles:
             lst.append(xml)
         return lst.index(xml)
 
-    def get(self, size=11, bold=False, color=None, fill=None, border=False, fmt=None, h=None, v="center") -> int:
-        key = (size, bold, color, fill, border, fmt, h, v)
+    def get(self, size=11, bold=False, color=None, fill=None, border=False, fmt=None, h=None, v="center",
+            font=None, wrap=False, indent=0, line=LINE) -> int:
+        """border：True = 四边细线；或 {"l"/"r"/"t"/"b": "thin"/"medium"} 只画这几边。"""
+        if isinstance(border, dict):
+            border = tuple(sorted((k, v_) for k, v_ in border.items() if v_))
+        key = (size, bold, color, fill, border, fmt, h, v, font, wrap, indent, line)
         if key in self.cache:
             return self.cache[key]
         b_xml = "<b/>" if bold else ""
         c_xml = '<color rgb="%s"/>' % color if color else ""
-        font = f'<font>{b_xml}<sz val="{size}"/>{c_xml}<name val="{FONT}"/><family val="2"/></font>'
-        fid = self._idx(self.fonts, font)
+        font_xml = f'<font>{b_xml}<sz val="{size}"/>{c_xml}<name val="{font or FONT}"/><family val="2"/></font>'
+        fid = self._idx(self.fonts, font_xml)
         flid = self._idx(self.fills, f'<fill><patternFill patternType="solid"><fgColor rgb="{fill}"/><bgColor indexed="64"/></patternFill></fill>') if fill else 0
         if border:
-            side = f'<{{0}} style="thin"><color rgb="{LINE}"/></{{0}}>'
-            b = "<border>" + "".join(side.format(s) for s in ("left", "right", "top", "bottom")) + "<diagonal/></border>"
-            bid = self._idx(self.borders, b)
+            sides = dict(border) if isinstance(border, tuple) else {k: "thin" for k in "lrtb"}
+            parts = []
+            for k, name in (("l", "left"), ("r", "right"), ("t", "top"), ("b", "bottom")):
+                parts.append(f'<{name} style="{sides[k]}"><color rgb="{line}"/></{name}>' if sides.get(k) else f"<{name}/>")
+            bid = self._idx(self.borders, "<border>" + "".join(parts) + "<diagonal/></border>")
         else:
             bid = 0
         if fmt is None:
@@ -68,7 +74,9 @@ class Styles:
         else:
             nid = self.numfmts.setdefault(fmt, 164 + len(self.numfmts))
         h_xml = ' horizontal="%s"' % h if h else ""
-        align = f'<alignment{h_xml} vertical="{v}"/>'
+        w_xml = ' wrapText="1"' if wrap else ""
+        i_xml = ' indent="%d"' % indent if indent else ""
+        align = f'<alignment{h_xml} vertical="{v}"{w_xml}{i_xml}/>'
         self.xfs.append(f'<xf numFmtId="{nid}" fontId="{fid}" fillId="{flid}" borderId="{bid}" xfId="0" applyFont="1" '
                         f'applyFill="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1">{align}</xf>')
         self.cache[key] = len(self.xfs) - 1
@@ -102,7 +110,7 @@ class Sheet:
                 if (r, c) not in self.cells:
                     self.put(r, c, None, style)
 
-    def xml(self, widths: list[float]) -> str:
+    def xml(self, widths: list[float], fit_height: int = 0, margins: tuple = (0.4, 0.4, 0.5, 0.5)) -> str:
         rows: dict[int, list] = {}
         for (r, c), v in sorted(self.cells.items()):
             rows.setdefault(r, []).append((c, v))
@@ -113,12 +121,18 @@ class Sheet:
                 ref = f"{col(c)}{r}"
                 s = f' s="{style}"' if style else ""
                 if formula is not None:
+                    if isinstance(value, str):  # 文字结果的公式（如金额大写），带上算好的文字
+                        cs.append(f'<c r="{ref}"{s} t="str"><f>{escape(formula)}</f><v>{escape(value)}</v></c>')
+                        continue
                     cached = f"<v>{value}</v>" if isinstance(value, (int, float)) and not isinstance(value, bool) else ""
                     cs.append(f'<c r="{ref}"{s}><f>{escape(formula)}</f>{cached}</c>')
                 elif value is None or value == "":
                     cs.append(f'<c r="{ref}"{s}/>')
                 elif isinstance(value, (int, float)) and not isinstance(value, bool):
                     cs.append(f'<c r="{ref}"{s}><v>{value}</v></c>')
+                elif isinstance(value, list):  # 一格里几段不同字体，如 [("公司名", {"b": 1, "sz": 9.5}), ("\n地址…", {"sz": 9.5})]
+                    runs = "".join(_run(t, fmt) for t, fmt in value)
+                    cs.append(f'<c r="{ref}"{s} t="inlineStr"><is>{runs}</is></c>')
                 else:
                     cs.append(f'<c r="{ref}"{s} t="inlineStr"><is><t xml:space="preserve">{escape(str(value))}</t></is></c>')
             ht = f' ht="{self.heights[r]}" customHeight="1"' if r in self.heights else ""
@@ -131,8 +145,15 @@ class Sheet:
                 '<sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews>'
                 f'<sheetFormatPr defaultRowHeight="15"/><cols>{cols}</cols><sheetData>{"".join(out)}</sheetData>{merges}'
                 '<printOptions horizontalCentered="1"/>'
-                '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>'
-                '<pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="0"/></worksheet>')
+                + ('<pageMargins left="%s" right="%s" top="%s" bottom="%s" header="0.3" footer="0.3"/>' % margins)
+                + f'<pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="{fit_height}"/></worksheet>')
+
+
+def _run(text: str, fmt: dict) -> str:
+    b = "<b/>" if fmt.get("b") else ""
+    color = '<color rgb="%s"/>' % fmt["color"] if fmt.get("color") else ""
+    rpr = f'<rPr>{b}<sz val="{fmt.get("sz", 11)}"/>{color}<rFont val="{fmt.get("font", FONT)}"/><family val="2"/></rPr>'
+    return f'<r>{rpr}<t xml:space="preserve">{escape(text)}</t></r>'
 
 
 def _md_y(iso: str) -> str:
@@ -256,6 +277,11 @@ def render(inv: dict, cfg: dict) -> bytes:
         sh.put(r, 0, ln, s)
         sh.merge(r, 0, r, last, s)
 
+    return package(sh.xml(widths), st.xml(), "Invoice")
+
+
+def package(sheet_xml: str, styles_xml: str, sheet_name: str) -> bytes:
+    """一个工作表的 .xlsx（打开时让 Excel 重算公式）。"""
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml",
@@ -270,10 +296,11 @@ def render(inv: dict, cfg: dict) -> bytes:
         z.writestr("_rels/.rels", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">'
                    f'<Relationship Id="rId1" Type="{REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>')
         z.writestr("xl/workbook.xml", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{MAIN}" xmlns:r="{REL}">'
-                   f'<sheets><sheet name="Invoice" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>')
+                   f'<sheets><sheet name="{escape(sheet_name, {chr(34): "&quot;"})}" sheetId="1" r:id="rId1"/></sheets>'
+                   '<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>')
         z.writestr("xl/_rels/workbook.xml.rels", f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">'
                    f'<Relationship Id="rId1" Type="{REL}/worksheet" Target="worksheets/sheet1.xml"/>'
                    f'<Relationship Id="rId2" Type="{REL}/styles" Target="styles.xml"/></Relationships>')
-        z.writestr("xl/worksheets/sheet1.xml", sh.xml(widths))
-        z.writestr("xl/styles.xml", st.xml())
+        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        z.writestr("xl/styles.xml", styles_xml)
     return buf.getvalue()

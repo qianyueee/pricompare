@@ -7,6 +7,7 @@
 <title>PO 跟单</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="/static/app.css" />
+<link rel="stylesheet" href="/static/purchase.css" />
 </head>
 <body>
 <header class="top">
@@ -141,6 +142,17 @@
   <p class="inv-msg" id="inv-msg" role="status"></p>
   <div class="inv-sheet" id="inv-sheet"></div>
 </section>
+<section class="inv-view pur-view" id="pur-view" hidden>
+  <div class="inv-bar">
+    <button type="button" class="btn" id="pur-back">← 返回列表</button>
+    <span class="inv-spacer"></span>
+    <label class="inv-by">你的名字 <input id="pur-by" maxlength="20" /></label>
+    <button type="button" class="btn" id="pur-print-btn">打印 / 存 PDF</button>
+    <button type="button" class="btn btn-primary" id="pur-xlsx">导出 Excel</button>
+  </div>
+  <p class="inv-msg" id="pur-msg" role="status"></p>
+  <div class="pur-sheet" id="pur-sheet"></div>
+</section>
 <div class="inv-print" id="inv-print"></div>
 
 <dialog id="past-dialog" class="dlg dlg-wide" aria-labelledby="past-title">
@@ -154,5 +166,6 @@
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="/static/app.js"></script>
+<script src="/static/purchase.js"></script>
 </body>
 </html>

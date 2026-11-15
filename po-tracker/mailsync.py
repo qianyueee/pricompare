@@ -1,7 +1,7 @@
 """把 po_sync.py 每小时从 zill@ 邮件抓到的 PO（data/mail_orders.json）合进页面数据。只用 Python 标准库。
 
 Zane 2026-11-15：自动抓取只记录邮件里的原始信息，不自动加备注，不判断状态。所以这里：
-- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：只把新的相关邮件挂上去（下级 vendor、零件行的 Next Step 原来没有的补上），别的字段一律不动；
+- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：只把新的相关邮件挂上去（下级 vendor、零件行的 Next Step 和客户行号原来没有的补上），别的字段一律不动；
 - 都没有的 PO：用邮件里的原始字段加成新的一行，状态先记「已下单」，不带任何备注、待跟进、运单号；
 - 网页上人改的内容（edits.json）在这之后才盖上去，所以永远以人填的为准。
 """
@@ -12,7 +12,8 @@ import re
 # 新单只收这些原始字段；status_note / open_issues / doubts / tracking 之类的判断一律不要
 RAW_FIELDS = ("po", "aliases", "supplier", "sub_vendor", "buyer_entity", "customer", "customer_po", "end_user", "order_date",
               "due_date", "due_text", "customer_due", "amount", "currency", "tax", "mails", "last_mail_at")
-LINE_FIELDS = ("pn", "rev", "desc", "qty", "unit_price", "amount", "next_step")  # next_step：邮件里贴的跟单表原样抄的
+LINE_FIELDS = ("pn", "rev", "desc", "qty", "unit_price", "amount", "next_step", "customer_line")  # 后两个：邮件里贴的跟单表原样抄的
+FILL_LINE_FIELDS = ("next_step", "customer_line")  # 已有的行里零件行没写的，按料号从邮件补上
 MAIL_FIELDS = ("folder", "uid", "date", "from", "subject")
 NEW_STATUS = "已下单"
 
@@ -88,20 +89,23 @@ def _attach(o: dict, mails: list[dict]) -> None:
     o["last_mail_at"] = max([str(o.get("last_mail_at") or ""), *(str(x.get("date") or "") for x in extra)]) or None
 
 
-def _fill_next_step(o: dict, m: dict) -> None:
-    """已有的行里，零件行没写 Next Step 的，按料号从邮件里贴的跟单表补上；写了的不动。"""
-    steps: dict[str, str] = {}
+def _fill_lines(o: dict, m: dict) -> None:
+    """已有的行里，零件行没写 Next Step / 客户行号的，按料号从邮件里贴的跟单表补上；写了的不动。"""
+    found: dict[str, dict] = {}
     for ln in m.get("lines") or []:
         pn = str(ln.get("pn") or "").strip().upper() if isinstance(ln, dict) else ""
-        if pn and ln.get("next_step"):
-            steps.setdefault(pn, ln["next_step"])
-    if not steps:
+        if pn:
+            for f in FILL_LINE_FIELDS:
+                if ln.get(f) not in (None, ""):
+                    found.setdefault(pn, {}).setdefault(f, ln[f])
+    if not found:
         return
     lines, changed = [], False
     for ln in o.get("lines") or []:
         pn = str(ln.get("pn") or "").strip().upper() if isinstance(ln, dict) else ""
-        if pn in steps and not ln.get("next_step"):
-            ln, changed = {**ln, "next_step": steps[pn]}, True
+        add = {f: v for f, v in found.get(pn, {}).items() if ln.get(f) in (None, "")}
+        if add:
+            ln, changed = {**ln, **add}, True
         lines.append(ln)
     if changed:
         o["lines"] = lines
@@ -124,7 +128,7 @@ def merge(orders: list[dict], mail_orders: list[dict]) -> tuple[list[dict], int]
             _attach(o, mails)
             if m.get("sub_vendor") and not o.get("sub_vendor"):  # 下级 vendor 原来没有才补（开 invoice 用），有了不动
                 o["sub_vendor"] = m["sub_vendor"]
-            _fill_next_step(o, m)
+            _fill_lines(o, m)
         if hits:
             continue
         new = {k: m[k] for k in RAW_FIELDS if m.get(k) not in (None, "", [])}

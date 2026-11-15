@@ -52,6 +52,15 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - 抬头、电话、邮箱、客户联系人、地址放 `data/invoice.json`（只在 Mac 上，**不要提交到这个公开仓库**），格式见 `deploy/invoice.example.json`；也能在里面改费率（`tiers`）、供应商英文名和等级（`vendors`）。
 - 接口：`POST /api/invoice/save {by, invoice: {no, date, contact, usd_rate, rows: [{key, vendor, done, amount, rate, with_amount}]}}`、`GET /api/invoice/xlsx?no=…`。
 
+## 做采购订单（Zane 2026-11-15）
+
+- 展开一个 PO →「做采购订单」（要编辑权限）→ 预览，版式照 Zane 11-15 给的样张（凯阔给供方的采购订单），字体全用等线。都能改：订单编号（默认 `PO-` + PO 号）、订单日期（默认今天）、交付日期（默认供应商交期）、客户订单号（默认客户 PO，没有写「待定 (TBD)」）、供方、收货信息、零件行（行号、P/N、版本、描述、数量、单价，可加行、去掉）、税率、条款。
+- **单价按未税填**：Tony 的 PO 价都是含税价，所以带出来的单价 = PO 上的含税单价 ÷ (1 + 税率)，四舍五入到分（预览里每行下面标着 PO 上的含税单价，可以直接改成供方报的未税价）。小计 = 数量 × 单价，含税总计 = 总计 × (1 + 税率)；PO 上的含税金额跟算出来的不一样时预览里会提示差多少。
+- 供方默认找下级 vendor（没有就用供应商；供应商是凯阔又没写下级的空着）。存过的供方（全称 + 地址电话税号这些行）记在 `data/purchase_vendors.json`，简称记进 `names`，下次同一家自动带出。
+- 「导出 Excel」「打印 / 存 PDF」都会先保存到 `data/purchases.json`（按订单编号，同号再存就是改这张），PO 上标「采购订单」，跟进记录里记一条。再点同一个 PO 打开的是上次存的那张。Excel 里小计、合计、含税总计、大写都是公式（大写用 TEXT 的 [DBNum2]），打印版用服务器算好的数。
+- 抬头、收货信息、税率、条款放 `data/purchase.json`（只在 Mac 上，**不要提交到这个公开仓库**），格式见 `deploy/purchase.example.json`；条款里的 `{no}` 换成订单编号。
+- 零件行的客户行号（`customer_line`）总表里有；邮件来的单由 po_sync 从邮件里贴的跟单表原样抄。
+
 ## 导入跟单总表（起点数据）
 
 ```

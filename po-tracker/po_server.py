@@ -15,6 +15,8 @@
 - 在网页上改东西要另一个「编辑密码」（查看密码 Tony 也有）：python3 po_server.py set-edit-password --data <数据目录>
   本机直接访问不用。改动记在 data/history.jsonl，页面上显示成「跟进记录」。
 - 开 Invoice（要编辑权限）：勾 PO → 预览 → 导出 Excel / 打印，见 invoice.py；开过的存 data/invoices.json，抬头地址在 data/invoice.json。
+- 做采购订单（要编辑权限）：展开一个 PO →「做采购订单」→ 预览 → 导出 Excel / 打印，见 purchase.py；做过的存 data/purchases.json，
+  抬头、收货信息、条款在 data/purchase.json，供方资料记在 data/purchase_vendors.json。
 - 访问记录：data/access/YYYY-MM.jsonl（打开页面、登录成功/失败、编辑登录）。
 """
 from __future__ import annotations
@@ -28,6 +30,7 @@ import hmac
 import html
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -35,12 +38,14 @@ import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import edits
 import invoice
 import invoice_xlsx
 import mailsync
+import purchase
+import purchase_xlsx
 from edits import EditError, write_atomic
 
 HERE = Path(__file__).resolve().parent
@@ -54,13 +59,14 @@ FAIL_LIMIT, FAIL_WINDOW = 10, 600  # 全站 10 分钟内错 10 次就先停 10 �
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 API_POST = {"/api/edit-login", "/api/edit-logout", "/api/order/update", "/api/order/add", "/api/order/delete",
-            "/api/invoice/save"}
+            "/api/invoice/save", "/api/purchase/save"}
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
 }
+FONT_FILES = {"/fonts/Deng.ttf": "Deng.ttf", "/fonts/Dengb.ttf": "Dengb.ttf"}
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
@@ -124,6 +130,7 @@ class App:
         self.lock = threading.Lock()
         self.store = edits.Store(data)
         self.invoices = invoice.InvoiceStore(data)
+        self.purchases = purchase.PurchaseStore(data)
         self.fails: list[float] = []
 
     def _session_key(self) -> bytes:
@@ -303,6 +310,13 @@ class App:
             o["inv"] = {**invoice.vendor_defaults(cfg, o.get("supplier"), o.get("sub_vendor")), "done": invoice.done_date(o)}
             if marks.get(o["key"]):
                 o["invoiced"] = marks[o["key"]]
+        pcfg = purchase.load_config(self.data)
+        plist, pmarks = self.purchases.summary()
+        doc["meta"]["purchase"] = {**{k: pcfg[k] for k in ("buyer", "ship_to", "tax_rate", "tbd")},
+                                   "vendors": self.purchases.vendors(), "list": plist}
+        for o in doc["orders"]:
+            if pmarks.get(o["key"]):
+                o["purchased"] = pmarks[o["key"]]
 
     def save_invoice(self, by: str, payload) -> dict:
         by = edits.clean_name(by)
@@ -327,6 +341,48 @@ class App:
             raise EditError("找不到这张 invoice", 404)
         cfg = invoice.load_config(self.data)
         return f"Invoice_{no}.xlsx", invoice_xlsx.render(invoice.fill_tiers(inv, cfg), cfg)
+
+    # ---- 做采购订单（purchase.py）：只给有编辑权限的人
+    def purchase_draft(self, key: str) -> dict:
+        """预览要的内容：这个 PO 做过采购订单就拿最近存的那张，没做过就按 PO 带出默认值。"""
+        _meta, orders, _ed = self._merged()
+        o = self._find(orders, key)
+        cfg = purchase.load_config(self.data)
+        fresh = purchase.draft(o, cfg, self.purchases.vendors(), dt.date.today().isoformat())
+        saved = [d for d in self.purchases.load().values() if d.get("key") == key]
+        if not saved:
+            return {"doc": fresh, "saved": False}
+        doc = max(saved, key=lambda d: (str(d.get("date") or ""), str(d.get("saved_at") or "")))
+        incl = {str(ln.get("pn") or "").upper(): ln.get("price_incl") for ln in fresh["lines"] if ln.get("pn")}
+        lines = [{**ln, "price_incl": incl.get(str(ln.get("pn") or "").upper())} for ln in doc.get("lines") or []]
+        return {"doc": {**doc, "lines": lines, "seller_short": fresh["seller_short"], "po_amount": fresh["po_amount"]}, "saved": True}
+
+    def save_purchase(self, by: str, payload) -> dict:
+        by = edits.clean_name(by)
+        with self.store.lock, self.purchases.lock:
+            meta, orders, _ed = self._merged()
+            if "edit_error" in meta:
+                raise EditError(meta["edit_error"], 500)
+            by_key = {edits.order_key(o): o for o in orders}
+            doc = purchase.build(payload, by_key, purchase.load_config(self.data))
+            saved = self.purchases.load()
+            old = saved.get(doc["no"])
+            short = purchase.seller_short(by_key[doc["key"]])
+            at = edits.now_iso()
+            saved[doc["no"]] = {**doc, "seller_short": short, "saved_at": at, "saved_by": by}
+            self.purchases.save(saved)
+            self.purchases.remember_vendor(doc["seller"], short)
+            if not old or old.get("key") != doc["key"]:
+                self.store.append_history({"at": at, "by": by, "key": doc["key"], "action": "purchase", "no": doc["no"]})
+        return saved[doc["no"]]
+
+    def purchase_file(self, no: str) -> tuple[str, bytes]:
+        doc = self.purchases.load().get(no)
+        if not doc:
+            raise EditError("找不到这张采购订单", 404)
+        cfg = purchase.load_config(self.data)
+        short = str(doc.get("seller_short") or "").strip()
+        return f"采购订单-{no}{'-' + short if short else ''}.xlsx", purchase_xlsx.render(doc, cfg)
 
     def _overrides(self) -> dict:
         try:
@@ -463,7 +519,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "private, no-store")
+        if "Cache-Control" not in (headers or {}):
+            self.send_header("Cache-Control", "private, no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
@@ -552,9 +609,28 @@ class Handler(BaseHTTPRequestHandler):
             self.app.log_access("invoice_xlsx", self)
             return self.send(200, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              {"Content-Disposition": f'attachment; filename="{name}"'})
+        if path in ("/api/purchase/draft", "/api/purchase/xlsx"):
+            return self.purchase_get(path)
+        if path in FONT_FILES:
+            return self.font(path)
         if path.startswith("/static/"):
             return self.static(path[len("/static/"):])
         return self.send(404, "not found", "text/plain; charset=utf-8")
+
+    def purchase_get(self, path: str) -> None:
+        if not self.editor():
+            return self.json_reply(403, {"error": "需要编辑密码"})
+        q = parse_qs(urlsplit(self.path).query)
+        try:
+            if path == "/api/purchase/draft":
+                return self.json_reply(200, self.app.purchase_draft((q.get("key") or [""])[0]))
+            name, data = self.app.purchase_file((q.get("no") or [""])[0])
+        except EditError as e:
+            return self.json_reply(e.status, {"error": str(e)})
+        self.app.log_access("purchase_xlsx", self)
+        ascii_name = re.sub(r"[^A-Za-z0-9_.-]", "", (q.get("no") or [""])[0]) + ".xlsx"  # 老浏览器只认这个
+        return self.send(200, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         {"Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
 
     def do_POST(self):
         path = urlsplit(self.path).path
@@ -631,6 +707,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.edit_login(body)
         if not self.editor():
             return self.json_reply(403, {"error": "需要编辑密码（点右上角「编辑」）"})
+        if path == "/api/purchase/save":
+            try:
+                doc = self.app.save_purchase(body.get("by"), body.get("purchase"))
+            except EditError as e:
+                return self.json_reply(e.status, {"error": str(e)})
+            self.app.log_access("purchase_save", self)
+            return self.json_reply(200, {"ok": True, "purchase": doc})
         if path == "/api/invoice/save":
             try:
                 inv = self.app.save_invoice(body.get("by"), body.get("invoice"))
@@ -665,6 +748,13 @@ class Handler(BaseHTTPRequestHandler):
         self.app.log_access("edit_login_ok", self)
         token = make_session(self.app.key, stored)
         return self.json_reply(200, {"ok": True}, {"Set-Cookie": self.cookie_header(token, SESSION_MAX_AGE, EDIT_COOKIE)})
+
+    def font(self, path: str) -> None:
+        """采购订单打印用的等线字体：微软的字体不能放进公开仓库，只在 Mac 的 data/fonts/ 里有；没有就 404，浏览器用本机字体。"""
+        p = self.app.data / "fonts" / FONT_FILES[path]
+        if not p.is_file():
+            return self.send(404, "not found", "text/plain; charset=utf-8")
+        self.send(200, p.read_bytes(), "font/ttf", {"Cache-Control": "private, max-age=2592000"})
 
     def static(self, name: str) -> None:
         p = (STATIC / name).resolve()

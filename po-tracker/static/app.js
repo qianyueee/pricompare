@@ -40,6 +40,7 @@ const state = {
   pick: new Set(),
   prevLevel: null,
   inv: null, // 预览里的 invoice 草稿
+  pur: null, // 预览里的采购订单草稿（purchase.js）
 };
 
 // ---------------------------------------------------------------- 小工具
@@ -304,6 +305,7 @@ function historyHtml(o) {
     const what = [];
     if (h.action === 'add') what.push('新增这个 PO');
     if (h.action === 'invoice') what.push(`开进 invoice <b>${esc(h.no)}</b>`);
+    if (h.action === 'purchase') what.push(`做采购订单 <b>${esc(h.no)}</b>`);
     for (const [f, [a, b]] of Object.entries(h.changes || {})) {
       what.push(`${FIELD_LABEL[f] || f} ${esc(fmtValue(f, a))} → <b>${esc(fmtValue(f, b))}</b>`);
     }
@@ -389,6 +391,7 @@ function detail(o) {
   add('下级 vendor', o.sub_vendor);
   add('旧号', (o.aliases || []).join('、'));
   add('已开票', (o.invoiced || []).map((x) => `${x.no}（${fmtDay(x.date)}）`).join('、'));
+  add('采购订单', (o.purchased || []).map((x) => `${x.no}（${fmtDay(x.date)}）`).join('、'));
   add('最近邮件', fmtDateTime(o.last_mail_at));
   add('手动新增', o.source === 'manual' ? [o.created_by, fmtDateTime(o.created_at)].filter(Boolean).join(' ') : '');
   const fixed = (o.overridden || []).length ? `<span class="tag-fixed" title="${esc(o.overridden.join('、'))}">手工更正过</span>` : '';
@@ -416,7 +419,7 @@ function detail(o) {
         <h3>跟进记录</h3>${historyHtml(o)}
       </div>
       <div class="parts">
-        <h3>零件明细（${lines.length} 行）</h3>${linesHtml}
+        <h3>零件明细（${lines.length} 行）${canEdit ? `<button type="button" class="btn pur-make" data-pur="${esc(rowKey(o))}" title="按这个 PO 做给供方的采购订单（照样张的版式）">${(o.purchased || []).length ? '改采购订单' : '做采购订单'}</button>` : ''}</h3>${linesHtml}
         ${mailsHtml}
       </div>
     </div>`;

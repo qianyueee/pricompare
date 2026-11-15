@@ -107,9 +107,11 @@ class MergeTest(unittest.TestCase):
         base = [{"po": "1", "supplier": "凯维", "source": "mail",
                  "lines": [{"pn": "P-1", "qty": 1}, {"pn": "P-2", "next_step": "人填的"}, {"pn": "P-3"}]}]
         out, n = mailsync.merge(base, [{"po": "1", "supplier": "凯维",
-                                        "lines": [{"pn": "p-1", "next_step": "STEP-1"}, {"pn": "P-2", "next_step": "STEP-2"}]}])
+                                        "lines": [{"pn": "p-1", "next_step": "STEP-1", "customer_line": 10},
+                                                  {"pn": "P-2", "next_step": "STEP-2"}]}])
         self.assertEqual(n, 0)
         self.assertEqual([ln.get("next_step") for ln in out[0]["lines"]], ["STEP-1", "人填的", None])
+        self.assertEqual([ln.get("customer_line") for ln in out[0]["lines"]], [10, None, None])
         self.assertEqual(out[0]["lines"][0]["qty"], 1)
         self.assertNotIn("next_step", base[0]["lines"][0])  # 传进来的不改
 

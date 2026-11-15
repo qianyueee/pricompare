@@ -1,0 +1,85 @@
+/* ---------- 做采购订单：预览（版式照 Zane 11-15 给的样张，字体全用等线） ---------- */
+body.purchasing > :not(.pur-view):not(.inv-print):not(.toast):not(dialog):not(.top) { display: none !important; }
+body.purchasing .top-actions { display: none; }
+
+.pur-make { margin-left: 8px; height: 26px; padding: 0 10px; font-size: 12px; vertical-align: middle; }
+
+/* 等线：Mac 上 data/fonts/ 有字体文件就用它（服务器 /fonts/…），没有就用本机装的等线，再没有用苹方 */
+@font-face { font-family: "PO DengXian"; src: url("/fonts/Deng.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "PO DengXian"; src: url("/fonts/Dengb.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+.pur-sheet, .pur-doc { font-family: "PO DengXian", "DengXian", "等线", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.pur-sheet { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 22px 24px; max-width: 980px; }
+.pur-hd { border-bottom: 2px solid var(--text); padding-bottom: 6px; }
+.pur-co { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+.pur-ln { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.pur-title { text-align: center; font-size: 20px; font-weight: 600; letter-spacing: 0.3em; margin: 14px 0 12px; }
+
+.pur-sheet input, .pur-sheet textarea {
+  width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--card); color: var(--text); font: inherit; font-size: 13px;
+}
+.pur-sheet input { height: 30px; }
+.pur-sheet textarea { resize: vertical; line-height: 1.5; margin-top: 4px; }
+.pur-sheet input.num { text-align: right; }
+.pur-sheet input.rate { width: 52px; height: 26px; margin: 0 2px; display: inline-block; }
+.pur-sheet input.need { border-color: var(--u-overdue); }
+
+.pur-info { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+.pur-info td { border: 1px solid var(--line); padding: 6px 8px; vertical-align: top; }
+.pur-info td.k { width: 14%; color: var(--muted); padding-top: 11px; }
+
+.pur-items { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 14px; min-width: 860px; }
+.pur-items th { font-weight: 600; font-size: 12px; padding: 6px 4px; border: 1px solid var(--line); background: var(--hover); line-height: 1.35; }
+.pur-items th .th-sub { font-weight: 400; color: var(--muted); }
+.pur-items td { border: 1px solid var(--line); padding: 4px; vertical-align: top; }
+.pur-items td.c { text-align: center; vertical-align: middle; }
+.pur-items td.num { text-align: right; white-space: nowrap; vertical-align: middle; }
+.pur-items th:nth-child(1), .pur-items th:nth-child(2) { width: 50px; }
+.pur-items th:nth-child(3) { width: 120px; }
+.pur-items th:nth-child(4) { width: 52px; }
+.pur-items th:nth-child(6) { width: 70px; }
+.pur-items th:nth-child(7), .pur-items th:nth-child(8) { width: 110px; }
+.pur-items th:nth-child(9) { width: 44px; }
+.pur-items .btn-link { margin: 0; }
+.pur-items tr.tot td { background: var(--hover); vertical-align: middle; padding: 8px 6px; }
+.pur-items td.pur-add { border-left: 0; border-right: 0; padding: 6px 2px; }
+.pur-hint { font-size: 11px; color: var(--muted); text-align: right; margin-top: 2px; white-space: nowrap; }
+.pur-cmp { font-size: 12px; margin: 8px 0 0; min-height: 1em; color: var(--warn); }
+.pur-terms { display: block; margin-top: 12px; font-size: 12px; color: var(--muted); }
+.pur-terms textarea { color: var(--text); font-size: 13px; }
+
+/* 打印：跟样张一样的 A4 单据 */
+.pur-doc { color: #111; font-size: 9.5pt; padding: 0 1.5pt; }  /* 留一点边，表格最右边那条线不被裁掉 */
+.pur-doc .pur-hd { border-bottom: 1.5pt solid #111; padding-bottom: 4.6pt; }
+.pur-doc .pur-co { font-size: 17pt; line-height: 1.25; margin: 0 0 4.5pt; color: #111; }
+.pur-doc .pur-ln { font-size: 7.5pt; color: #111; }
+.pur-doc .pur-title { font-size: 15pt; margin: 10.4pt 0 9pt; }
+.pur-doc table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.pur-doc .pi td { border: 0.75pt solid #333; padding: 3.75pt 5.25pt; line-height: 1.55; vertical-align: top; }
+.pur-doc .pi td.k { width: 14%; }
+.pur-doc .pi td.v { width: 36%; }
+.pur-doc .pt { margin-top: 9pt; border: 1.125pt solid #111; }
+.pur-doc .pt th, .pur-doc .pt td { border: 0.75pt solid #333; text-align: center; vertical-align: middle; }
+.pur-doc .pt th { font-weight: 400; font-size: 9pt; line-height: 1.45; height: 35.8pt; padding: 2pt; border-top: 1.125pt solid #111; }
+.pur-doc .pt td.r { font-size: 7.5pt; height: 26.6pt; padding: 2pt 4pt; }
+.pur-doc .pt td.d { text-align: left; }
+.pur-doc .pt td.n { text-align: right; }
+.pur-doc .pt tr.t1 td, .pur-doc .pt tr.t2 td { font-weight: 700; font-size: 9pt; height: 42pt; border-top: 1.125pt solid #111; padding: 2pt 5.25pt; line-height: 1.45; }
+.pur-doc .pt td.cap { text-align: left; }
+.pur-doc .pt td.lb { padding: 2pt 1pt; }
+.pur-doc .pt td.amt { text-align: right; padding-right: 4.5pt; }
+.pur-doc .pterms { margin-top: 10.4pt; border: 0.75pt solid #333; padding: 6pt 7.5pt; font-size: 8pt; line-height: 1.6; }
+.pur-doc .pterms .h { font-weight: 700; margin-bottom: 3pt; }
+.pur-doc .pterms ol { margin: 0; padding-left: 16.5pt; }
+
+@media print {
+  .inv-print .pur-doc { font-size: 9.5pt; }
+  .pur-doc tr { page-break-inside: avoid; }
+}
+
+@media (max-width: 760px) {
+  .pur-sheet { padding: 14px 12px; }
+  .pur-info td.k { width: 22%; }
+  .pur-info tr td { display: block; width: auto !important; border-bottom: 0; }
+  .pur-info tr:last-child td:last-child { border-bottom: 1px solid var(--line); }
+}
