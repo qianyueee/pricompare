@@ -27,7 +27,7 @@ class MergeTest(unittest.TestCase):
         m = {"po": "44400", "supplier": "华晨", "due_date": "2026-12-01", "due_text": "12/1", "amount": 300,
              "status": "已确认", "status_note": "华晨回 confirmed", "open_issues": ["没回"], "doubts": ["?"],
              "tracking": "123", "note": "x", "updated_at": "…",
-             "lines": [{"pn": "P-1", "qty": 2, "unit_price": 150, "note": "不要"}],
+             "lines": [{"pn": "P-1", "qty": 2, "unit_price": 150, "next_step": "STEP-1", "note": "不要"}],
              "mails": [mail(20, "2026-11-14T09:00:00+09:00", "PO 44400 Due 12/1") | {"body": "不要"}]}
         out, n = mailsync.merge(BASE, [m])
         self.assertEqual(n, 1)
@@ -37,7 +37,7 @@ class MergeTest(unittest.TestCase):
                          ("mail", True, "2026-12-01", "12/1", 300))
         for k in ("status_note", "open_issues", "doubts", "tracking", "note", "updated_at"):
             self.assertNotIn(k, o)
-        self.assertEqual(o["lines"], [{"pn": "P-1", "qty": 2, "unit_price": 150}])
+        self.assertEqual(o["lines"], [{"pn": "P-1", "qty": 2, "unit_price": 150, "next_step": "STEP-1"}])
         self.assertEqual(o["mails"], [mail(20, "2026-11-14T09:00:00+09:00", "PO 44400 Due 12/1")])
 
     def test_existing_po_only_gets_new_mails(self):

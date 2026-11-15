@@ -36,7 +36,8 @@
   <select id="supplier" aria-label="供应商"></select>
   <select id="sort" aria-label="排序">
     <option value="urgency">按紧急程度</option>
-    <option value="due">按交期（早→晚）</option>
+    <option value="due">按供应商交期（早→晚）</option>
+    <option value="cdue">按客户交期（早→晚）</option>
     <option value="order">按下单日期（新→旧）</option>
     <option value="po">按 PO 号</option>
     <option value="amount">按金额（大→小）</option>
@@ -49,11 +50,13 @@
     <table class="grid" id="grid">
       <thead>
         <tr>
-          <th class="c-due" data-sort="due">交期</th>
+          <th class="c-due" data-sort="due">供应商交期</th>
           <th class="c-po" data-sort="po">PO</th>
           <th class="c-sup">供应商</th>
           <th class="c-status">状态</th>
-          <th class="c-cust">客户 PO / 下单人</th>
+          <th class="c-cust">客户 PO / End User</th>
+          <th class="c-cdue" data-sort="cdue">客户交期</th>
+          <th class="c-next">Next Step</th>
           <th class="c-lines">零件</th>
           <th class="c-amt" data-sort="amount">金额</th>
           <th class="c-ord" data-sort="order">下单</th>

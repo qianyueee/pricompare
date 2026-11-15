@@ -180,6 +180,9 @@ tr.row.u-done td { color: var(--muted); }
 .c-status { min-width: 150px; max-width: 240px; }
 .c-cust { min-width: 150px; }
 .grid td.c-cust > span { display: block; }
+.eu { font-size: 13px; }
+.c-cdue { width: 76px; white-space: nowrap; }
+.c-next { min-width: 80px; max-width: 160px; }
 .c-lines { min-width: 120px; }
 .c-amt { width: 110px; text-align: right; white-space: nowrap; }
 .grid th.c-amt { text-align: right; }
@@ -406,6 +409,10 @@ table.past .num { text-align: right; }
 @media (max-width: 1180px) {
   .c-lines, .c-ord { display: none; }
 }
+@media (max-width: 960px) and (min-width: 761px) {
+  .c-sup { display: none; }
+  .po-sup { display: block; color: var(--muted); font-size: 12px; }
+}
 
 /* ---------- 手机：一行变一张卡片 ---------- */
 @media (max-width: 760px) {
@@ -424,7 +431,7 @@ table.past .num { text-align: right; }
   .grid thead { display: none; }
   .grid tr.row {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "po due" "status amt" "cust cust";
+    grid-template-areas: "po due" "status amt" "cust cust" "cdue cdue" "next next";
     gap: 2px 12px; margin-bottom: 10px; padding: 12px 14px 12px 18px;
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
     box-shadow: inset 4px 0 0 var(--bar, transparent);
@@ -442,6 +449,11 @@ table.past .num { text-align: right; }
   .grid tr.row .c-amt { grid-area: amt; }
   .grid tr.row .c-cust { grid-area: cust; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
   .grid td.c-cust > span { display: inline; }
+  .grid tr.row .c-cdue { grid-area: cdue; font-size: 13px; }
+  .grid tr.row .c-next { grid-area: next; font-size: 13px; }
+  .grid tr.row .c-cdue::before, .grid tr.row .c-next::before { content: attr(data-label) "　"; color: var(--muted); }
+  .grid tr.row td.no-val { display: none; }
+  .grid tr.row .c-next .clip { display: inline; }
   .grid tr.row .c-lines, .grid tr.row .c-ord { display: none; }
   .po-sup { display: inline; color: var(--muted); font-size: 13px; font-weight: 500; }
   .c-cust .muted { font-size: 13px; }
@@ -476,6 +488,6 @@ table.past .num { text-align: right; }
   ul.mails .who { display: none; }
 }
 
-@media (min-width: 761px) {
+@media (min-width: 961px) {
   .po-sup { display: none; }
 }

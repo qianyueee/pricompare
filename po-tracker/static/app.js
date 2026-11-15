@@ -157,7 +157,7 @@ function haystack(o) {
   let h = haystacks.get(o);
   if (!h) {
     const parts = [o.po, ...(o.aliases || []), o.supplier, o.sub_vendor, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text, o.note, o.eta];
-    for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc);
+    for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc, l.next_step);
     h = parts.filter(Boolean).join(' ').toLowerCase();
     haystacks.set(o, h);
   }
@@ -197,6 +197,7 @@ const SORTS = {
     byNullable(dayNum(a.due_date), dayNum(b.due_date), a._u.key === 'done' ? -1 : 1) ||
     poCmp(a, b),
   due: (a, b) => byNullable(dayNum(a.due_date), dayNum(b.due_date), 1) || poCmp(a, b),
+  cdue: (a, b) => byNullable(dayNum(a.customer_due), dayNum(b.customer_due), 1) || poCmp(a, b),
   order: (a, b) => byNullable(dayNum(a.order_date), dayNum(b.order_date), -1) || poCmp(b, a),
   po: (a, b) => poCmp(a, b),
   amount: (a, b) => byNullable(a.amount ?? null, b.amount ?? null, -1) || poCmp(a, b),
@@ -247,6 +248,13 @@ function statusCell(o) {
   return parts.join('');
 }
 
+// 整张单的 Next Step：还没结束的零件行各写的什么（去重）；都结束了就看全部行
+function nextSteps(o) {
+  const lines = (o.lines || []).filter((l) => l && l.next_step);
+  const open = lines.filter((l) => !l.closed);
+  return [...new Set((open.length ? open : lines).map((l) => String(l.next_step).trim()).filter(Boolean))];
+}
+
 function cells(o) {
   const u = o._u;
   const due = parseDay(o.due_date);
@@ -257,6 +265,8 @@ function cells(o) {
       : '';
   const aliases = (o.aliases || []).filter(Boolean);
   const lines = o.lines || [];
+  const cdue = parseDay(o.customer_due);
+  const steps = nextSteps(o);
   const amt = money(o.amount, o.currency);
   const manual = o.source === 'manual'
     ? '<span class="tag-manual" title="网页上手动加的">手动</span>'
@@ -273,7 +283,9 @@ function cells(o) {
     <td class="c-po">${pick}<span class="po">${esc(o.po)}</span>${manual}${inv}<span class="po-sup">${esc(o.supplier || '供应商未定')}${sub}</span>${aliases.length ? `<span class="alias">原 ${esc(aliases.join('、'))}</span>` : ''}</td>
     <td class="c-sup">${o.supplier ? esc(o.supplier) : '<span class="none">未定</span>'}${sub}</td>
     <td class="c-status">${statusCell(o)}</td>
-    <td class="c-cust"><span>${o.customer_po ? esc(o.customer_po) : '<span class="none">—</span>'}</span>${o.end_user ? `<span class="muted">${esc(o.end_user)}</span>` : ''}</td>
+    <td class="c-cust"><span>${o.customer_po ? esc(o.customer_po) : '<span class="none">—</span>'}</span>${o.end_user ? `<span class="eu" title="End User">${esc(o.end_user)}</span>` : ''}</td>
+    <td class="c-cdue${cdue ? '' : ' no-val'}" data-label="客户交期">${cdue ? `${esc(md(cdue))}<span class="wd">周${WEEK[cdue.getDay()]}</span>` : '<span class="none">—</span>'}</td>
+    <td class="c-next${steps.length ? '' : ' no-val'}" data-label="Next Step">${steps.length ? `<span class="clip" title="${esc(steps.join('、'))}">${esc(steps.join('、'))}</span>` : '<span class="none">—</span>'}</td>
     <td class="c-lines">${lines.length ? `${lines.length} 行<div class="muted">${esc(lines[0].pn || lines[0].desc || '')}${lines.length > 1 ? ' 等' : ''}</div>` : '<span class="none">—</span>'}</td>
     <td class="c-amt">${amt ? `<span class="amt">${esc(amt)}</span>${o.tax ? `<div class="tax">${esc(o.tax)}</div>` : ''}` : '<span class="none">—</span>'}</td>
     <td class="c-ord">${o.order_date ? esc(fmtDay(o.order_date)) : '<span class="none">—</span>'}</td>`;
@@ -354,7 +366,7 @@ function linesTable(lines) {
     .map((l) => {
       const pn = `${esc(l.pn)}${l.rev ? ` <span class="muted">${esc(l.rev)}</span>` : ''}`;
       const ship = l.shipped ? `已发 ${esc(fmtDay(l.shipped))}` : l.eta ? `预计 ${esc(dayOrText(l.eta))}` : '';
-      const extra = [l.customer_po && `客户 PO ${l.customer_po}${l.customer_line ? ` / ${l.customer_line}` : ''}`, l.next_step && `下一站 ${l.next_step}`, l.invoice && `Invoice ${l.invoice}`].filter(Boolean);
+      const extra = [l.customer_po && `客户 PO ${l.customer_po}${l.customer_line ? ` / ${l.customer_line}` : ''}`, l.next_step && `Next Step ${l.next_step}`, l.invoice && `Invoice ${l.invoice}`].filter(Boolean);
       const richCells = rich
         ? `<td class="nowrap" data-label="交期 ">${esc(fmtDay(l.wo_due))}</td><td class="nowrap ship-l">${ship}</td><td class="ln-note">${esc(l.note)}${extra.length ? `<div class="muted">${esc(extra.join(' · '))}</div>` : ''}</td>`
         : '';
@@ -429,7 +441,7 @@ function render() {
       const open = !state.picking && state.open.has(rowKey(o));
       const picked = state.picking && state.pick.has(rowKey(o)) ? ' picked' : '';
       const row = `<tr class="row u-${o._u.key}${picked}" data-key="${esc(rowKey(o))}" tabindex="0" aria-expanded="${open}">${cells(o)}</tr>`;
-      return open ? `${row}<tr class="detail u-${o._u.key}"><td colspan="8">${detail(o)}</td></tr>` : row;
+      return open ? `${row}<tr class="detail u-${o._u.key}"><td colspan="10">${detail(o)}</td></tr>` : row;
     })
     .join('');
 

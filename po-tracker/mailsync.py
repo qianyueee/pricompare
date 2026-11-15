@@ -12,7 +12,7 @@ import re
 # 新单只收这些原始字段；status_note / open_issues / doubts / tracking 之类的判断一律不要
 RAW_FIELDS = ("po", "aliases", "supplier", "sub_vendor", "buyer_entity", "customer", "customer_po", "end_user", "order_date",
               "due_date", "due_text", "customer_due", "amount", "currency", "tax", "mails", "last_mail_at")
-LINE_FIELDS = ("pn", "rev", "desc", "qty", "unit_price", "amount")
+LINE_FIELDS = ("pn", "rev", "desc", "qty", "unit_price", "amount", "next_step")  # next_step：邮件里贴的跟单表原样抄的
 MAIL_FIELDS = ("folder", "uid", "date", "from", "subject")
 NEW_STATUS = "已下单"
 
