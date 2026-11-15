@@ -6,6 +6,8 @@
 po-tracker/
   po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json + mail_orders.json + overrides.json + edits.json
   mailsync.py         把每小时邮件同步的 data/mail_orders.json 合进来：只挂邮件、只加新单
+  invoice.py          开 Invoice：费率默认值、检查和算钱、开过的记录（data/invoices.json）
+  invoice_xlsx.py     把 invoice 写成 .xlsx（照样张的格式）
   edits.py            网页上的改动：检查、保存（data/edits.json）、跟进记录（data/history.jsonl）
   tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
   import_tracker.py   把跟单总表导入成起点数据 data/orders.json（邮件那份另存 orders.mail.json）
@@ -40,6 +42,15 @@ python3 po_server.py --data ~/apps/po-tracker/data \
 - 都没有的：用邮件里的原始字段（PO 号、旧号、供应商、下单主体、客户、客户 PO、下单人、下单日期、交期、客户交期、金额、币种、含税、零件行、邮件）加成新的一行，**状态先记「已下单」**，标「邮件新单」。邮件里的 status / status_note / open_issues / tracking 之类一律不用。
 - 网页上的改动（edits.json）最后才盖上去，所以永远以人填的为准；邮件新单不能删（不要的改成「已取消」）。
 - 文件坏了不影响页面，只在顶上提示「mail_orders.json 读不了」。
+
+## 开 Invoice（Zane 2026-11-15）
+
+- 要编辑权限。右上角「开 Invoice」→ 列表切到「已发货 / 完成」，点一行就勾上（别的筛选里也能勾）→ 底下「预览 Invoice」。
+- 预览照样张：抬头、发票号（默认 发票日期 yymmdd + `K`）、发票日期、客户联系人、Ship To / Bill To；每行 完成日期、订单号、Vendor、订单金额、服务费 %、服务费小计、含不含订单金额、应收小计；每个 Vendor 一行总计（这一行可以一次改这家的费率和勾选），最后总计人民币、折合美元（填了汇率才算）。
+- 默认值（`invoice.py` 的 `DEFAULT_CONFIG`）：凯维 3 级 5%、华晨 2 级 25%、其他供应商 1 级 40%；2、3 级是美方付供应商，只收服务费；1 级是我们付，订单金额也收。Vendor 写 Kaikuo（凯阔）的单 = 我们付订单金额，按 1 级算，invoice 上的 Vendor 写下级 vendor（邮件同步抓到的 `sub_vendor`，没有就手填）。完成日期默认是最晚的发货日期，没有就取网页上改成已发货/已完成的那天。
+- 「导出 Excel」或「打印 / 存 PDF」时保存：服务器按自己的数据重新算钱（服务费四舍五入到分），存进 `data/invoices.json`（同一个发票号再存 = 改这张），每个新开进的 PO 在跟进记录里记一行，列表上标「已开票」。「以前开的」可以重新下载。Excel 里服务费、合计是公式，改了金额或费率会跟着变。
+- 抬头、电话、邮箱、客户联系人、地址放 `data/invoice.json`（只在 Mac 上，**不要提交到这个公开仓库**），格式见 `deploy/invoice.example.json`；也能在里面改费率（`tiers`）、供应商英文名和等级（`vendors`）。
+- 接口：`POST /api/invoice/save {by, invoice: {no, date, contact, usd_rate, rows: [{key, vendor, done, amount, rate, with_amount}]}}`、`GET /api/invoice/xlsx?no=…`。
 
 ## 导入跟单总表（起点数据）
 

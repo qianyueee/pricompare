@@ -14,6 +14,7 @@
   键是 PO 号，同号两家供应商时可写 "44278|兴华"）+ data/edits.json（跟单的人在网页上的改动，见 edits.py）。
 - 在网页上改东西要另一个「编辑密码」（查看密码 Tony 也有）：python3 po_server.py set-edit-password --data <数据目录>
   本机直接访问不用。改动记在 data/history.jsonl，页面上显示成「跟进记录」。
+- 开 Invoice（要编辑权限）：勾 PO → 预览 → 导出 Excel / 打印，见 invoice.py；开过的存 data/invoices.json，抬头地址在 data/invoice.json。
 - 访问记录：data/access/YYYY-MM.jsonl（打开页面、登录成功/失败、编辑登录）。
 """
 from __future__ import annotations
@@ -37,6 +38,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import edits
+import invoice
+import invoice_xlsx
 import mailsync
 from edits import EditError, write_atomic
 
@@ -50,7 +53,8 @@ SESSION_MAX_AGE = 30 * 24 * 3600
 FAIL_LIMIT, FAIL_WINDOW = 10, 600  # 全站 10 分钟内错 10 次就先停 10 分钟
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
-API_POST = {"/api/edit-login", "/api/edit-logout", "/api/order/update", "/api/order/add", "/api/order/delete"}
+API_POST = {"/api/edit-login", "/api/edit-logout", "/api/order/update", "/api/order/add", "/api/order/delete",
+            "/api/invoice/save"}
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -119,6 +123,7 @@ class App:
         self.key = self._session_key()
         self.lock = threading.Lock()
         self.store = edits.Store(data)
+        self.invoices = invoice.InvoiceStore(data)
         self.fails: list[float] = []
 
     def _session_key(self) -> bytes:
@@ -286,6 +291,41 @@ class App:
             rec = {"at": edits.now_iso(), "by": by, "key": key, "action": "delete"}
             self.store.append_history(rec)
         return rec
+
+    # ---- 开 Invoice（invoice.py）：只给有编辑权限的人
+    def invoice_extras(self, doc: dict) -> None:
+        """给 /api/orders 补上开 invoice 要的：抬头和费率默认值、开过的 invoice、每个 PO 的默认值和开票记录。"""
+        cfg = invoice.load_config(self.data)
+        listing, marks = self.invoices.summary()
+        doc["meta"]["invoice"] = {**{k: cfg[k] for k in ("company", "phone", "email", "contact", "ship_to", "bill_to",
+                                                         "footer", "number_suffix")}, "list": listing}
+        for o in doc["orders"]:
+            o["inv"] = {**invoice.vendor_defaults(cfg, o.get("supplier"), o.get("sub_vendor")), "done": invoice.done_date(o)}
+            if marks.get(o["key"]):
+                o["invoiced"] = marks[o["key"]]
+
+    def save_invoice(self, by: str, payload) -> dict:
+        by = edits.clean_name(by)
+        with self.store.lock, self.invoices.lock:
+            meta, orders, _ed = self._merged()
+            if "edit_error" in meta:
+                raise EditError(meta["edit_error"], 500)
+            inv = invoice.build(payload, {edits.order_key(o): o for o in orders}, invoice.load_config(self.data))
+            saved = self.invoices.load()
+            before = {str(r.get("key")) for r in (saved.get(inv["no"]) or {}).get("rows") or [] if isinstance(r, dict)}
+            at = edits.now_iso()
+            saved[inv["no"]] = {**inv, "saved_at": at, "saved_by": by}
+            self.invoices.save(saved)
+            for r in inv["rows"]:
+                if r["key"] not in before:
+                    self.store.append_history({"at": at, "by": by, "key": r["key"], "action": "invoice", "no": inv["no"]})
+        return saved[inv["no"]]
+
+    def invoice_file(self, no: str) -> tuple[str, bytes]:
+        inv = self.invoices.load().get(no)
+        if not inv:
+            raise EditError("找不到这张 invoice", 404)
+        return f"Invoice_{no}.xlsx", invoice_xlsx.render(inv, invoice.load_config(self.data))
 
     def _overrides(self) -> dict:
         try:
@@ -496,8 +536,21 @@ class Handler(BaseHTTPRequestHandler):
             doc["meta"]["can_edit"] = self.editor()
             doc["meta"]["edit_ready"] = bool(self.app.edit_hash())
             doc["meta"]["edit_local"] = not self.public
+            if doc["meta"]["can_edit"]:
+                self.app.invoice_extras(doc)
             body = json.dumps(doc, ensure_ascii=False, separators=(",", ":"))
             return self.send(200, body, "application/json; charset=utf-8")
+        if path == "/api/invoice/xlsx":
+            if not self.editor():
+                return self.json_reply(403, {"error": "需要编辑密码"})
+            no = (parse_qs(urlsplit(self.path).query).get("no") or [""])[0]
+            try:
+                name, data = self.app.invoice_file(no)
+            except EditError as e:
+                return self.json_reply(e.status, {"error": str(e)})
+            self.app.log_access("invoice_xlsx", self)
+            return self.send(200, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             {"Content-Disposition": f'attachment; filename="{name}"'})
         if path.startswith("/static/"):
             return self.static(path[len("/static/"):])
         return self.send(404, "not found", "text/plain; charset=utf-8")
@@ -577,6 +630,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.edit_login(body)
         if not self.editor():
             return self.json_reply(403, {"error": "需要编辑密码（点右上角「编辑」）"})
+        if path == "/api/invoice/save":
+            try:
+                inv = self.app.save_invoice(body.get("by"), body.get("invoice"))
+            except EditError as e:
+                return self.json_reply(e.status, {"error": str(e)})
+            self.app.log_access("invoice_save", self)
+            return self.json_reply(200, {"ok": True, "invoice": inv})
         try:
             if path == "/api/order/update":
                 rec = self.app.update_order(str(body.get("key", "")), body.get("by"), body.get("changes"), body.get("note"))

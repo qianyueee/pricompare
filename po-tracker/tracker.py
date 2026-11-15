@@ -23,7 +23,8 @@ NS = {
 R_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 
 DETAIL_SHEET = "订单明细"
-VENDOR_CN = {"huachen": "华晨", "shenzhen kaiwei": "凯维", "kaiwei": "凯维", "xinghua": "兴华"}
+VENDOR_CN = {"huachen": "华晨", "shenzhen kaiwei": "凯维", "kaiwei": "凯维", "xinghua": "兴华",
+             "kaikuo": "凯阔", "shenzhen kaikuo": "凯阔"}  # 凯阔 = 我们自己付订单金额，真正做的是下级 vendor
 DATE_COLS = ("PO Date", "Due Date", "WO Date", "WO Due", "发货日期", "预计发货日期")
 MAX_CELLS = 2_000_000
 

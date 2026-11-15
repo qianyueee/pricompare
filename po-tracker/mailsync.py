@@ -1,7 +1,7 @@
 """把 po_sync.py 每小时从 zill@ 邮件抓到的 PO（data/mail_orders.json）合进页面数据。只用 Python 标准库。
 
 Zane 2026-11-15：自动抓取只记录邮件里的原始信息，不自动加备注，不判断状态。所以这里：
-- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：只把新的相关邮件挂上去，别的字段一律不动；
+- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：只把新的相关邮件挂上去（下级 vendor 原来没有的补上），别的字段一律不动；
 - 都没有的 PO：用邮件里的原始字段加成新的一行，状态先记「已下单」，不带任何备注、待跟进、运单号；
 - 网页上人改的内容（edits.json）在这之后才盖上去，所以永远以人填的为准。
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 # 新单只收这些原始字段；status_note / open_issues / doubts / tracking 之类的判断一律不要
-RAW_FIELDS = ("po", "aliases", "supplier", "buyer_entity", "customer", "customer_po", "end_user", "order_date",
+RAW_FIELDS = ("po", "aliases", "supplier", "sub_vendor", "buyer_entity", "customer", "customer_po", "end_user", "order_date",
               "due_date", "due_text", "customer_due", "amount", "currency", "tax", "mails", "last_mail_at")
 LINE_FIELDS = ("pn", "rev", "desc", "qty", "unit_price", "amount")
 MAIL_FIELDS = ("folder", "uid", "date", "from", "subject")
@@ -103,6 +103,8 @@ def merge(orders: list[dict], mail_orders: list[dict]) -> tuple[list[dict], int]
         hits = find_matches(m, out)
         for o in hits:
             _attach(o, mails)
+            if m.get("sub_vendor") and not o.get("sub_vendor"):  # 下级 vendor 原来没有才补（开 invoice 用），有了不动
+                o["sub_vendor"] = m["sub_vendor"]
         if hits:
             continue
         new = {k: m[k] for k in RAW_FIELDS if m.get(k) not in (None, "", [])}

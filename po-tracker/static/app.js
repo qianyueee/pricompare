@@ -36,6 +36,10 @@ const state = {
   drafts: new Map(), // 展开后填了还没保存的内容，重新渲染时不丢
   loadedAt: 0,
   me: '',
+  picking: false, // 开 Invoice：在列表里勾 PO
+  pick: new Set(),
+  prevLevel: null,
+  inv: null, // 预览里的 invoice 草稿
 };
 
 // ---------------------------------------------------------------- 小工具
@@ -152,7 +156,7 @@ const haystacks = new WeakMap();
 function haystack(o) {
   let h = haystacks.get(o);
   if (!h) {
-    const parts = [o.po, ...(o.aliases || []), o.supplier, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text, o.note, o.eta];
+    const parts = [o.po, ...(o.aliases || []), o.supplier, o.sub_vendor, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text, o.note, o.eta];
     for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc);
     h = parts.filter(Boolean).join(' ').toLowerCase();
     haystacks.set(o, h);
@@ -259,10 +263,15 @@ function cells(o) {
     : o.mail_new
       ? '<span class="tag-mail" title="邮件里新出现、总表和网页上原来没有的 PO，状态先记已下单">邮件新单</span>'
       : '';
+  const sub = o.sub_vendor ? `<span class="sub-v" title="下级 vendor（邮件里写的）">→ ${esc(o.sub_vendor)}</span>` : '';
+  const inv = (o.invoiced || []).length
+    ? `<span class="tag-inv" title="已开进 invoice：${esc(o.invoiced.map((x) => x.no).join('、'))}">已开票</span>`
+    : '';
+  const pick = state.picking ? `<input type="checkbox" class="pick" tabindex="-1" aria-label="选 ${esc(o.po)}"${state.pick.has(rowKey(o)) ? ' checked' : ''} />` : '';
   return `
     <td class="c-due">${dueHtml}${due ? '<br>' : ''}<span class="pill">${esc(u.pill)}</span></td>
-    <td class="c-po"><span class="po">${esc(o.po)}</span>${manual}<span class="po-sup">${esc(o.supplier || '供应商未定')}</span>${aliases.length ? `<span class="alias">原 ${esc(aliases.join('、'))}</span>` : ''}</td>
-    <td class="c-sup">${o.supplier ? esc(o.supplier) : '<span class="none">未定</span>'}</td>
+    <td class="c-po">${pick}<span class="po">${esc(o.po)}</span>${manual}${inv}<span class="po-sup">${esc(o.supplier || '供应商未定')}${sub}</span>${aliases.length ? `<span class="alias">原 ${esc(aliases.join('、'))}</span>` : ''}</td>
+    <td class="c-sup">${o.supplier ? esc(o.supplier) : '<span class="none">未定</span>'}${sub}</td>
     <td class="c-status">${statusCell(o)}</td>
     <td class="c-cust"><span>${o.customer_po ? esc(o.customer_po) : '<span class="none">—</span>'}</span>${o.end_user ? `<span class="muted">${esc(o.end_user)}</span>` : ''}</td>
     <td class="c-lines">${lines.length ? `${lines.length} 行<div class="muted">${esc(lines[0].pn || lines[0].desc || '')}${lines.length > 1 ? ' 等' : ''}</div>` : '<span class="none">—</span>'}</td>
@@ -282,6 +291,7 @@ function historyHtml(o) {
   const items = hist.map((h) => {
     const what = [];
     if (h.action === 'add') what.push('新增这个 PO');
+    if (h.action === 'invoice') what.push(`开进 invoice <b>${esc(h.no)}</b>`);
     for (const [f, [a, b]] of Object.entries(h.changes || {})) {
       what.push(`${FIELD_LABEL[f] || f} ${esc(fmtValue(f, a))} → <b>${esc(fmtValue(f, b))}</b>`);
     }
@@ -364,7 +374,9 @@ function detail(o) {
   add('客户', o.customer);
   add('已发货', (o.shipped || []).map(fmtDay).join('、'));
   add('邮件里是', o.mail_status && o.mail_status !== firstStatus(o) ? o.mail_status : '');
+  add('下级 vendor', o.sub_vendor);
   add('旧号', (o.aliases || []).join('、'));
+  add('已开票', (o.invoiced || []).map((x) => `${x.no}（${fmtDay(x.date)}）`).join('、'));
   add('最近邮件', fmtDateTime(o.last_mail_at));
   add('手动新增', o.source === 'manual' ? [o.created_by, fmtDateTime(o.created_at)].filter(Boolean).join(' ') : '');
   const fixed = (o.overridden || []).length ? `<span class="tag-fixed" title="${esc(o.overridden.join('、'))}">手工更正过</span>` : '';
@@ -414,8 +426,9 @@ function render() {
   const list = base.filter(keep).sort(SORTS[state.sort] || SORTS.urgency);
   $('rows').innerHTML = list
     .map((o) => {
-      const open = state.open.has(rowKey(o));
-      const row = `<tr class="row u-${o._u.key}" data-key="${esc(rowKey(o))}" tabindex="0" aria-expanded="${open}">${cells(o)}</tr>`;
+      const open = !state.picking && state.open.has(rowKey(o));
+      const picked = state.picking && state.pick.has(rowKey(o)) ? ' picked' : '';
+      const row = `<tr class="row u-${o._u.key}${picked}" data-key="${esc(rowKey(o))}" tabindex="0" aria-expanded="${open}">${cells(o)}</tr>`;
       return open ? `${row}<tr class="detail u-${o._u.key}"><td colspan="8">${detail(o)}</td></tr>` : row;
     })
     .join('');
@@ -434,6 +447,8 @@ function render() {
     empty.hidden = true;
   }
   $('count').textContent = state.orders.length ? `显示 ${list.length} / ${state.orders.length} 个 PO` : '';
+  state.visible = list;
+  if (state.picking) renderPickBar();
 }
 
 function renderHeader() {
@@ -447,6 +462,7 @@ function renderHeader() {
   $('sub').textContent = parts.join(' · ');
   $('logout').hidden = !m.can_logout;
   $('add').hidden = !m.can_edit;
+  $('inv-start').hidden = !m.can_edit || !m.invoice;
   $('edit').hidden = !!m.can_edit;
   $('edit-off').hidden = !m.can_edit || !!m.edit_local;
   const warn = [m.edit_error, m.mail_error];
@@ -463,7 +479,7 @@ function renderHeader() {
 
 function busy() {
   const a = document.activeElement;
-  return !!(a && a.closest && a.closest('.fu-form, dialog[open]')) || !!document.querySelector('dialog[open]');
+  return !!(a && a.closest && a.closest('.fu-form, dialog[open], #inv-view')) || !!document.querySelector('dialog[open]') || !!state.inv;
 }
 
 async function load() {
@@ -662,6 +678,453 @@ async function doAdd(e) {
   }
 }
 
+// ---------------------------------------------------------------- 开 Invoice
+// 点「开 Invoice」→ 在列表里点行勾 PO → 预览（可改完成日期、Vendor、订单金额、服务费 %、含不含订单金额）
+// → 导出 Excel / 打印。保存时服务器重新算钱，记进 data/invoices.json，这些 PO 标「已开票」。
+// 费率默认值（Zane 11-15）：凯维 3 级 5%、华晨 2 级 25%、其他 1 级 40%；2、3 级只收服务费，1 级连订单金额一起收。
+
+function invCfg() {
+  return state.meta.invoice || {};
+}
+
+function fmtRMB(x) {
+  return Number.isFinite(x) ? `¥${x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+}
+
+function fmtPct(x) {
+  return Number.isFinite(x) ? `${x.toFixed(2)}%` : '';
+}
+
+function mdy(iso) {
+  return iso && iso.length >= 10 ? `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(2, 4)}` : '';
+}
+
+function isoToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function defaultNo(date) {
+  return date ? `${date.slice(2, 4)}${date.slice(5, 7)}${date.slice(8, 10)}${invCfg().number_suffix || ''}` : '';
+}
+
+function numOrNaN(v) {
+  if (v === '' || v === null || v === undefined) return NaN;
+  return Number(String(v).replace(/[,¥\s%]/g, ''));
+}
+
+// 服务费 = 订单金额 × 费率，四舍五入到分（服务器保存时也这么算）
+function feeOf(r) {
+  const a = numOrNaN(r.amount);
+  const p = numOrNaN(r.rate);
+  return Number.isFinite(a) && Number.isFinite(p) ? Math.round(a * p + 1e-6) / 100 : NaN;
+}
+
+function dueOf(r) {
+  const f = feeOf(r);
+  return r.with_amount ? Math.round((f + numOrNaN(r.amount)) * 100) / 100 : f;
+}
+
+// ---- 勾选
+function startPicking() {
+  state.picking = true;
+  state.prevLevel = state.level;
+  state.level = 'done';
+  document.body.classList.add('picking');
+  render();
+  toast('点一行就勾上（已切到「已发货 / 完成」，别的筛选里也能勾），选好点下面的「预览 Invoice」');
+}
+
+function stopPicking() {
+  state.picking = false;
+  state.pick.clear();
+  state.inv = null;
+  if (state.prevLevel) state.level = state.prevLevel;
+  state.prevLevel = null;
+  document.body.classList.remove('picking', 'invoicing');
+  $('pickbar').hidden = true;
+  $('inv-view').hidden = true;
+  render();
+}
+
+function togglePick(key) {
+  if (state.pick.has(key)) state.pick.delete(key);
+  else state.pick.add(key);
+  const tr = document.querySelector(`tr.row[data-key="${CSS.escape(key)}"]`);
+  if (tr) {
+    tr.classList.toggle('picked', state.pick.has(key));
+    const cb = tr.querySelector('input.pick');
+    if (cb) cb.checked = state.pick.has(key);
+  }
+  renderPickBar();
+}
+
+function pickedOrders() {
+  return state.orders.filter((o) => state.pick.has(rowKey(o)));
+}
+
+function renderPickBar() {
+  $('pickbar').hidden = !state.picking || !!state.inv;
+  const list = pickedOrders();
+  const by = new Map();
+  let sum = 0;
+  for (const o of list) {
+    const v = o.supplier || '未定';
+    by.set(v, (by.get(v) || 0) + 1);
+    sum += Number(o.amount) || 0;
+  }
+  $('pick-sum').textContent = list.length
+    ? `已选 ${list.length} 个 PO（${[...by].map(([k, n]) => `${k} ${n}`).join('、')}）· 订单金额 ${fmtRMB(sum)}`
+    : '还没选：点一行勾上，再点一次取消';
+  $('pick-go').disabled = !list.length;
+  $('pick-clear').hidden = !list.length;
+  const vis = state.visible || [];
+  $('pick-all').textContent = vis.length && vis.every((o) => state.pick.has(rowKey(o))) ? '取消当前列表' : `全选当前列表（${vis.length}）`;
+  const past = invCfg().list || [];
+  $('inv-past').hidden = !past.length;
+  $('inv-past').textContent = `以前开的（${past.length}）`;
+}
+
+function pickAllVisible() {
+  const vis = state.visible || [];
+  const allOn = vis.length && vis.every((o) => state.pick.has(rowKey(o)));
+  for (const o of vis) {
+    if (allOn) state.pick.delete(rowKey(o));
+    else state.pick.add(rowKey(o));
+  }
+  render();
+}
+
+// ---- 预览
+function openPreview() {
+  const list = pickedOrders();
+  if (!list.length) return;
+  const rows = list.map((o) => {
+    const d = o.inv || {};
+    const warn = [];
+    if ((o.invoiced || []).length) warn.push(`已开过 ${o.invoiced.map((x) => x.no).join('、')}`);
+    if (o.amount === null || o.amount === undefined || o.amount === '') warn.push('没有订单金额');
+    if (o.currency && !['RMB', 'CNY'].includes(o.currency)) warn.push(`金额是 ${o.currency}`);
+    if (o.open_lines) warn.push(`还有 ${o.open_lines} 行没结束`);
+    if (!DONE.has(o.status)) warn.push(`状态是「${o.status || '空'}」`);
+    return {
+      key: rowKey(o), po: o.po, supplier: o.supplier || '', tier: d.tier || 1, vendor: d.vendor || '', done: d.done || '',
+      amount: o.amount ?? '', rate: d.rate ?? '', with_amount: !!d.with_amount, warn,
+    };
+  });
+  rows.sort(
+    (a, b) =>
+      b.tier - a.tier || a.vendor.localeCompare(b.vendor) || String(a.done).localeCompare(String(b.done)) ||
+      String(a.po).localeCompare(String(b.po), 'en', { numeric: true }),
+  );
+  const date = isoToday();
+  state.inv = { no: defaultNo(date), noAuto: true, date, contact: invCfg().contact || '', usd_rate: '', rows, savedNo: '' };
+  document.body.classList.add('invoicing');
+  $('pickbar').hidden = true;
+  $('inv-view').hidden = false;
+  $('inv-by').value = state.me;
+  $('toast').hidden = true;
+  invMsg('');
+  renderInvoice();
+  window.scrollTo(0, 0);
+}
+
+function backToPick() {
+  state.inv = null;
+  document.body.classList.remove('invoicing');
+  $('inv-view').hidden = true;
+  render();
+}
+
+function invMsg(text, cls) {
+  const el = $('inv-msg');
+  el.textContent = text;
+  el.className = `inv-msg ${cls || ''}`;
+}
+
+function toBlock(label, lines) {
+  return (lines || []).length ? `<div class="inv-to"><b>${esc(label)}</b><div>${lines.map(esc).join('<br>')}</div></div>` : '';
+}
+
+function invHeadHtml(c, fields) {
+  const contact = [c.phone && `电话号码：${esc(c.phone)}`, c.email && `邮箱：${esc(c.email)}`].filter(Boolean).join('<br>');
+  return `<div class="inv-head">
+    <div class="inv-left">
+      <div class="inv-co">${esc(c.company) || '<span class="need-text">抬头还没设（Mac 上 data/invoice.json）</span>'}</div>
+      <div class="inv-contact">${contact}</div>
+      ${fields}
+    </div>
+    <div class="inv-right"><div class="inv-title">Invoice</div>${toBlock('Ship To:', c.ship_to)}${toBlock('Bill To:', c.bill_to)}</div>
+  </div>`;
+}
+
+function renderInvoice() {
+  const v = state.inv;
+  const fields = `<dl class="inv-fields">
+      <dt>发票号码</dt><dd><input id="inv-no" maxlength="30" value="${esc(v.no)}" /></dd>
+      <dt>发票日期</dt><dd><input id="inv-date" type="date" value="${esc(v.date)}" /></dd>
+      <dt>客户联系人</dt><dd><input id="inv-contact" maxlength="40" value="${esc(v.contact)}" /></dd>
+    </dl>`;
+  const body = v.rows
+    .map(
+      (r, i) => `<tr data-i="${i}" class="${i % 2 ? '' : 'band'}">
+      <td class="c">${i + 1}</td>
+      <td><input type="date" data-f="done" value="${esc(r.done)}" aria-label="完成日期" /></td>
+      <td class="c inv-po">${esc(r.po)}${r.supplier && r.supplier !== r.vendor ? `<div class="muted">${esc(r.supplier)}</div>` : ''}${r.warn.length ? `<div class="inv-warn">${r.warn.map(esc).join(' · ')}</div>` : ''}</td>
+      <td><input data-f="vendor" maxlength="40" value="${esc(r.vendor)}" placeholder="填下级 vendor" class="${r.vendor ? '' : 'need'}" aria-label="Vendor" /></td>
+      <td><input data-f="amount" inputmode="decimal" class="num" value="${esc(r.amount)}" aria-label="订单金额" /></td>
+      <td class="nowrap"><input data-f="rate" inputmode="decimal" class="num rate" value="${esc(r.rate)}" aria-label="服务费 %" />%</td>
+      <td class="num" data-out="fee"></td>
+      <td class="c"><input type="checkbox" data-f="with_amount"${r.with_amount ? ' checked' : ''} aria-label="含订单金额" /></td>
+      <td class="num" data-out="due"></td>
+      <td class="c"><button type="button" class="btn-link" data-act="drop" title="从这张 invoice 去掉">去掉</button></td>
+    </tr>`,
+    )
+    .join('');
+  $('inv-sheet').innerHTML = `${invHeadHtml(invCfg(), fields)}
+    <div class="inv-table-wrap"><table class="inv-table">
+      <thead><tr><th>序号</th><th>完成日期</th><th>订单号</th><th>Vendor</th><th>订单金额</th><th>服务费（%）</th><th>服务费小计</th><th title="勾上 = 订单金额也向客户收（我们付的供应商）">含订单金额</th><th>应收小计</th><th></th></tr></thead>
+      <tbody id="inv-rows">${body}</tbody>
+      <tbody id="inv-vend"></tbody>
+      <tbody class="inv-sum">
+        <tr><td class="c b" colspan="8">总计人民币</td><td class="num b" id="inv-total"></td><td></td></tr>
+        <tr><td class="c b" colspan="5">折合美元</td><td class="nowrap" colspan="3">汇率 <input id="inv-usd" inputmode="decimal" class="num rate" value="${esc(v.usd_rate)}" placeholder="不填就空着" /></td><td class="num b" id="inv-usd-out"></td><td></td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted inv-help">「含订单金额」勾上的行，应收 = 订单金额 + 服务费（我们自己付供应商的）；没勾的只收服务费。下面每个 Vendor 的总计行可以一次改这家的费率和勾选。导出或打印时会保存，这些 PO 标成「已开票」。</p>`;
+  renderInvTotals();
+}
+
+function vendorGroups() {
+  const groups = new Map();
+  for (const r of state.inv.rows) {
+    const k = r.vendor.trim() || '（没填 Vendor）';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  return groups;
+}
+
+function renderInvTotals() {
+  const v = state.inv;
+  document.querySelectorAll('#inv-rows tr[data-i]').forEach((tr) => {
+    const r = v.rows[+tr.dataset.i];
+    tr.querySelector('[data-out="fee"]').textContent = fmtRMB(feeOf(r));
+    tr.querySelector('[data-out="due"]').textContent = fmtRMB(dueOf(r));
+  });
+  let total = 0;
+  const vend = [];
+  for (const [name, rs] of vendorGroups()) {
+    const sum = (f) => rs.reduce((s, r) => s + f(r), 0);
+    const rates = [...new Set(rs.map((r) => String(r.rate)))];
+    const withAll = rs.every((r) => r.with_amount);
+    const withSome = rs.some((r) => r.with_amount);
+    const due = sum(dueOf);
+    total += due;
+    vend.push(`<tr class="inv-vrow"><td class="c b">总计</td><td></td><td class="c muted">${rs.length} 个</td><td class="c b">${esc(name)}</td>
+      <td class="num b">${fmtRMB(sum((r) => numOrNaN(r.amount)))}</td>
+      <td class="nowrap"><input data-vf="rate" data-v="${esc(name)}" inputmode="decimal" class="num rate" value="${rates.length === 1 ? esc(rates[0]) : ''}" placeholder="多种" aria-label="${esc(name)} 全部的服务费 %" />%</td>
+      <td class="num b">${fmtRMB(sum(feeOf))}</td>
+      <td class="c"><input type="checkbox" data-vf="with_amount" data-v="${esc(name)}"${withAll ? ' checked' : ''}${withSome && !withAll ? ' data-mixed="1"' : ''} aria-label="${esc(name)} 全部含订单金额" /></td>
+      <td class="num b">${fmtRMB(due)}</td><td></td></tr>`);
+  }
+  $('inv-vend').innerHTML = vend.join('');
+  $('inv-vend').querySelectorAll('input[data-mixed]').forEach((cb) => (cb.indeterminate = true));
+  $('inv-total').textContent = fmtRMB(total);
+  const rate = numOrNaN(v.usd_rate);
+  $('inv-usd-out').textContent = Number.isFinite(rate) && rate > 0 ? `$${(Math.round((total / rate) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '';
+}
+
+function onInvInput(e) {
+  const v = state.inv;
+  const t = e.target;
+  if (!v || t.closest('#inv-vend')) return;
+  if (t.id === 'inv-no') {
+    v.no = t.value;
+    v.noAuto = false;
+    return;
+  }
+  if (t.id === 'inv-date') {
+    v.date = t.value;
+    if (v.noAuto) $('inv-no').value = v.no = defaultNo(v.date);
+    return;
+  }
+  if (t.id === 'inv-contact') {
+    v.contact = t.value;
+    return;
+  }
+  if (t.id === 'inv-usd') {
+    v.usd_rate = t.value;
+    renderInvTotals();
+    return;
+  }
+  const tr = t.closest('tr[data-i]');
+  if (!tr || !t.dataset.f) return;
+  const r = v.rows[+tr.dataset.i];
+  r[t.dataset.f] = t.type === 'checkbox' ? t.checked : t.value;
+  if (t.dataset.f === 'vendor') t.classList.toggle('need', !t.value.trim());
+  renderInvTotals();
+}
+
+function onInvChange(e) {
+  const t = e.target;
+  if (!state.inv) return;
+  if (t.closest('#inv-vend') && t.dataset.vf) {
+    for (const r of state.inv.rows) {
+      if ((r.vendor.trim() || '（没填 Vendor）') !== t.dataset.v) continue;
+      if (t.dataset.vf === 'rate') {
+        if (t.value.trim() !== '') r.rate = t.value.trim();
+      } else r.with_amount = t.checked;
+    }
+    renderInvoice();
+    return;
+  }
+  if (t.type === 'checkbox') onInvInput(e);
+}
+
+function onInvClick(e) {
+  const b = e.target.closest('[data-act="drop"]');
+  if (!b) return;
+  const i = +b.closest('tr[data-i]').dataset.i;
+  const [r] = state.inv.rows.splice(i, 1);
+  state.pick.delete(r.key);
+  if (!state.inv.rows.length) return backToPick();
+  renderInvoice();
+}
+
+function invProblems() {
+  const v = state.inv;
+  const out = [];
+  if (!v.no.trim()) out.push('发票号没填');
+  if (!v.date) out.push('发票日期没填');
+  for (const r of v.rows) {
+    if (!r.vendor.trim()) out.push(`${r.po} 的 Vendor 没填`);
+    if (!Number.isFinite(numOrNaN(r.amount))) out.push(`${r.po} 的订单金额没填`);
+    if (!Number.isFinite(numOrNaN(r.rate))) out.push(`${r.po} 的服务费 % 不对`);
+  }
+  return out;
+}
+
+async function saveInvoice() {
+  const v = state.inv;
+  const by = $('inv-by').value.trim();
+  if (!by) {
+    $('inv-by').focus();
+    invMsg('先填你的名字（记在跟进记录里）', 'bad');
+    return null;
+  }
+  state.me = by;
+  store(NAME_KEY, by);
+  const bad = invProblems();
+  if (bad.length) {
+    invMsg(bad.slice(0, 4).join('；') + (bad.length > 4 ? ' …' : ''), 'bad');
+    return null;
+  }
+  const no = v.no.trim();
+  const old = (invCfg().list || []).find((x) => x.no === no);
+  if (old && v.savedNo !== no && !confirm(`发票号 ${no} 已经开过（${fmtDay(old.date)}，${old.count} 个 PO）。用这一张覆盖它吗？`)) return null;
+  invMsg('正在保存…');
+  const doc = await postJSON('/api/invoice/save', {
+    by,
+    invoice: {
+      no, date: v.date, contact: v.contact.trim(), usd_rate: String(v.usd_rate).trim(),
+      rows: v.rows.map((r) => ({ key: r.key, vendor: r.vendor.trim(), done: r.done, amount: String(r.amount).trim(), rate: String(r.rate).trim(), with_amount: r.with_amount })),
+    },
+  });
+  v.savedNo = no;
+  invMsg(`已保存 ${no}：${doc.invoice.rows.length} 个 PO 标成已开票，应收 ${fmtRMB(doc.invoice.total)}`, 'good');
+  load();
+  return doc.invoice;
+}
+
+function downloadInvoice(no) {
+  const a = document.createElement('a');
+  a.href = `/api/invoice/xlsx?no=${encodeURIComponent(no)}`;
+  a.download = `Invoice_${no}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function exportXlsx() {
+  try {
+    const inv = await saveInvoice();
+    if (inv) downloadInvoice(inv.no);
+  } catch (e) {
+    invMsg(`没保存：${e.message || e}`, 'bad');
+  }
+}
+
+async function printInvoice() {
+  try {
+    const inv = await saveInvoice();
+    if (!inv) return;
+    $('inv-print').innerHTML = printHtml(inv);
+    window.print();
+  } catch (e) {
+    invMsg(`没保存：${e.message || e}`, 'bad');
+  }
+}
+
+// 打印用的静态版本（跟导出的 Excel 一个样子），用服务器算好的数
+function printHtml(inv) {
+  const c = invCfg();
+  const d = parseDay(inv.date);
+  const fields = `<dl class="inv-fields"><dt>发票号码：</dt><dd>${esc(inv.no)}</dd><dt>发票日期：</dt><dd>${d ? `${d.getMonth() + 1}月${d.getDate()}日` : ''}</dd><dt>客户联系人：</dt><dd>${esc(inv.contact)}</dd></dl>`;
+  const wa = inv.with_amount;
+  const span = wa ? 7 : 6;
+  const rows = inv.rows
+    .map(
+      (r, i) => `<tr class="${i % 2 ? '' : 'band'}"><td>${i + 1}</td><td>${esc(mdy(r.done))}</td><td>${esc(r.po)}</td><td>${esc(r.vendor)}</td><td>${fmtRMB(r.amount)}</td><td>${fmtPct(r.rate)}</td><td>${fmtRMB(r.fee)}</td>${wa ? `<td>${fmtRMB(r.due)}</td>` : ''}</tr>`,
+    )
+    .join('');
+  const vend = inv.vendors
+    .map(
+      (v) => `<tr class="tot"><td>总计</td><td></td><td></td><td>${esc(v.vendor)}</td><td>${fmtRMB(v.amount)}</td><td>${v.rate === null ? '' : fmtPct(v.rate)}</td><td>${fmtRMB(v.fee)}</td>${wa ? `<td>${fmtRMB(v.due)}</td>` : ''}</tr>`,
+    )
+    .join('');
+  const usd = inv.usd === null || inv.usd === undefined ? '' : `$${inv.usd.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+  const foot = (c.footer || []).map((x, i, all) => `<p class="${i === all.length - 1 && all.length > 1 ? 'b' : ''}">${esc(String(x).replace('{phone}', c.phone || ''))}</p>`).join('');
+  return `${invHeadHtml(c, fields)}
+    <table class="inv-ptable"><thead><tr><th>序号</th><th>完成日期</th><th>订单号</th><th>Vendor</th><th>订单金额</th><th>服务费（%）</th><th>服务费小计</th>${wa ? '<th>应收小计</th>' : ''}</tr></thead>
+    <tbody>${rows}${vend}
+      <tr class="tot"><td>总计人民币</td><td colspan="${span}" class="r">${fmtRMB(inv.total)}</td></tr>
+      <tr class="tot"><td>折合美元</td><td colspan="${span}" class="r">${inv.usd_rate ? `<span class="muted">汇率 ${esc(inv.usd_rate)}　</span>` : ''}${usd}</td></tr>
+    </tbody></table><div class="inv-foot">${foot}</div>`;
+}
+
+function openPast() {
+  const list = invCfg().list || [];
+  $('past-list').innerHTML = list.length
+    ? `<table class="past"><thead><tr><th>发票号</th><th>日期</th><th>PO</th><th class="num">应收</th><th>谁开的</th><th></th></tr></thead><tbody>${list
+        .map(
+          (x) => `<tr><td>${esc(x.no)}</td><td>${esc(fmtDay(x.date))}</td><td>${esc(x.count)} 个</td><td class="num">${fmtRMB(x.total)}</td><td>${esc(x.saved_by || '')} <span class="muted">${esc(fmtDateTime(x.saved_at))}</span></td><td><a href="/api/invoice/xlsx?no=${encodeURIComponent(x.no)}" download>下载 Excel</a></td></tr>`,
+        )
+        .join('')}</tbody></table>`
+    : '<p class="muted">还没开过。</p>';
+  showDialog('past-dialog');
+}
+
+function initInvoice() {
+  $('inv-start').addEventListener('click', () => (state.picking ? stopPicking() : startPicking()));
+  $('pick-go').addEventListener('click', openPreview);
+  $('pick-cancel').addEventListener('click', stopPicking);
+  $('pick-clear').addEventListener('click', () => {
+    state.pick.clear();
+    render();
+  });
+  $('pick-all').addEventListener('click', pickAllVisible);
+  $('inv-past').addEventListener('click', openPast);
+  $('inv-back').addEventListener('click', backToPick);
+  $('inv-done').addEventListener('click', stopPicking);
+  $('inv-xlsx').addEventListener('click', exportXlsx);
+  $('inv-print-btn').addEventListener('click', printInvoice);
+  const sheet = $('inv-sheet');
+  sheet.addEventListener('input', onInvInput);
+  sheet.addEventListener('change', onInvChange);
+  sheet.addEventListener('click', onInvClick);
+}
+
 // ---------------------------------------------------------------- 交互
 
 function toggleRow(tr) {
@@ -713,6 +1176,11 @@ function init() {
     const act = e.target.closest('[data-act="delete"]');
     if (act) return deleteManual(act.closest('form'));
     if (e.target.closest('tr.detail')) return;
+    if (state.picking) {
+      const ptr = e.target.closest('tr.row');
+      if (ptr) togglePick(ptr.dataset.key);
+      return;
+    }
     const tr = e.target.closest('tr.row');
     if (tr && !window.getSelection().toString()) toggleRow(tr);
   });
@@ -720,7 +1188,8 @@ function init() {
     const tr = e.target.closest('tr.row');
     if (tr && e.target === tr && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
-      toggleRow(tr);
+      if (state.picking) togglePick(tr.dataset.key);
+      else toggleRow(tr);
     }
   });
   rows.addEventListener('input', (e) => {
@@ -749,6 +1218,7 @@ function init() {
   $('ed-cancel').addEventListener('click', () => $('ed-dialog').close());
   $('add-form').addEventListener('submit', doAdd);
   $('add-cancel').addEventListener('click', () => $('add-dialog').close());
+  initInvoice();
   // 每 5 分钟自动刷新（正在填跟进或开着对话框时跳过）；切回这个标签页时，超过 1 分钟没读就重读
   setInterval(() => document.visibilityState === 'visible' && !busy() && load(), 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => {
