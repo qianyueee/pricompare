@@ -298,7 +298,7 @@ class App:
         cfg = invoice.load_config(self.data)
         listing, marks = self.invoices.summary()
         doc["meta"]["invoice"] = {**{k: cfg[k] for k in ("company", "phone", "email", "contact", "ship_to", "bill_to",
-                                                         "footer", "number_suffix")}, "list": listing}
+                                                         "footer", "number_suffix", "tiers")}, "list": listing}
         for o in doc["orders"]:
             o["inv"] = {**invoice.vendor_defaults(cfg, o.get("supplier"), o.get("sub_vendor")), "done": invoice.done_date(o)}
             if marks.get(o["key"]):

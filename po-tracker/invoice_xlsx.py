@@ -144,9 +144,9 @@ def render(inv: dict, cfg: dict) -> bytes:
     st = Styles()
     sh = Sheet()
     with_amount = bool(inv.get("with_amount"))
-    ncol = 8 if with_amount else 7
+    ncol = 9 if with_amount else 8
     last = ncol - 1
-    widths = [11, 12, 12, 18, 15, 12, 15] + ([15] if with_amount else [])
+    widths = [11, 12, 12, 18, 15, 12, 12, 15] + ([15] if with_amount else [])
 
     title = st.get(size=26, bold=True, h="right")
     company = st.get(size=18, color="FF1F3B4D")
@@ -182,7 +182,7 @@ def render(inv: dict, cfg: dict) -> bytes:
 
     # 明细
     head = st.get(bold=True, color="FFFFFFFF", fill=DARK, border=True, h="center")
-    heads = ["序号", "完成日期", "订单号", "Vendor", "订单金额", "服务费（%）", "服务费小计"] + (["应收小计"] if with_amount else [])
+    heads = ["序号", "完成日期", "订单号", "Vendor", "订单金额", "Service Tier", "服务费（%）", "服务费小计"] + (["应收小计"] if with_amount else [])
     hr = 13
     for c, t in enumerate(heads):
         sh.put(hr, c, t, head)
@@ -202,10 +202,11 @@ def render(inv: dict, cfg: dict) -> bytes:
         sh.put(r, 2, row["po"], txt)
         sh.put(r, 3, row["vendor"], txt)
         sh.put(r, 4, row["amount"], mon)
-        sh.put(r, 5, round(row["rate"] / 100, 6), pct)
-        sh.put(r, 6, row["fee"], mon, f"ROUND(E{r}*F{r},2)")
+        sh.put(r, 5, row.get("tier") or "", txt)
+        sh.put(r, 6, round(row["rate"] / 100, 6), pct)
+        sh.put(r, 7, row["fee"], mon, f"ROUND(E{r}*G{r},2)")
         if with_amount:
-            sh.put(r, 7, row["due"], mon, f"G{r}+E{r}" if row["with_amount"] else f"G{r}")
+            sh.put(r, 8, row["due"], mon, f"H{r}+E{r}" if row["with_amount"] else f"H{r}")
 
     # 按 vendor 合计，再总计
     tl = st.get(bold=True, fill=TOTAL, border=True, h="center")
@@ -222,10 +223,11 @@ def render(inv: dict, cfg: dict) -> bytes:
         sh.put(r, 2, None, tl)
         sh.put(r, 3, v["vendor"], tl)
         sh.put(r, 4, v["amount"], tm, f"SUMIF({rng(3)},D{r},{rng(4)})")
-        sh.put(r, 5, round(v["rate"] / 100, 6) if v.get("rate") is not None else None, tp)
-        sh.put(r, 6, v["fee"], tm, f"SUMIF({rng(3)},D{r},{rng(6)})")
+        sh.put(r, 5, v.get("tier") or None, tl)
+        sh.put(r, 6, round(v["rate"] / 100, 6) if v.get("rate") is not None else None, tp)
+        sh.put(r, 7, v["fee"], tm, f"SUMIF({rng(3)},D{r},{rng(7)})")
         if with_amount:
-            sh.put(r, 7, v["due"], tm, f"SUMIF({rng(3)},D{r},{rng(7)})")
+            sh.put(r, 8, v["due"], tm, f"SUMIF({rng(3)},D{r},{rng(8)})")
     r += 1
     total_row = r
     sh.heights[r] = 22

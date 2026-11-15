@@ -708,6 +708,26 @@ function defaultNo(date) {
   return date ? `${date.slice(2, 4)}${date.slice(5, 7)}${date.slice(8, 10)}${invCfg().number_suffix || ''}` : '';
 }
 
+// Service Tier 下拉：3 / 2 / 1（来自服务器的 tiers），改了就带出这一级的默认费率和含不含订单金额
+function tierKeys() {
+  return Object.keys(invCfg().tiers || { 3: 0, 2: 0, 1: 0 }).sort((a, b) => b - a);
+}
+
+function tierSelect(attrs, value) {
+  const opts = tierKeys().map((k) => `<option value="${esc(k)}"${String(value) === k ? ' selected' : ''}>${esc(k)}</option>`);
+  if (value === '') opts.unshift('<option value="" selected>多种</option>');
+  return `<select ${attrs}>${opts.join('')}</select>`;
+}
+
+function applyTier(r, tier) {
+  const t = (invCfg().tiers || {})[tier];
+  r.tier = +tier;
+  if (t) {
+    r.rate = t.rate;
+    r.with_amount = !!t.with_amount;
+  }
+}
+
 function numOrNaN(v) {
   if (v === '' || v === null || v === undefined) return NaN;
   return Number(String(v).replace(/[,¥\s%]/g, ''));
@@ -805,8 +825,6 @@ function openPreview() {
     if ((o.invoiced || []).length) warn.push(`已开过 ${o.invoiced.map((x) => x.no).join('、')}`);
     if (o.amount === null || o.amount === undefined || o.amount === '') warn.push('没有订单金额');
     if (o.currency && !['RMB', 'CNY'].includes(o.currency)) warn.push(`金额是 ${o.currency}`);
-    if (o.open_lines) warn.push(`还有 ${o.open_lines} 行没结束`);
-    if (!DONE.has(o.status)) warn.push(`状态是「${o.status || '空'}」`);
     return {
       key: rowKey(o), po: o.po, supplier: o.supplier || '', tier: d.tier || 1, vendor: d.vendor || '', done: d.done || '',
       amount: o.amount ?? '', rate: d.rate ?? '', with_amount: !!d.with_amount, warn,
@@ -873,6 +891,7 @@ function renderInvoice() {
       <td class="c inv-po">${esc(r.po)}${r.supplier && r.supplier !== r.vendor ? `<div class="muted">${esc(r.supplier)}</div>` : ''}${r.warn.length ? `<div class="inv-warn">${r.warn.map(esc).join(' · ')}</div>` : ''}</td>
       <td><input data-f="vendor" maxlength="40" value="${esc(r.vendor)}" placeholder="填下级 vendor" class="${r.vendor ? '' : 'need'}" aria-label="Vendor" /></td>
       <td><input data-f="amount" inputmode="decimal" class="num" value="${esc(r.amount)}" aria-label="订单金额" /></td>
+      <td class="c">${tierSelect('data-f="tier" aria-label="Service Tier"', String(r.tier))}</td>
       <td class="nowrap"><input data-f="rate" inputmode="decimal" class="num rate" value="${esc(r.rate)}" aria-label="服务费 %" />%</td>
       <td class="num" data-out="fee"></td>
       <td class="c"><input type="checkbox" data-f="with_amount"${r.with_amount ? ' checked' : ''} aria-label="含订单金额" /></td>
@@ -883,15 +902,15 @@ function renderInvoice() {
     .join('');
   $('inv-sheet').innerHTML = `${invHeadHtml(invCfg(), fields)}
     <div class="inv-table-wrap"><table class="inv-table">
-      <thead><tr><th>序号</th><th>完成日期</th><th>订单号</th><th>Vendor</th><th>订单金额</th><th>服务费（%）</th><th>服务费小计</th><th title="勾上 = 订单金额也向客户收（我们付的供应商）">含订单金额</th><th>应收小计</th><th></th></tr></thead>
+      <thead><tr><th>序号</th><th>完成日期</th><th>订单号</th><th>Vendor</th><th>订单金额</th><th title="改等级会带出这一级的默认费率和含不含订单金额">Service Tier</th><th>服务费（%）</th><th>服务费小计</th><th title="勾上 = 订单金额也向客户收（我们付的供应商）">含订单金额</th><th>应收小计</th><th></th></tr></thead>
       <tbody id="inv-rows">${body}</tbody>
       <tbody id="inv-vend"></tbody>
       <tbody class="inv-sum">
-        <tr><td class="c b" colspan="8">总计人民币</td><td class="num b" id="inv-total"></td><td></td></tr>
-        <tr><td class="c b" colspan="5">折合美元</td><td class="nowrap" colspan="3">汇率 <input id="inv-usd" inputmode="decimal" class="num rate" value="${esc(v.usd_rate)}" placeholder="不填就空着" /></td><td class="num b" id="inv-usd-out"></td><td></td></tr>
+        <tr><td class="c b" colspan="9">总计人民币</td><td class="num b" id="inv-total"></td><td></td></tr>
+        <tr><td class="c b" colspan="6">折合美元</td><td class="nowrap" colspan="3">汇率 <input id="inv-usd" inputmode="decimal" class="num rate" value="${esc(v.usd_rate)}" placeholder="不填就空着" /></td><td class="num b" id="inv-usd-out"></td><td></td></tr>
       </tbody>
     </table></div>
-    <p class="muted inv-help">「含订单金额」勾上的行，应收 = 订单金额 + 服务费（我们自己付供应商的）；没勾的只收服务费。下面每个 Vendor 的总计行可以一次改这家的费率和勾选。导出或打印时会保存，这些 PO 标成「已开票」。</p>`;
+    <p class="muted inv-help">「含订单金额」勾上的行，应收 = 订单金额 + 服务费（我们自己付供应商的）；没勾的只收服务费。改 Service Tier 会带出这一级的默认费率和勾选；下面每个 Vendor 的总计行可以一次改这一家。导出或打印时会保存，这些 PO 标成「已开票」。</p>`;
   renderInvTotals();
 }
 
@@ -917,12 +936,14 @@ function renderInvTotals() {
   for (const [name, rs] of vendorGroups()) {
     const sum = (f) => rs.reduce((s, r) => s + f(r), 0);
     const rates = [...new Set(rs.map((r) => String(r.rate)))];
+    const tiers = [...new Set(rs.map((r) => String(r.tier)))];
     const withAll = rs.every((r) => r.with_amount);
     const withSome = rs.some((r) => r.with_amount);
     const due = sum(dueOf);
     total += due;
     vend.push(`<tr class="inv-vrow"><td class="c b">总计</td><td></td><td class="c muted">${rs.length} 个</td><td class="c b">${esc(name)}</td>
       <td class="num b">${fmtRMB(sum((r) => numOrNaN(r.amount)))}</td>
+      <td class="c">${tierSelect(`data-vf="tier" data-v="${esc(name)}" aria-label="${esc(name)} 全部的 Service Tier"`, tiers.length === 1 ? tiers[0] : '')}</td>
       <td class="nowrap"><input data-vf="rate" data-v="${esc(name)}" inputmode="decimal" class="num rate" value="${rates.length === 1 ? esc(rates[0]) : ''}" placeholder="多种" aria-label="${esc(name)} 全部的服务费 %" />%</td>
       <td class="num b">${fmtRMB(sum(feeOf))}</td>
       <td class="c"><input type="checkbox" data-vf="with_amount" data-v="${esc(name)}"${withAll ? ' checked' : ''}${withSome && !withAll ? ' data-mixed="1"' : ''} aria-label="${esc(name)} 全部含订单金额" /></td>
@@ -959,7 +980,7 @@ function onInvInput(e) {
     return;
   }
   const tr = t.closest('tr[data-i]');
-  if (!tr || !t.dataset.f) return;
+  if (!tr || !t.dataset.f || t.dataset.f === 'tier') return;
   const r = v.rows[+tr.dataset.i];
   r[t.dataset.f] = t.type === 'checkbox' ? t.checked : t.value;
   if (t.dataset.f === 'vendor') t.classList.toggle('need', !t.value.trim());
@@ -974,8 +995,15 @@ function onInvChange(e) {
       if ((r.vendor.trim() || '（没填 Vendor）') !== t.dataset.v) continue;
       if (t.dataset.vf === 'rate') {
         if (t.value.trim() !== '') r.rate = t.value.trim();
+      } else if (t.dataset.vf === 'tier') {
+        if (t.value) applyTier(r, t.value);
       } else r.with_amount = t.checked;
     }
+    renderInvoice();
+    return;
+  }
+  if (t.dataset.f === 'tier') {
+    applyTier(state.inv.rows[+t.closest('tr[data-i]').dataset.i], t.value);
     renderInvoice();
     return;
   }
@@ -1028,7 +1056,7 @@ async function saveInvoice() {
     by,
     invoice: {
       no, date: v.date, contact: v.contact.trim(), usd_rate: String(v.usd_rate).trim(),
-      rows: v.rows.map((r) => ({ key: r.key, vendor: r.vendor.trim(), done: r.done, amount: String(r.amount).trim(), rate: String(r.rate).trim(), with_amount: r.with_amount })),
+      rows: v.rows.map((r) => ({ key: r.key, vendor: r.vendor.trim(), done: r.done, amount: String(r.amount).trim(), tier: r.tier, rate: String(r.rate).trim(), with_amount: r.with_amount })),
     },
   });
   v.savedNo = no;
@@ -1072,21 +1100,21 @@ function printHtml(inv) {
   const d = parseDay(inv.date);
   const fields = `<dl class="inv-fields"><dt>发票号码：</dt><dd>${esc(inv.no)}</dd><dt>发票日期：</dt><dd>${d ? `${d.getMonth() + 1}月${d.getDate()}日` : ''}</dd><dt>客户联系人：</dt><dd>${esc(inv.contact)}</dd></dl>`;
   const wa = inv.with_amount;
-  const span = wa ? 7 : 6;
+  const span = wa ? 8 : 7;
   const rows = inv.rows
     .map(
-      (r, i) => `<tr class="${i % 2 ? '' : 'band'}"><td>${i + 1}</td><td>${esc(mdy(r.done))}</td><td>${esc(r.po)}</td><td>${esc(r.vendor)}</td><td>${fmtRMB(r.amount)}</td><td>${fmtPct(r.rate)}</td><td>${fmtRMB(r.fee)}</td>${wa ? `<td>${fmtRMB(r.due)}</td>` : ''}</tr>`,
+      (r, i) => `<tr class="${i % 2 ? '' : 'band'}"><td>${i + 1}</td><td>${esc(mdy(r.done))}</td><td>${esc(r.po)}</td><td>${esc(r.vendor)}</td><td>${fmtRMB(r.amount)}</td><td>${esc(r.tier ?? '')}</td><td>${fmtPct(r.rate)}</td><td>${fmtRMB(r.fee)}</td>${wa ? `<td>${fmtRMB(r.due)}</td>` : ''}</tr>`,
     )
     .join('');
   const vend = inv.vendors
     .map(
-      (v) => `<tr class="tot"><td>总计</td><td></td><td></td><td>${esc(v.vendor)}</td><td>${fmtRMB(v.amount)}</td><td>${v.rate === null ? '' : fmtPct(v.rate)}</td><td>${fmtRMB(v.fee)}</td>${wa ? `<td>${fmtRMB(v.due)}</td>` : ''}</tr>`,
+      (v) => `<tr class="tot"><td>总计</td><td></td><td></td><td>${esc(v.vendor)}</td><td>${fmtRMB(v.amount)}</td><td>${esc(v.tier ?? '')}</td><td>${v.rate === null ? '' : fmtPct(v.rate)}</td><td>${fmtRMB(v.fee)}</td>${wa ? `<td>${fmtRMB(v.due)}</td>` : ''}</tr>`,
     )
     .join('');
   const usd = inv.usd === null || inv.usd === undefined ? '' : `$${inv.usd.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
   const foot = (c.footer || []).map((x, i, all) => `<p class="${i === all.length - 1 && all.length > 1 ? 'b' : ''}">${esc(String(x).replace('{phone}', c.phone || ''))}</p>`).join('');
   return `${invHeadHtml(c, fields)}
-    <table class="inv-ptable"><thead><tr><th>序号</th><th>完成日期</th><th>订单号</th><th>Vendor</th><th>订单金额</th><th>服务费（%）</th><th>服务费小计</th>${wa ? '<th>应收小计</th>' : ''}</tr></thead>
+    <table class="inv-ptable"><thead><tr><th>序号</th><th>完成日期</th><th>订单号</th><th>Vendor</th><th>订单金额</th><th>Service Tier</th><th>服务费（%）</th><th>服务费小计</th>${wa ? '<th>应收小计</th>' : ''}</tr></thead>
     <tbody>${rows}${vend}
       <tr class="tot"><td>总计人民币</td><td colspan="${span}" class="r">${fmtRMB(inv.total)}</td></tr>
       <tr class="tot"><td>折合美元</td><td colspan="${span}" class="r">${inv.usd_rate ? `<span class="muted">汇率 ${esc(inv.usd_rate)}　</span>` : ''}${usd}</td></tr>

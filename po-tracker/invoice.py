@@ -106,6 +106,18 @@ def _rate(v) -> float:
     return int(n) if n.is_integer() else round(n, 4)
 
 
+def _tier(v, cfg: dict, default) -> int:
+    if v in (None, ""):
+        return default
+    try:
+        t = int(str(v).strip())
+    except ValueError:
+        t = None
+    if t is None or str(t) not in cfg["tiers"]:
+        raise EditError("Service Tier 只能是 " + " / ".join(sorted(cfg["tiers"], reverse=True)))
+    return t
+
+
 def build(payload, orders_by_key: dict[str, dict], cfg: dict) -> dict:
     """检查网页发来的 invoice，按服务器的数据补上 PO 号、供应商，重新算钱。"""
     if not isinstance(payload, dict):
@@ -147,6 +159,8 @@ def build(payload, orders_by_key: dict[str, dict], cfg: dict) -> dict:
         if amount is None:
             raise EditError(f"{o.get('po')} 没填订单金额")
         rate = _rate(r.get("rate"))
+        d = vendor_defaults(cfg, o.get("supplier"), o.get("sub_vendor"))
+        tier = _tier(r.get("tier"), cfg, d["tier"])
         with_amount = r.get("with_amount") is True
         fee = Decimal(str(amount)) * Decimal(str(rate)) / 100
         fee = fee.quantize(CENT, ROUND_HALF_UP)
@@ -157,21 +171,23 @@ def build(payload, orders_by_key: dict[str, dict], cfg: dict) -> dict:
         rows.append({
             "key": key, "po": str(o.get("po") or ""), "supplier": o.get("supplier") or "", "vendor": vendor,
             "done": clean_date(r.get("done"), f"{o.get('po')} 的完成日期"),
-            "amount": amount, "rate": rate, "with_amount": with_amount, "fee": money(fee), "due": money(due),
+            "amount": amount, "tier": tier, "rate": rate, "with_amount": with_amount, "fee": money(fee), "due": money(due),
         })
     vendors: dict[str, dict] = {}
     for r in rows:
         v = vendors.setdefault(r["vendor"], {"vendor": r["vendor"], "count": 0, "amount": Decimal(0), "fee": Decimal(0),
-                                             "due": Decimal(0), "rates": []})
+                                             "due": Decimal(0), "rates": [], "tiers": []})
         v["count"] += 1
         for k in ("amount", "fee", "due"):
             v[k] += Decimal(str(r[k]))
-        if r["rate"] not in v["rates"]:
-            v["rates"].append(r["rate"])
+        for k in ("rate", "tier"):
+            if r[k] not in v[k + "s"]:
+                v[k + "s"].append(r[k])
     vend = [{**v, "amount": money(v["amount"]), "fee": money(v["fee"]), "due": money(v["due"]),
-             "rate": v["rates"][0] if len(v["rates"]) == 1 else None} for v in vendors.values()]
+             "rate": v["rates"][0] if len(v["rates"]) == 1 else None,
+             "tier": v["tiers"][0] if len(v["tiers"]) == 1 else None} for v in vendors.values()]
     for v in vend:
-        del v["rates"]
+        del v["rates"], v["tiers"]
     total = sum((Decimal(str(r["due"])) for r in rows), Decimal(0))
     return {
         "no": no, "date": date, "contact": contact, "usd_rate": usd_rate,

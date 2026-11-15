@@ -30,8 +30,9 @@ ORDERS = {
 }
 
 
-def row(key, amount, rate, with_amount=False, vendor="V", done=""):
-    return {"key": key, "amount": amount, "rate": rate, "with_amount": with_amount, "vendor": vendor, "done": done}
+def row(key, amount, rate, with_amount=False, vendor="V", done="", tier=None):
+    out = {"key": key, "amount": amount, "rate": rate, "with_amount": with_amount, "vendor": vendor, "done": done}
+    return out if tier is None else {**out, "tier": tier}
 
 
 class DefaultsTest(unittest.TestCase):
@@ -77,8 +78,9 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(fees, [1350, 692.25, 400.2, 2.53])  # 2.525 四舍五入成 2.53
         self.assertEqual([r["due"] for r in inv["rows"]], [1350, 692.25, 1400.7, 2.53])
         self.assertEqual([r["po"] for r in inv["rows"]], ["90001", "90002", "90003", "90004"])  # 号从服务器的数据拿
+        self.assertEqual([r["tier"] for r in inv["rows"]], [3, 2, 1, 1])  # 没给就按供应商的默认等级
         hx = next(v for v in inv["vendors"] if v["vendor"] == "ABC")
-        self.assertEqual((hx["count"], hx["amount"], hx["fee"], hx["due"], hx["rate"]), (2, 1101.5, 402.73, 1403.23, None))
+        self.assertEqual((hx["count"], hx["amount"], hx["fee"], hx["due"], hx["rate"], hx["tier"]), (2, 1101.5, 402.73, 1403.23, None, 1))
         self.assertEqual((inv["fee_total"], inv["amount_billed"], inv["total"]), (2444.98, 1000.5, 3445.48))
         self.assertEqual(inv["usd"], 485.28)
         self.assertTrue(inv["with_amount"])
@@ -95,6 +97,7 @@ class BuildTest(unittest.TestCase):
             ({"rows": [row("90001|凯维", 1, 120)]}, "0 到 100"),
             ({"rows": [row("90001|凯维", 1, 1, vendor="")]}, "Vendor 没填"),
             ({"usd_rate": "abc"}, "汇率"),
+            ({"rows": [row("90001|凯维", 1, 1, tier=7)]}, "Service Tier"),
         ]
         for patch, msg in cases:
             with self.assertRaises(EditError) as cm:
@@ -111,7 +114,7 @@ class XlsxTest(unittest.TestCase):
         data = invoice_xlsx.render(inv, {**CFG, "company": "示例公司", "phone": "+86 1", "bill_to": ["Attn: A", "B LLC"]})
         z = zipfile.ZipFile(io.BytesIO(data))
         sheet = z.read("xl/worksheets/sheet1.xml").decode()
-        for s in ("示例公司", "10/12/26", "ROUND(E14*F14,2)", "G15+E15", "应收小计", 'H"X&lt;&amp;&gt;', "11月15日", "Bill To:"):
+        for s in ("示例公司", "10/12/26", "ROUND(E14*G14,2)", "H15+E15", "应收小计", "Service Tier", 'H"X&lt;&amp;&gt;', "11月15日", "Bill To:"):
             self.assertIn(s, sheet)
         self.assertIn('"¥"#,##0.00'.replace('"', "&quot;"), z.read("xl/styles.xml").decode())
         try:
@@ -120,7 +123,7 @@ class XlsxTest(unittest.TestCase):
             return
         ws = openpyxl.load_workbook(io.BytesIO(data)).active
         self.assertEqual(ws["A13"].value, "序号")
-        self.assertEqual((ws["C14"].value, ws["E14"].value, ws["F14"].value), ("90001", 27000, 0.05))
+        self.assertEqual((ws["C14"].value, ws["E14"].value, ws["F14"].value, ws["G14"].value), ("90001", 27000, 3, 0.05))
 
 
 class InvoiceApiTest(unittest.TestCase):

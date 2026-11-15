@@ -358,11 +358,12 @@ body.invoicing .top-actions { display: none; }
 .inv-fields dd { margin: 0; }
 .inv-sheet input:not([type="checkbox"]) { height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--card); width: 100%; min-width: 0; }
 .inv-sheet input.num { text-align: right; }
+.inv-sheet select { height: 30px; padding: 0 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--card); }
 .inv-sheet input.rate { width: 64px; margin-right: 3px; }
 .inv-sheet input.need, .need-text { border-color: var(--u-overdue) !important; color: var(--u-overdue); }
 .inv-sheet input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
 .inv-table-wrap { overflow-x: auto; }
-.inv-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 900px; }
+.inv-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; }
 .inv-table th { background: #3b5163; color: #fff; font-weight: 600; padding: 8px 6px; border: 1px solid #3b5163; white-space: nowrap; }
 .inv-table td { padding: 5px 6px; border: 1px solid var(--line); vertical-align: middle; }
 .inv-table tr.band td { background: var(--st-green-bg); }
