@@ -200,6 +200,19 @@ def build(payload, orders_by_key: dict[str, dict], cfg: dict) -> dict:
     }
 
 
+def fill_tiers(inv: dict, cfg: dict) -> dict:
+    """加 Service Tier 之前存的 invoice 没有等级：按费率对回等级（5% → 3、25% → 2、40% → 1），对不上就空着。"""
+    by_rate = {}
+    for k, t in cfg["tiers"].items():
+        by_rate.setdefault(t.get("rate"), int(k))
+    rows = [{**r, "tier": r.get("tier") or by_rate.get(r.get("rate"))} for r in inv.get("rows") or []]
+    vendors = []
+    for v in inv.get("vendors") or []:
+        ts = {r["tier"] for r in rows if r.get("vendor") == v.get("vendor")}
+        vendors.append({**v, "tier": v.get("tier") or (ts.pop() if len(ts) == 1 else None)})
+    return {**inv, "rows": rows, "vendors": vendors}
+
+
 class InvoiceStore:
     """开过的 invoice：data/invoices.json，按发票号存（同号再存就是改这张）。"""
 

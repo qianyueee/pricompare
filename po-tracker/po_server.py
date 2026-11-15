@@ -325,7 +325,8 @@ class App:
         inv = self.invoices.load().get(no)
         if not inv:
             raise EditError("找不到这张 invoice", 404)
-        return f"Invoice_{no}.xlsx", invoice_xlsx.render(inv, invoice.load_config(self.data))
+        cfg = invoice.load_config(self.data)
+        return f"Invoice_{no}.xlsx", invoice_xlsx.render(invoice.fill_tiers(inv, cfg), cfg)
 
     def _overrides(self) -> dict:
         try:

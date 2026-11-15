@@ -105,6 +105,17 @@ class BuildTest(unittest.TestCase):
             self.assertIn(msg, str(cm.exception), patch)
 
 
+class FillTiersTest(unittest.TestCase):
+    def test_old_records_get_tier_from_rate(self):
+        old = {"rows": [{"vendor": "A", "rate": 5}, {"vendor": "A", "rate": 5}, {"vendor": "B", "rate": 25},
+                        {"vendor": "B", "rate": 40}, {"vendor": "C", "rate": 12, "tier": 2}],
+               "vendors": [{"vendor": "A"}, {"vendor": "B"}, {"vendor": "C"}]}
+        inv = invoice.fill_tiers(old, CFG)
+        self.assertEqual([r["tier"] for r in inv["rows"]], [3, 3, 2, 1, 2])
+        self.assertEqual([v["tier"] for v in inv["vendors"]], [3, None, 2])
+        self.assertNotIn("tier", old["rows"][0])  # 不改原来的
+
+
 class XlsxTest(unittest.TestCase):
     def test_render_opens_and_has_formulas(self):
         inv = invoice.build({"no": "261115K", "date": "2026-11-15", "contact": "张三", "rows": [
