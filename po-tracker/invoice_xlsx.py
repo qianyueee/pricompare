@@ -165,8 +165,10 @@ def render(inv: dict, cfg: dict) -> bytes:
     sh.heights[2] = 26
     if cfg.get("phone"):
         sh.put(4, 0, f"电话号码：{cfg['phone']}", small)
+        sh.merge(4, 0, 4, 2, small)  # 合并到 C 列：有的查看器（Quick Look）不让文字溢出到右边空格子
     if cfg.get("email"):
         sh.put(5, 0, f"邮箱：{cfg['email']}", small)
+        sh.merge(5, 0, 5, 2, small)
     y, m, d = inv["date"][:4], int(inv["date"][5:7]), int(inv["date"][8:10])
     for r, (k, v) in enumerate((("发票号码：", inv["no"]), ("发票日期：", f"{m}月{d}日"), ("客户联系人：", inv.get("contact") or "")), 8):
         sh.put(r, 0, k, label)
