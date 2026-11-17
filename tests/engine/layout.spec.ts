@@ -44,10 +44,10 @@ async function sheetOf(buffer: ArrayBuffer): Promise<ExcelJS.Worksheet> {
 }
 
 describe('10-07 新布局（34 列，L 列 CL，YJ 在 AG）', () => {
-  it('表头 34 列，供应商槽位 I–N 为 Mao/HC/SKW/CL/XH/JM（M 列 11-06 起由 BY 换成 XH），YJ 在 AG', () => {
+  it('表头 34 列，供应商槽位 I–N 为 ZTL/HC/SKW/CL/XH/JM（M 列 11-06 起由 BY 换成 XH，I 列 11-17 起由 Mao 换成 ZTL），YJ 在 AG', () => {
     expect(KK_HEADERS).toHaveLength(34)
     expect(KK_COL_COUNT).toBe(34)
-    expect(KK_HEADERS.slice(8, 14)).toEqual(['Mao', 'HC', 'SKW', 'CL', 'XH', 'JM'])
+    expect(KK_HEADERS.slice(8, 14)).toEqual(['ZTL', 'HC', 'SKW', 'CL', 'XH', 'JM'])
     expect(KK_HEADERS[KK_COL.yj]).toBe('YJ')
     expect(KK_HEADERS[KK_COL.basePn]).toBe('Base P/N')
     expect(KK_HEADERS[KK_COL.baseId]).toBe('Base ID')
