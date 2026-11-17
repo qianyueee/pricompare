@@ -64,7 +64,7 @@ describe('KK 汇总导出', () => {
     })
     expect(out.slotByVendor['hc']).toBe(9) // J
     expect(out.slotByVendor['skw']).toBe(10) // K
-    expect(out.slotByVendor['newv']).toBe(8) // I（Mao 缺席，最左空槽）
+    expect(out.slotByVendor['newv']).toBe(8) // I（ZTL 缺席，最左空槽）
     expect(out.slotByVendor['usv']).toBe(14) // O
     expect(out.headers).toHaveLength(34)
     expect(out.headers[8]).toBe('新供应商')
@@ -115,7 +115,7 @@ describe('KK 汇总导出', () => {
   })
 
   it('超出 I–N 槽位时在 N 后插入新列并告警', async () => {
-    const vendors = ['mao', 'hc', 'skw', 'cl', 'xh', 'jm'].map((id) => ({
+    const vendors = ['ztl', 'hc', 'skw', 'cl', 'xh', 'jm'].map((id) => ({
       vendorId: id,
       vendorDisplay: id.toUpperCase(),
       rows: [makeQuote('P-1', { amount: 100 })],

@@ -3,7 +3,7 @@
  * 逐字节复刻：注意 H/X 列内嵌换行、U 列双空格、Y 列全角括号前有空格。
  *
  * 2026-10-07 起的新布局：I–N 为 Mao/HC/SKW/CL/BY/JM（L 列新增宸立 CL），YJ 挪到 AG，Base ID 顺延到 AH。
- * 2026-11-06 起 M 列 BY 换成 XH（东莞兴华，Zane），见 KK_HEADER_RENAMES。
+ * 2026-11-06 起 M 列 BY 换成 XH（东莞兴华，Zane）；2026-11-17 起 I 列 Mao 换成 ZTL（正泰隆，Zane），见 KK_HEADER_RENAMES。
  * 旧布局（33 列，I–N 为 Mao/HC/SKW/BY/YJ/JM）见 KK_LEGACY_HEADERS，导入时按表头对位迁移。
  */
 export const KK_SHEET_NAME = 'KK询价汇总'
@@ -17,7 +17,7 @@ export const KK_HEADERS: readonly string[] = [
   'Description',
   "Q'ty",
   'Quote \n(each)',
-  'Mao',
+  'ZTL',
   'HC',
   'SKW',
   'CL',
@@ -48,12 +48,15 @@ export const KK_HEADERS: readonly string[] = [
 /**
  * 改过名的表头：旧名 → 现名。读汇总表时旧名也认作这一列；以原表为底导出时，表头和表格列名改写成现名。
  * BY → XH：2026-11-06 Zane「询价比价页的 by 列换成 xh」，M 列从此记东莞兴华（钣金）的报价。
+ * Mao → ZTL：2026-11-17 Zane「替换mao」，I 列从此记正泰隆（Zintilon）的报价。
  */
-export const KK_HEADER_RENAMES: Readonly<Record<string, string>> = { BY: 'XH' }
+export const KK_HEADER_RENAMES: Readonly<Record<string, string>> = { BY: 'XH', Mao: 'ZTL' }
 
 /** 10-07 之前 pricompare 使用的 33 列旧布局（A–AG）；只用于迁移旧数据（表头保留当时的原文） */
 export const KK_LEGACY_HEADERS: readonly string[] = [
-  ...KK_HEADERS.slice(0, 11), // A–K
+  ...KK_HEADERS.slice(0, 8), // A–H
+  'Mao',
+  ...KK_HEADERS.slice(9, 11), // J–K
   'BY',
   'YJ',
   'JM',
@@ -71,7 +74,7 @@ export const KK_COL = {
   description: 5,
   qty: 6,
   quoteEach: 7,
-  vendorSlotStart: 8, // I 列 Mao
+  vendorSlotStart: 8, // I 列 ZTL
   vendorSlotEnd: 13, // N 列 JM
   usVendor: 14, // O 列
   usd: 15, // P 列
@@ -92,7 +95,7 @@ export const KK_COL = {
 } as const
 
 /** 模板 I–N 供应商槽位的原表头（未占用的槽保留原文） */
-export const KK_VENDOR_SLOT_HEADERS = ['Mao', 'HC', 'SKW', 'CL', 'XH', 'JM'] as const
+export const KK_VENDOR_SLOT_HEADERS = ['ZTL', 'HC', 'SKW', 'CL', 'XH', 'JM'] as const
 
 /** 所有供应商价格列（I–N 连续槽位 + AG 列 YJ）：最低价高亮、比价、并入落列都按它 */
 export const KK_VENDOR_COLS: readonly { col: number; header: string }[] = [
