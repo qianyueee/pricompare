@@ -6,7 +6,11 @@ import { expect, test } from '@playwright/test'
 import {
   FILE_A_PRICES,
   FILE_B_PRICES,
+  BATCH_FIRST,
+  BATCH_LAST,
   FIXTURE_PNS,
+  SHARED_PN,
+  makeBatchesMasterFile,
   makeBigMasterFile,
   makeFileA,
   makeFileB,
@@ -679,4 +683,103 @@ test('大表只画看得见的行：滚动、编辑中滚走照样保存、跨�
   await page.getByTestId('search-input').fill('')
   await expect(page.getByText('显示 400 行')).toBeVisible()
   await expect(page.locator('[data-cell="0:3"]')).toHaveText('1000000-000')
+})
+
+test('搜索后双击批次显示整批、返回搜索；格子里的字可选中复制，拖出格子仍是框格区', async ({ page }) => {
+  const BATCHES_PATH = join(TMP, 'KKMasterBatches.xlsx')
+  writeFileSync(BATCHES_PATH, Buffer.from(await makeBatchesMasterFile()))
+  await page.goto('/')
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.setInputFiles('[data-testid=file-input]', [BATCHES_PATH])
+  await page.getByTestId('confirm-master-import').click()
+  await expect(page.getByText('显示 278 行')).toBeVisible()
+
+  // 搜零件号：最新一批和最早一批各一行
+  await page.getByTestId('search-input').fill(SHARED_PN)
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+  // 双击最早那一批的批次格（不在下拉列出的最近 60 批里）→ 搜索清空，只看这一批 150 行；
+  // 刚才搜到的那一行标黄、滚到眼前，双击不进编辑
+  await page.locator('[data-cell="120:1"]').dblclick()
+  await expect(page.getByTestId('search-input')).toHaveValue('')
+  await expect(page.getByTestId('batch-filter')).toHaveValue(BATCH_FIRST)
+  await expect(page.getByText('显示 150 行')).toBeVisible()
+  await expect(page.getByTestId('batch-jump')).toContainText(`整批 ${BATCH_FIRST}`)
+  await expect(page.getByTestId('batch-jump-back')).toHaveText(`← 返回搜索「${SHARED_PN}」`)
+  await expect(page.locator('[data-cell="120:3"]')).toBeInViewport()
+  await expect(page.locator('tr[data-marked]')).toHaveCount(1)
+  await expect(page.locator('tr[data-marked] [data-cell="120:3"]')).toHaveText(SHARED_PN)
+  await page.waitForTimeout(500)
+  await expect(page.getByTestId('cell-editor')).toHaveCount(0)
+  // 「← 返回搜索」：回到刚才搜到的两行
+  await page.getByTestId('batch-jump-back').click()
+  await expect(page.getByTestId('search-input')).toHaveValue(SHARED_PN)
+  await expect(page.getByTestId('batch-filter')).toHaveValue('')
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+  await expect(page.getByTestId('batch-jump')).toHaveCount(0)
+  // 最新那一批：双击后这一批 2 行；手动改了批次下拉就不算整批了，标黄和返回一起取消
+  await page.locator('[data-cell="276:1"]').dblclick()
+  await expect(page.getByTestId('batch-filter')).toHaveValue(BATCH_LAST)
+  await expect(page.getByTestId('master-row')).toHaveCount(2)
+  await expect(page.locator('[data-cell="277:3"]')).toHaveText('3000641-000')
+  await page.getByTestId('batch-filter').selectOption('')
+  await expect(page.getByTestId('batch-jump')).toHaveCount(0)
+  await expect(page.locator('tr[data-marked]')).toHaveCount(0)
+  await expect(page.getByText('显示 278 行')).toBeVisible()
+
+  // 单击批次格照样编辑（稍等一下才出编辑框）
+  await page.locator('[data-cell="277:1"]').click()
+  await expect(page.getByTestId('cell-editor')).toHaveValue(BATCH_LAST)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('cell-editor')).toHaveCount(0)
+
+  // 在一个格子里按住拖选一段文字：不进编辑、不框格区，Ctrl+C 复制的就是这段文字
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  const DESC = 'PLATE, BATCH 64 ROW 2'
+  const box = (await page.locator('[data-cell="277:5"]').boundingBox())!
+  const y = box.y + box.height / 2
+  await page.mouse.move(box.x + 3, y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.5, y, { steps: 5 })
+  await page.mouse.up()
+  const picked = await page.evaluate(() => window.getSelection()?.toString() ?? '')
+  expect(picked.length).toBeGreaterThan(3)
+  expect(DESC.startsWith(picked)).toBe(true)
+  await page.waitForTimeout(100)
+  await expect(page.getByTestId('cell-editor')).toHaveCount(0)
+  await expect(page.getByTestId('selected-count')).toHaveCount(0)
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText(`已复制文字「${picked.trim()}」`)
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(picked)
+
+  // 从格子里拖出去到旁边一格：是框格区，选到一半的文字清掉，Ctrl+C 复制格区
+  await page.mouse.move(box.x + 3, y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.5, y, { steps: 3 })
+  await page.locator('[data-cell="277:6"]').hover()
+  await page.mouse.up()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 1×2 格')
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('')
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 1×2 格')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${DESC}\t1`)
+
+  // 有选区时在格子里再选文字：Ctrl+C 复制选中的文字；之后点 A 列选行，Ctrl+C 又是复制整行
+  await page.mouse.move(box.x + 3, y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.4, y, { steps: 5 })
+  await page.mouse.up()
+  const picked2 = await page.evaluate(() => window.getSelection()?.toString() ?? '')
+  expect(picked2.length).toBeGreaterThan(3)
+  await page.keyboard.press('Control+c')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(picked2)
+  await page.keyboard.press('Escape')
+  await page.locator('[data-cell="277:0"]').click()
+  await expect(page.getByTestId('selected-count')).toHaveText('已选 1 行')
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('')
+  await page.keyboard.press('Control+c')
+  await expect(page.getByTestId('toast')).toContainText('已复制 1 行')
+  await expect
+    .poll(async () => (await page.evaluate(() => navigator.clipboard.readText())).split('\t').slice(0, 3))
+    .toEqual([BATCH_LAST, '2', '3000641-000'])
 })

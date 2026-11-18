@@ -10,7 +10,7 @@ import {
   type MasterRow,
 } from '@engine/index'
 import FileChip from '../components/FileChip'
-import MasterTable, { type CellRange } from '../components/MasterTable'
+import MasterTable, { type CellRange, type ScrollTarget } from '../components/MasterTable'
 import { todayBatch, useSession } from '../store/session'
 import { copyTable } from '../utils/clipboard'
 
@@ -18,6 +18,26 @@ const ALL_EDIT_COLS = Array.from({ length: KK_COL_COUNT - 1 }, (_, i) => i + 1) 
 
 /** 没框格区时统一用这一个空数组（引用不变，表格不用重画） */
 const NO_RANGES: readonly CellRange[] = []
+
+/** 没有标黄的行时统一用这一个空集合 */
+const NO_MARKS: ReadonlySet<number> = new Set()
+
+/** 批次下拉列出的最近批次数 */
+const BATCH_OPTIONS = 60
+
+/** 双击批次格进入整批时记下的：从哪来（返回时恢复）、哪几行标黄 */
+interface BatchJump {
+  batch: string
+  /** 进来前的搜索词、批次筛选 */
+  prevSearch: string
+  prevBatch: string
+  /** 刚才搜到的、属于这一批的行（原表行号）：整批里标黄 */
+  marks: ReadonlySet<number>
+  /** 双击的那一行：进来、返回时都滚到它 */
+  row: number
+}
+
+const batchOf = (row: MasterRow | undefined) => String(row?.cells[1] ?? '').trim()
 
 /** 框选的几块格区按行展开：落在任一块里的行（按显示顺序），带上这一行所在各块的列区间 */
 function rangeRows(ranges: readonly CellRange[], vis: readonly { row: MasterRow; index: number }[]) {
@@ -60,6 +80,8 @@ export default function MainPage() {
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [selCols, setSelCols] = useState<Set<number>>(() => new Set())
   const [selRanges, setSelRanges] = useState<readonly CellRange[]>(NO_RANGES)
+  const [batchJump, setBatchJump] = useState<BatchJump | null>(null)
+  const [scrollTo, setScrollTo] = useState<ScrollTarget | null>(null)
 
   const rows = master?.rows ?? []
   const dataCount = useMemo(() => rows.filter(isDataRow).length, [rows])
@@ -181,6 +203,37 @@ export default function MainPage() {
   const visibleRef = useRef(visible)
   visibleRef.current = visible
 
+  // 双击 B 列批次格：清掉搜索、只看这一批的全部行；刚才搜到的这一批的行标黄，滚到双击的那一行
+  const openBatch = useCallback(
+    (rowIndex: number) => {
+      const batch = batchOf(rows[rowIndex])
+      if (!batch || (batchFilter === batch && !search.trim())) return // 已经在看整批
+      const marks = new Set<number>(
+        search.trim()
+          ? visibleRef.current.filter((it) => batchOf(it.row) === batch).map((it) => it.index)
+          : [rowIndex],
+      )
+      setBatchJump({ batch, prevSearch: search, prevBatch: batchFilter, marks, row: rowIndex })
+      setSearch('')
+      setBatchFilter(batch)
+      setScrollTo({ index: rowIndex, seq: Date.now() })
+    },
+    [rows, search, batchFilter],
+  )
+
+  // 「← 返回」：回到双击前的搜索结果 / 批次筛选，还停在那一行
+  const leaveBatch = useCallback(() => {
+    if (!batchJump) return
+    setSearch(batchJump.prevSearch)
+    setBatchFilter(batchJump.prevBatch)
+    setBatchJump(null)
+    setScrollTo({ index: batchJump.row, seq: Date.now() })
+  }, [batchJump])
+
+  // 手动改了批次筛选或搜索就不算在「整批」里了：标黄和返回一起取消
+  const inBatchJump = batchJump !== null && batchFilter === batchJump.batch && search === ''
+  const marks = inBatchJump ? batchJump.marks : NO_MARKS
+
   const rowDrag = useCallback((vFrom: number, vTo: number, base: ReadonlySet<number>) => {
     setSelCols(new Set())
     setSelRanges(NO_RANGES)
@@ -277,6 +330,12 @@ export default function MainPage() {
         return
       }
       if (mod && e.key.toLowerCase() === 'c') {
+        // 格子里拖选/双击选中了文字：交给浏览器复制这段文字（不管有没有选行/列/格区）
+        const text = window.getSelection()?.toString().trim() ?? ''
+        if (text) {
+          showToast({ message: `已复制文字「${text.length > 40 ? `${text.slice(0, 40)}…` : text}」` })
+          return
+        }
         if (selKind) {
           e.preventDefault()
           void copySelection()
@@ -290,7 +349,7 @@ export default function MainPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selKind, copySelection, clearSelectionCells, clearSelection, undoMasterEdit, readOnly])
+  }, [selKind, copySelection, clearSelectionCells, clearSelection, undoMasterEdit, readOnly, showToast])
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2.5 p-3">
@@ -357,14 +416,43 @@ export default function MainPage() {
           <FileChip key={f.id} file={f} />
         ))}
         <div className="flex-1" />
+        {inBatchJump && (
+          <span
+            data-testid="batch-jump"
+            className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 py-0.5 pr-0.5 pl-2.5 text-xs text-amber-800"
+          >
+            整批 {batchJump.batch}
+            {batchJump.prevSearch.trim() && <span className="text-amber-600">· 黄底是刚才搜到的</span>}
+            <button
+              type="button"
+              data-testid="batch-jump-back"
+              onClick={leaveBatch}
+              title="回到双击批次之前的搜索结果"
+              className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-amber-700 hover:bg-amber-100"
+            >
+              {batchJump.prevSearch.trim()
+                ? `← 返回搜索「${batchJump.prevSearch.trim()}」`
+                : batchJump.prevBatch
+                  ? `← 返回 ${batchJump.prevBatch}`
+                  : '← 返回全部批次'}
+            </button>
+          </span>
+        )}
         <select
           data-testid="batch-filter"
           value={batchFilter}
-          onChange={(e) => setBatchFilter(e.target.value)}
+          onChange={(e) => {
+            setBatchFilter(e.target.value)
+            setBatchJump(null)
+          }}
           className="max-w-48 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs"
         >
           <option value="">全部批次</option>
-          {batches.slice(0, 60).map((b) => (
+          {/* 双击进来的是较早的批次（不在最近 60 个里）时也列出来，下拉才显示得对 */}
+          {batchFilter && !batches.slice(0, BATCH_OPTIONS).includes(batchFilter) && (
+            <option value={batchFilter}>{batchFilter}</option>
+          )}
+          {batches.slice(0, BATCH_OPTIONS).map((b) => (
             <option key={b} value={b}>
               {b}
             </option>
@@ -373,7 +461,10 @@ export default function MainPage() {
         <input
           data-testid="search-input"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value)
+            setBatchJump(null)
+          }}
           placeholder="搜索 P/N / 描述 / 批次 / 单号…"
           className="w-56 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
         />
@@ -397,17 +488,22 @@ export default function MainPage() {
         onColDrag={colDrag}
         onRangeDrag={rangeDrag}
         onClearSelection={clearSelection}
+        onOpenBatch={openBatch}
+        marked={marks}
+        scrollTo={scrollTo}
       />
       <div className="text-[11px] text-slate-400">
         {readOnly ? (
           <>
-            最新批次显示在最上（导出仍按原顺序）· 按住拖动选多格 · A 列选行、表头选列（都可拖选多个；再拖一段、再框一块都是接着加选）→ Ctrl+C 复制 ·
+            最新批次显示在最上（导出仍按原顺序）· 双击批次显示整批 ·
+            格子里的字可拖选、双击选中后 Ctrl+C 复制，拖出格子是选多格 · A 列选行、表头选列（都可拖选多个；再拖一段、再框一块都是接着加选）→ Ctrl+C 复制 ·
             选行后可「导出所选」单独导出这几行 · Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 新报价会自动出现在表里
           </>
         ) : (
           <>
-            最新批次显示在最上（导出仍按原顺序）· 单击格子编辑（Enter 保存 / Esc 取消），按住拖动选多格 ·
+            最新批次显示在最上（导出仍按原顺序）· 双击批次显示整批 · 单击格子编辑（Enter 保存 / Esc 取消）·
+            格子里的字可拖选后 Ctrl+C 复制，拖出格子是选多格 ·
             A 列选行、表头选列（都可拖选多个；再拖一段、再框一块都是接着加选）→ Ctrl+C 复制 / Delete 清空 / 删除行按钮整行删除 / 导出所选 / Ctrl+Z 撤销 /
             Esc 取消全部选中 ·
             供应商列绿色 = 本行最低价 · 选行后 Ctrl+B 进入 NEGO 比价 · 拖入报价按规则并入，拖入 KK 汇总表整表更新
