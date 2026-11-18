@@ -155,6 +155,7 @@ export class DataStore {
         version: this.version,
         changedCells: result.changedCells,
         ...(result.merge ? { merge: result.merge } : {}),
+        ...(result.added ? { added: result.added } : {}),
       }
     })
   }

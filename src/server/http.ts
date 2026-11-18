@@ -104,7 +104,7 @@ function isMasterData(v: unknown): v is MasterData {
   return !!m && Array.isArray(m.rows) && m.rows.every((r) => r && Array.isArray(r.cells))
 }
 
-const OP_KINDS = new Set(['setCells', 'deleteRows', 'restoreRows', 'merge', 'replace', 'batch'])
+const OP_KINDS = new Set(['setCells', 'deleteRows', 'restoreRows', 'merge', 'addRows', 'replace', 'batch'])
 
 function isOp(v: unknown): v is MasterOp {
   const o = v as { kind?: unknown } | null
@@ -183,6 +183,8 @@ export function createHandler(opts: HandlerOptions) {
         throw new HttpError(400, '操作格式不对')
       }
       if (body.op.kind === 'replace' && !isMasterData(body.op.master)) throw new HttpError(400, '总表格式不对')
+      if (body.op.kind === 'addRows' && (typeof body.op.batch !== 'string' || !body.op.batch.trim() || !Array.isArray(body.op.rows)))
+        throw new HttpError(400, '预建行缺少询价组名或行')
       const result = await store.applyOp(body.baseVersion, body.opId, body.op, { user: caller.user, source })
       return sendJson(res, result.applied || result.reason === 'unchanged' ? 200 : 409, result)
     }

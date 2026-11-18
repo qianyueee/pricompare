@@ -1,7 +1,7 @@
 import { formatLeadTime } from '../normalize/leadtime'
 import { cleanAmountString } from './clean'
 import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
-import { isPlaceholderRow, KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
+import { isPlaceholderRow, KK_COL_COUNT, withCells, type MasterCell, type MasterData, type MasterRow, type MasterRowOrigin } from './model'
 import { nextQuoteEach } from './quoteEach'
 import { kzQuoteNo, normalizeReceivedDate, todayYmd } from './quoteNo'
 import type { QuoteRow } from '../types'
@@ -15,7 +15,10 @@ import type { QuoteRow } from '../types'
  *   只写进 V 空着、这次写了价的行，见 quoteNo.ts；供应商自己的单号（凯维的 KV…）不再进 V
  * - H Quote (each)：这一行各家数字报价的平均，向上取整到个位（Zane 2026-10-28，见 quoteEach.ts），
  *   每并入一家就重算；U 对客报价：来自带 Quote(EA) 的报价文件（KV 家宏算好的），只填空不覆盖
- * - 材料/表面处理等明细：空则填；SKW 的值可覆盖别家（观察到 KV 中文规格优先）
+ * - 材料/表面处理等明细：空则填；SKW 的值可覆盖别家（观察到 KV 中文规格优先）。
+ *   例外：询价邮箱流程收到 RFQ 时预建的行（origin = intake，Zane 2026-11-18），规格按图纸填好了，
+ *   报价只填价格、交期、备注，规格列只在空着时才填，谁都不覆盖
+ * - 同 P/N + 同数量的空行有好几处时，先落本组（B 列 = 本次批次名）的行，再按自底向上找别组的（预建行常比报价早到很多）
  *
  * 0823/0826/0828 三轮真实汇总补充的规则：
  * - 重复拖入已并入的回单（同批次同件同数量且该家价一致）→ skip，不产生重复行
@@ -55,6 +58,8 @@ export interface MergeAction {
   excelRow: number
   quote: QuoteRow
   changes: MergeChange[]
+  /** append：新行沿用本组预建行（同料号别的数量档）的料号信息和规格，也记成预建行 */
+  origin?: MasterRowOrigin
 }
 
 export interface MergePlan {
@@ -217,12 +222,13 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
         )
       }
     }
-    // 明细：空则填；SKW 的规格可覆盖别家（不覆盖备注）
+    // 明细：空则填；SKW 的规格可覆盖别家（不覆盖备注）；预建行（按图纸填好的）谁都不覆盖
+    const specsLocked = row?.origin === 'intake'
     for (const [col, field] of specFields) {
       const v = q[field]
       if (typeof v !== 'string' || !v) continue
       if (isEmptyCell(cells[col])) set(col, v)
-      else if (opts.vendorId === 'skw' && String(cells[col]).trim() !== v) set(col, v)
+      else if (opts.vendorId === 'skw' && !specsLocked && String(cells[col]).trim() !== v) set(col, v)
     }
     if (q.remark) {
       const existing = String(cells[KK_COL.comment] ?? '').trim()
@@ -341,19 +347,40 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     claimed.add(target)
   })
 
-  // 候选行：同 P/N + 同数量 + 该家槽位可填（空或 TDB 占位），自底向上
+  // 候选行：同 P/N + 同数量 + 该家槽位可填（空或 TDB 占位）；本组的行在前，各自自底向上。
+  // 本组预建时没有数量的行（客户询价没写数量）也算，排在同数量的后面：报价落进来时数量照报价填
   const candidatesOf = (q: QuoteRow): number[] => {
-    const out: number[] = []
+    const own: number[] = []
+    const noQty: number[] = []
+    const other: number[] = []
     for (let i = rows.length - 1; i >= 0; i--) {
       if (claimed.has(i)) continue
       const row = rows[i]!
       if (isPlaceholderRow(row)) continue
       if (normPn(row.cells[KK_COL.pn]) !== normPn(q.pn)) continue
-      if (!numEq(row.cells[KK_COL.qty] ?? null, q.qty)) continue
       if (!isFillableCell(row.cells[opts.vendorSlot])) continue
-      out.push(i)
+      const ownBatch = !!batchName && rowBatchEq(row)
+      if (!numEq(row.cells[KK_COL.qty] ?? null, q.qty)) {
+        if (q.qty !== null && ownBatch && row.origin === 'intake' && isEmptyCell(row.cells[KK_COL.qty])) noQty.push(i)
+        continue
+      }
+      ;(ownBatch ? own : other).push(i)
     }
-    return out
+    return [...own, ...noQty, ...other]
+  }
+
+  // 本组这个料号的预建行（报价多出来的数量档要新建行时，照它填料号信息和规格）
+  const TEMPLATE_COLS = [
+    KK_COL.name, KK_COL.item, KK_COL.pn, KK_COL.rev, KK_COL.description,
+    KK_COL.material, KK_COL.surfaceFinish, KK_COL.cleaningSpec, KK_COL.process,
+  ]
+  const intakeTemplate = (q: QuoteRow): MasterRow | null => {
+    if (!batchName) return null
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i]!
+      if (row.origin === 'intake' && rowBatchEq(row) && normPn(row.cells[KK_COL.pn]) === normPn(q.pn)) return row
+    }
+    return null
   }
 
   // 第一遍：材料能对上的先配对——同零件同数量多行只差材料（如 Invar/SS-416/SS-303 各一行）时，
@@ -400,12 +427,24 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       } else {
         rowIndex = rows.length + appendExtra++
       }
-      const changes = buildChanges(baseRow, q)
+      const tmpl = intakeTemplate(q)
+      let changes: MergeChange[]
+      if (tmpl) {
+        const start: MasterCell[] = baseRow ? [...baseRow.cells] : Array.from({ length: KK_COL_COUNT }, () => null)
+        const copied: MergeChange[] = []
+        for (const col of TEMPLATE_COLS) {
+          const v = tmpl.cells[col] ?? null
+          if (v === null || v === start[col]) continue
+          copied.push({ col, from: start[col] ?? null, to: v })
+          start[col] = v
+        }
+        changes = [...copied, ...buildChanges({ cells: start, origin: 'intake' }, q)]
+      } else changes = buildChanges(baseRow, q)
       if (!baseRow) {
         lastNo += 1
         changes.unshift({ col: 0, from: null, to: lastNo })
       }
-      actions.push({ kind: 'append', rowIndex, excelRow: rowIndex + 2, quote: q, changes })
+      actions.push({ kind: 'append', rowIndex, excelRow: rowIndex + 2, quote: q, changes, ...(tmpl ? { origin: 'intake' as const } : {}) })
     }
   })
 
@@ -452,10 +491,15 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
 
 /** 应用合并计划，返回新的 MasterData（不修改原对象） */
 export function applyMerge(master: MasterData, plan: MergePlan): MasterData {
-  const rows = master.rows.map((r) => ({ cells: [...r.cells] }))
+  const rows: MasterRow[] = master.rows.map((r) => withCells(r, [...r.cells]))
   for (const action of plan.actions) {
     while (rows.length <= action.rowIndex) {
       rows.push({ cells: Array.from({ length: KK_COL_COUNT }, () => null as MasterCell) })
+    }
+    // 追加的行：照预建行建的才记成预建行（占用的预编号空行原来带的标记不算）
+    if (action.kind === 'append') {
+      const cells = rows[action.rowIndex]!.cells
+      rows[action.rowIndex] = action.origin ? { cells, origin: action.origin } : { cells }
     }
     const row = rows[action.rowIndex]!
     for (const ch of action.changes) row.cells[ch.col] = ch.to
