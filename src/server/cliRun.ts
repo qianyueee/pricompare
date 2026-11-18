@@ -50,8 +50,8 @@ const HELP = `用法：node cli.mjs <命令> [参数]
                                            并入正文里的报价（没有附件时，把行写成 JSON）
   add-rows --rows <add.json> --batch B [--dry-run]
                                            预建询价行（询价邮箱流程收到 RFQ 时用）：每个零件每档数量一行，
-                                           价格、交期、备注留空；组里已有同 P/N + 同数量的跳过。--source intake 的行
-                                           之后并入报价时规格列不被覆盖
+                                           价格、交期、备注留空；组里已有同 P/N + 同数量的跳过。建出的行标为预建行，
+                                           之后并入报价时只填价格交期等，规格列谁都不覆盖
   batches [--last N]                       最近的询价组：行号范围、各家已填几行
   rows [--batch B] [--pn P] [--last N] [--json]
                                            查总表行（Excel 行号、各家价格、单号、交期、备注）
@@ -450,7 +450,6 @@ async function addRowsCmd() {
   })
   const rowsIn = input.map((r) => ({ ...r, qty: r.qty === undefined || r.qty === null ? null : Number(r.qty) }))
   const dryRun = values['dry-run'] ?? false
-  const origin = values.source === 'intake' ? ('intake' as const) : undefined
   // 预建行是在表尾新增：期间别人删过行就重来（最多 3 次），不会写错位置
   for (let attempt = 1; attempt <= 3; attempt++) {
     const snap = await call<MasterSnapshot>('GET', '/api/master')
@@ -473,7 +472,7 @@ async function addRowsCmd() {
       return
     }
     if (plan.addCount === 0) return
-    const op: MasterOp = { kind: 'addRows', batch, rows: rowsIn, ...(origin ? { origin } : {}) }
+    const op: MasterOp = { kind: 'addRows', batch, rows: rowsIn, origin: 'intake' }
     const res = await call<PostOpResponse>('POST', '/api/ops', { baseVersion: snap.version, opId: crypto.randomUUID(), op })
     if (res.applied) {
       out(`已建 ${res.added?.add ?? plan.addCount} 行，总表版本 ${res.version}`)
