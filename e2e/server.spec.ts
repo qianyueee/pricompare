@@ -98,6 +98,27 @@ test('网页版连服务：导入、改格存到服务、后台并入实时出�
   await page.getByTestId('cell-editor').press('Enter')
   await expect(tony.locator('[data-cell="1:9"]')).toHaveText('95')
 
+  // Tony 搜零件号后双击批次格：显示这一批全部行（只读账号双击也不进编辑），「← 返回搜索」回到搜索结果
+  await tony.getByTestId('search-input').fill('0900001')
+  await expect(tony.getByTestId('master-row')).toHaveCount(1)
+  await tony.locator('[data-cell="1:1"]').dblclick()
+  await expect(tony.getByTestId('master-row')).toHaveCount(2)
+  await expect(tony.getByTestId('batch-filter')).toHaveValue('20260801 Old')
+  await expect(tony.locator('tr[data-marked] [data-cell="1:3"]')).toHaveText('0900001-000')
+  await tony.getByTestId('batch-jump-back').click()
+  await expect(tony.getByTestId('master-row')).toHaveCount(1)
+  // 格子里的字可以选中复制：三击选中整格，Ctrl+C 复制的就是这个零件号；双击选中一个词
+  await tony.locator('[data-cell="1:3"]').click({ clickCount: 3 })
+  expect(await tony.evaluate(() => window.getSelection()?.toString())).toBe('0900001-000')
+  await tony.keyboard.press('Control+c')
+  await expect(tony.getByTestId('toast')).toContainText('已复制文字「0900001-000」')
+  await expect.poll(() => tony.evaluate(() => navigator.clipboard.readText())).toBe('0900001-000')
+  await tony.locator('[data-cell="1:9"]').dblclick({ position: { x: 10, y: 8 } }) // 点在字上
+  expect(await tony.evaluate(() => window.getSelection()?.toString())).toBe('95')
+  await expect(tony.getByTestId('cell-editor')).toHaveCount(0)
+  await tony.getByTestId('search-input').fill('')
+  await expect(tony.getByTestId('master-row')).toHaveCount(3)
+
   // Tony 复制整行贴进汇总表 Excel（从 B 列批次起）：看不到的 O、P、Q、S 照样占一列（内容留空），后面的列不左移
   await page.locator('[data-cell="1:15"]').click()
   await page.getByTestId('cell-editor').fill('12.3') // P USD：Tony 看不到，也不该复制给他
