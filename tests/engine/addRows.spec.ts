@@ -101,6 +101,10 @@ describe('报价并入预建行', () => {
     expect(cols).toContain(HC.vendorSlot)
     expect(cols).toContain(KK_COL.leadTime)
     expect(cols).not.toContain(KK_COL.material)
+    // 华臣有时把版本写进料号（1330723-000_AA）：照样落到预建行，料号不改
+    const p2 = planMerge(m, [makeQuote('1330723-000_AA', { qty: 1, amount: 2260 })], HC)
+    expect(p2.actions.map((a) => [a.kind, a.excelRow])).toEqual([['fill', 5]])
+    expect(p2.actions[0]!.changes.find((c) => c.col === KK_COL.pn)).toBeUndefined()
   })
 
   it('凯维的规格写法不覆盖预建行（按图纸填好的），普通行照旧覆盖', () => {

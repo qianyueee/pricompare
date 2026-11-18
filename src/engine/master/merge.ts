@@ -72,6 +72,11 @@ export interface MergePlan {
 }
 
 const normPn = (v: MasterCell | string): string => String(v ?? '').trim().toUpperCase()
+/** 料号去掉版本后缀（华臣有时写成 1330723-000_AA）。只用来比预建行：预建行的料号是干净的，报价写法不一 */
+const basePn = (v: MasterCell | string): string => normPn(v).replace(/^(\d{7}-\d{3})[_\s]+(?:REV\.?\s*)?[A-Z]{1,2}$/, '$1')
+/** 这行是不是这个料号：预建行忽略版本后缀，其他行照旧整串比 */
+const pnMatch = (row: MasterRow, pn: string): boolean =>
+  row.origin === 'intake' ? basePn(row.cells[KK_COL.pn]) === basePn(pn) : normPn(row.cells[KK_COL.pn]) === normPn(pn)
 
 /**
  * 从报价内容猜汇总批次名（B 列）：
@@ -250,7 +255,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (claimed.has(i)) continue
       const row = rows[i]!
       if (isPlaceholderRow(row) || !rowBatchEq(row)) continue
-      if (normPn(row.cells[KK_COL.pn]) !== normPn(q.pn)) continue
+      if (!pnMatch(row, q.pn)) continue
       if (!numEq(row.cells[KK_COL.qty] ?? null, q.qty)) continue
       if (!slotEqualsQuote(row.cells[opts.vendorSlot], q)) continue
       claimed.add(i)
@@ -305,7 +310,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (claimed.has(i)) continue
       const row = rows[i]!
       if (isPlaceholderRow(row) || !rowBatchEq(row)) continue
-      if (normPn(row.cells[KK_COL.pn]) !== normPn(q.pn)) continue
+      if (!pnMatch(row, q.pn)) continue
       if (isFillableCell(row.cells[opts.vendorSlot])) continue
       if (numEq(row.cells[KK_COL.qty] ?? null, q.qty)) {
         target = i
@@ -317,7 +322,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       // （同文件里已有其他行与总表一致，0826 Kit：7 行原样 + 4 行改档）才按修订处理
       if (preResolved.size === 0) continue
       const sameBatchSamePn = rows.filter(
-        (r, ri) => !claimed.has(ri) && !isPlaceholderRow(r) && rowBatchEq(r) && normPn(r.cells[KK_COL.pn]) === normPn(q.pn),
+        (r, ri) => !claimed.has(ri) && !isPlaceholderRow(r) && rowBatchEq(r) && pnMatch(r, q.pn),
       )
       if (sameBatchSamePn.length !== 1) continue
       const otherSlotsBusy = KK_VENDOR_COLS.some(
@@ -357,7 +362,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
       if (claimed.has(i)) continue
       const row = rows[i]!
       if (isPlaceholderRow(row)) continue
-      if (normPn(row.cells[KK_COL.pn]) !== normPn(q.pn)) continue
+      if (!pnMatch(row, q.pn)) continue
       if (!isFillableCell(row.cells[opts.vendorSlot])) continue
       const ownBatch = !!batchName && rowBatchEq(row)
       if (!numEq(row.cells[KK_COL.qty] ?? null, q.qty)) {
@@ -378,7 +383,7 @@ export function planMerge(master: MasterData, quotes: QuoteRow[], opts: MergeOpt
     if (!batchName) return null
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i]!
-      if (row.origin === 'intake' && rowBatchEq(row) && normPn(row.cells[KK_COL.pn]) === normPn(q.pn)) return row
+      if (row.origin === 'intake' && rowBatchEq(row) && pnMatch(row, q.pn)) return row
     }
     return null
   }

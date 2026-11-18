@@ -38,7 +38,9 @@ export interface AddRowsPlan {
   skipCount: number
 }
 
-const normPn = (v: MasterCell | string | undefined): string => String(v ?? '').trim().toUpperCase()
+/** 比料号时去掉版本后缀（华臣有时写成 1330723-000_AA） */
+const normPn = (v: MasterCell | string | undefined): string =>
+  String(v ?? '').trim().toUpperCase().replace(/^(\d{7}-\d{3})[_\s]+(?:REV\.?\s*)?[A-Z]{1,2}$/, '$1')
 const text = (v: string | number | null | undefined): string => (v === null || v === undefined ? '' : String(v).trim())
 
 function sameQty(a: MasterCell | undefined, b: number | null | undefined): boolean {
