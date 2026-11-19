@@ -37,7 +37,7 @@ export interface PostOpRequest {
 }
 
 export type PostOpResponse =
-  | { applied: true; version: number; changedCells: number; merge?: MergeSummary }
+  | { applied: true; version: number; changedCells: number; merge?: MergeSummary; added?: { add: number; skip: number } }
   | { applied: false; version: number; reason: 'conflict' | 'unchanged' }
 
 export interface ImportMasterRequest {

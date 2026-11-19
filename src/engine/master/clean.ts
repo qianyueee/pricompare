@@ -1,5 +1,5 @@
 import { KK_COL, KK_VENDOR_COLS } from '../export/kkLayout'
-import type { MasterCell, MasterData } from './model'
+import { withCells, type MasterCell, type MasterData } from './model'
 
 /**
  * 金额/数量数据清洗：历史汇总里混有文本格式的数字（'9000'、'￥1,133.40'、
@@ -49,7 +49,7 @@ export function cleanMasterAmounts(master: MasterData): CleanResult {
       cells[c] = n
       changed++
     }
-    return cells ? { cells } : row
+    return cells ? withCells(row, cells) : row
   })
   return { master: changed > 0 ? { ...master, rows } : master, changed }
 }

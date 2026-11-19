@@ -26,8 +26,10 @@ export {
   isPlaceholderRow,
   isDataRow,
   kkHeaderMatchCount,
+  withCells,
   type MasterCell,
   type MasterRow,
+  type MasterRowOrigin,
   type MasterData,
   type PassthroughSheet,
   type ParsedMaster,
@@ -41,6 +43,13 @@ export {
   type MergeChange,
   type MergePlan,
 } from './master/merge'
+export {
+  planAddRows,
+  applyAddRows,
+  type AddRowInput,
+  type AddRowsPlan,
+  type AddRowsPlanItem,
+} from './master/addRows'
 export { KZ_PREFIX, kzQuoteNo, normalizeReceivedDate, seqIndex, seqLetters, todayYmd } from './master/quoteNo'
 export {
   suggestBatchFromMaster,

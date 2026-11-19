@@ -196,6 +196,47 @@ describe('pricompare 命令行', () => {
     expect(cell(4, KK_COL.comment)).toBe('含税')
   })
 
+  it('add-rows：预建询价行（来源 intake）；重跑不重复；之后的报价落到这些行上，凯维也不改规格', async () => {
+    const NEW = '20261118 Yaoke'
+    const add = JSON.stringify([
+      { item: '1', pn: '1330723-000', rev: 'AA', description: 'ADAPTER', qty: 1, material: '304', surfaceFinish: '钝化', cleaningSpec: 'L30', process: 'CNC' },
+      { item: '1', pn: '1330723-000', rev: 'AA', description: 'ADAPTER', qty: 3, material: '304', surfaceFinish: '钝化', cleaningSpec: 'L30', process: 'CNC' },
+    ])
+    const dry = await cli('add-rows', '--rows', add, '--batch', NEW, '--dry-run', '--source', 'intake')
+    expect(dry.code, dry.err).toBe(0)
+    expect(dry.out).toContain(`预演「${NEW}」：新建 2 行（第 5–6 行）`)
+    expect(store.getVersion()).toBe(1)
+
+    const r = await cli('add-rows', '--rows', add, '--batch', NEW, '--source', 'intake')
+    expect(r.code, r.err).toBe(0)
+    expect(r.out).toContain('已建 2 行，总表版本 2')
+    expect(master().rows[3]).toMatchObject({ origin: 'intake' })
+    expect(master().rows[3]!.cells.slice(0, 7)).toEqual([4, NEW, 1, '1330723-000', 'AA', 'ADAPTER', 1])
+    expect(cell(5, KK_COL.cleaningSpec)).toBe('L30')
+    const hist = await cli('history', '--limit', '1')
+    expect(hist.out).toContain(`intake  预建询价行 2 条（批次 ${NEW}）`)
+
+    const again = await cli('add-rows', '--rows', add, '--batch', NEW, '--source', 'intake')
+    expect(again.out).toContain('新建 0 行，跳过 2 行（组里已有）')
+    expect(store.getVersion()).toBe(2)
+
+    const rows = await cli('rows', '--batch', NEW)
+    expect(rows.out).toContain('第5行（预建）')
+
+    const quote = JSON.stringify([{ pn: '1330723-000', qty: 3, price: 900, lead: '20天', cleaningSpec: '30级', size: '66*66*45' }])
+    const m = await cli('merge-rows', '--rows', quote, '--vendor', 'skw', '--batch', NEW)
+    expect(m.code, m.err).toBe(0)
+    expect(m.out).toContain('更新 1 行 · 新增 0 行')
+    expect(cell(6, KK_COL.vendorSlotStart + 2)).toBe(900)
+    expect(cell(6, KK_COL.cleaningSpec)).toBe('L30') // 预建行的规格不被凯维覆盖
+    expect(cell(6, KK_COL.size)).toBe('66*66*45') // 空着的照填
+    expect(master().rows.length).toBe(5)
+
+    const bad = await cli('add-rows', '--rows', JSON.stringify([{ qty: 1 }]), '--batch', NEW)
+    expect(bad.code).toBe(1)
+    expect(bad.err).toContain('第 1 行缺少 pn')
+  })
+
   it('rows / batches 查行；set 填「无」、追加备注，P/N 对不上就拒绝', async () => {
     const rows = await cli('rows', '--batch', BATCH)
     expect(rows.out).toContain('总表版本 1，2 行')

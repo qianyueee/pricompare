@@ -1,6 +1,7 @@
+import { applyAddRows, planAddRows, type AddRowInput } from './addRows'
 import { applyMerge, planMerge, type MergeOptions, type MergePlan } from './merge'
 import { deleteMasterRows } from './edit'
-import { KK_COL_COUNT, type MasterCell, type MasterData, type MasterRow } from './model'
+import { KK_COL_COUNT, withCells, type MasterCell, type MasterData, type MasterRow, type MasterRowOrigin } from './model'
 import { nextQuoteEach } from './quoteEach'
 import { KK_COL, isKkVendorCol } from '../export/kkLayout'
 import type { QuoteRow } from '../types'
@@ -22,14 +23,19 @@ export type MasterOp =
    * 改了供应商价的行，H 按各家报价平均自动重算；同一次里明确写了 H 的行（手改 H、撤销）按写的值
    */
   | { kind: 'setCells'; cells: CellChange[] }
-  /** 删除整行，A 列序号重排 */
-  | { kind: 'deleteRows'; rows: number[] }
+  /** 删除整行，A 列序号重排；keepNumbers = 不重排（撤销预建行用：删的是表尾新建的行，别的序号不该动） */
+  | { kind: 'deleteRows'; rows: number[]; keepNumbers?: boolean }
   /** 删行的撤销：把原行按原下标插回，A 列序号重排 */
-  | { kind: 'restoreRows'; rows: { index: number; cells: MasterCell[] }[] }
+  | { kind: 'restoreRows'; rows: { index: number; cells: MasterCell[]; origin?: MasterRowOrigin }[] }
   /** 并入报价：在应用时的最新总表上重新规划，规则和桌面版「并入」相同 */
   | { kind: 'merge'; quotes: QuoteRow[]; options: MergeOptions }
   /** 导入整张汇总表（替换） */
   | { kind: 'replace'; master: MasterData }
+  /**
+   * 预建询价行（询价邮箱流程收到 RFQ 时，见 addRows.ts）：在应用时的最新总表上规划，
+   * 组里已有同 P/N + 同数量的跳过；新行带来历标记 origin（intake 行的规格并入时不被覆盖）
+   */
+  | { kind: 'addRows'; batch: string; rows: AddRowInput[]; origin?: MasterRowOrigin }
   /** 依次应用多个操作（并入的撤销 = 还原改过的格 + 删掉新追加的尾行） */
   | { kind: 'batch'; ops: MasterOp[] }
 
@@ -49,6 +55,8 @@ export interface OpResult {
   changedCells: number
   /** merge 操作的结果统计 */
   merge?: MergeSummary
+  /** addRows 操作的结果统计 */
+  added?: { add: number; skip: number }
   plan?: MergePlan
 }
 
@@ -72,7 +80,7 @@ function setCells(master: MasterData, changes: CellChange[]): OpResult {
     let row = touched.get(ch.row)
     if (!row) {
       original.set(ch.row, rows[ch.row]!.cells)
-      row = { cells: [...rows[ch.row]!.cells] }
+      row = withCells(rows[ch.row]!, [...rows[ch.row]!.cells])
       while (row.cells.length < KK_COL_COUNT) row.cells.push(null)
       touched.set(ch.row, row)
       rows[ch.row] = row
@@ -110,7 +118,10 @@ function renumber(master: MasterData): MasterData {
   return deleteMasterRows(master, [])
 }
 
-function restoreRows(master: MasterData, items: { index: number; cells: MasterCell[] }[]): OpResult {
+function restoreRows(
+  master: MasterData,
+  items: { index: number; cells: MasterCell[]; origin?: MasterRowOrigin }[],
+): OpResult {
   if (items.length === 0) return { master, inverse: null, changedCells: 0 }
   const rows = [...master.rows]
   const sorted = [...items].sort((a, b) => a.index - b.index)
@@ -118,7 +129,7 @@ function restoreRows(master: MasterData, items: { index: number; cells: MasterCe
   const at: number[] = []
   for (const it of sorted) {
     const pos = Math.min(Math.max(it.index, 0), rows.length)
-    rows.splice(pos, 0, { cells: [...it.cells] })
+    rows.splice(pos, 0, it.origin ? { cells: [...it.cells], origin: it.origin } : { cells: [...it.cells] })
     at.push(pos)
   }
   const next = renumber({ ...master, rows })
@@ -129,12 +140,16 @@ function restoreRows(master: MasterData, items: { index: number; cells: MasterCe
   }
 }
 
-function deleteRows(master: MasterData, idxs: number[]): OpResult {
+function deleteRows(master: MasterData, idxs: number[], keepNumbers = false): OpResult {
   const valid = [...new Set(idxs)].filter((i) => i >= 0 && i < master.rows.length).sort((a, b) => a - b)
   if (valid.length === 0) return { master, inverse: null, changedCells: 0 }
-  const removed = valid.map((index) => ({ index, cells: [...master.rows[index]!.cells] }))
+  const removed = valid.map((index) => {
+    const row = master.rows[index]!
+    return row.origin ? { index, cells: [...row.cells], origin: row.origin } : { index, cells: [...row.cells] }
+  })
+  const drop = new Set(valid)
   return {
-    master: deleteMasterRows(master, valid),
+    master: keepNumbers ? { ...master, rows: master.rows.filter((_, i) => !drop.has(i)) } : deleteMasterRows(master, valid),
     inverse: { kind: 'restoreRows', rows: removed },
     changedCells: removed.reduce((s, r) => s + r.cells.filter((c) => c !== null).length, 0),
   }
@@ -174,17 +189,46 @@ function merge(master: MasterData, quotes: QuoteRow[], options: MergeOptions): O
   }
 }
 
+function addRows(master: MasterData, batch: string, inputs: AddRowInput[], origin?: MasterRowOrigin): OpResult {
+  const plan = planAddRows(master, batch, inputs)
+  const stats = { add: plan.addCount, skip: plan.skipCount }
+  if (plan.addCount === 0) return { master, inverse: null, changedCells: 0, added: stats }
+  const next = applyAddRows(master, plan, origin)
+  const base = master.rows.length
+  // 撤销：接在表尾的新行整行删掉；占用的预编号空行清回只剩 A 列序号
+  const appended: number[] = []
+  const refill: CellChange[] = []
+  let changedCells = 0
+  for (const it of plan.items) {
+    if (it.kind !== 'add' || !it.cells) continue
+    changedCells += it.cells.filter((c, i) => i > 0 && c !== null).length
+    if (it.rowIndex >= base) appended.push(it.rowIndex)
+    else it.cells.forEach((c, col) => col > 0 && c !== null && refill.push({ row: it.rowIndex, col, value: null }))
+  }
+  const undo: MasterOp[] = []
+  if (refill.length > 0) undo.push({ kind: 'setCells', cells: refill })
+  if (appended.length > 0) undo.push({ kind: 'deleteRows', rows: appended, keepNumbers: true })
+  return {
+    master: next,
+    inverse: undo.length === 1 ? undo[0]! : { kind: 'batch', ops: undo },
+    changedCells,
+    added: stats,
+  }
+}
+
 /** 在给定总表上应用一个操作（纯函数，不修改入参） */
 export function applyMasterOp(master: MasterData, op: MasterOp): OpResult {
   switch (op.kind) {
     case 'setCells':
       return setCells(master, op.cells)
     case 'deleteRows':
-      return deleteRows(master, op.rows)
+      return deleteRows(master, op.rows, op.keepNumbers)
     case 'restoreRows':
       return restoreRows(master, op.rows)
     case 'merge':
       return merge(master, op.quotes, op.options)
+    case 'addRows':
+      return addRows(master, op.batch, op.rows, op.origin)
     case 'replace':
       return { master: op.master, inverse: null, changedCells: op.master.rows.length }
     case 'batch':
@@ -228,6 +272,8 @@ export function describeMasterOp(op: MasterOp): string {
       return `恢复 ${op.rows.length} 行`
     case 'merge':
       return `并入 ${op.options.vendorDisplay} 报价 ${op.quotes.length} 条（批次 ${op.options.batch}）`
+    case 'addRows':
+      return `预建询价行 ${op.rows.length} 条（批次 ${op.batch}）`
     case 'replace':
       return `整表更新：${op.master.sourceFileName ?? '新建汇总'}`
     case 'batch':

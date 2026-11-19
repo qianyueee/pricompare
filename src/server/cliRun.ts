@@ -8,6 +8,7 @@ import * as XLSX from 'xlsx'
 import { analyzeSheet } from '../engine/analyze'
 import { KK_COL, KK_VENDOR_COLS } from '../engine/export/kkLayout'
 import { cleanAmountString, cleanMasterAmounts } from '../engine/master/clean'
+import { planAddRows, type AddRowInput } from '../engine/master/addRows'
 import { planMerge, type MergeOptions, type MergePlan } from '../engine/master/merge'
 import { normalizeReceivedDate, todayYmd } from '../engine/master/quoteNo'
 import { isDataRow, isPlaceholderRow, parseMasterWorkbook, type MasterCell, type MasterData } from '../engine/master/model'
@@ -47,6 +48,10 @@ const HELP = `用法：node cli.mjs <命令> [参数]
                                            并入总表（规则同桌面版「并入」）
   merge-rows --rows <rows.json> --vendor V --batch B [--received 日期] [--dry-run]
                                            并入正文里的报价（没有附件时，把行写成 JSON）
+  add-rows --rows <add.json> --batch B [--dry-run]
+                                           预建询价行（询价邮箱流程收到 RFQ 时用）：每个零件每档数量一行，
+                                           价格、交期、备注留空；组里已有同 P/N + 同数量的跳过。建出的行标为预建行，
+                                           之后并入报价时只填价格交期等，规格列谁都不覆盖
   batches [--last N]                       最近的询价组：行号范围、各家已填几行
   rows [--batch B] [--pn P] [--last N] [--json]
                                            查总表行（Excel 行号、各家价格、单号、交期、备注）
@@ -71,6 +76,7 @@ const HELP = `用法：node cli.mjs <命令> [参数]
 rows.json：[{"pn","rev","qty","price","currency","lead","quoteNo","item","description","material",
             "surfaceFinish","cleaningSpec","process","size","remark","quoteEa"}]，price 可为数字或原文
 cells.json：[{"row":1723,"col":"K","value":"无","expectPn":"0100001-001","append":false}]
+add.json：[{"item","pn","rev","description","qty","material","surfaceFinish","cleaningSpec","process"}]，qty 为数字（每档一行）
 `
 
 const OPTIONS = {
@@ -431,6 +437,55 @@ async function readJsonArg<T>(arg: string | undefined, what: string): Promise<T>
   }
 }
 
+/* ---------------- 预建询价行 ---------------- */
+
+async function addRowsCmd() {
+  const batch = values.batch?.trim()
+  if (!batch) throw new CliError('缺少 --batch（询价组名，如「20261118 Yaoke」）')
+  const input = await readJsonArg<AddRowInput[]>(values.rows, '--rows')
+  if (!Array.isArray(input) || input.length === 0) throw new CliError('--rows 应是非空数组')
+  input.forEach((r, i) => {
+    if (!r || typeof r.pn !== 'string' || !r.pn.trim()) throw new CliError(`第 ${i + 1} 行缺少 pn`)
+    if (r.qty !== undefined && r.qty !== null && !Number.isFinite(Number(r.qty))) throw new CliError(`第 ${i + 1} 行 qty 不是数字`)
+  })
+  const rowsIn = input.map((r) => ({ ...r, qty: r.qty === undefined || r.qty === null ? null : Number(r.qty) }))
+  const dryRun = values['dry-run'] ?? false
+  // 预建行是在表尾新增：期间别人删过行就重来（最多 3 次），不会写错位置
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const snap = await call<MasterSnapshot>('GET', '/api/master')
+    const master = snap.master ?? { rows: [], sheetName: 'KK询价汇总', passthrough: [], sourceFileName: null, importedAt: Date.now() }
+    const plan = planAddRows(master, batch, rowsIn)
+    const adds = plan.items.filter((i) => i.kind === 'add')
+    const span = adds.length > 0 ? `第 ${excelRow(Math.min(...adds.map((a) => a.rowIndex)))}–${excelRow(Math.max(...adds.map((a) => a.rowIndex)))} 行` : ''
+    if (attempt === 1 || !dryRun) {
+      out(
+        `${dryRun ? '预演' : '预建'}「${batch}」：新建 ${plan.addCount} 行${span ? `（${span}）` : ''}` +
+          `${plan.skipCount ? `，跳过 ${plan.skipCount} 行（组里已有）` : ''}，总表版本 ${snap.version}`,
+      )
+    }
+    if (dryRun) {
+      for (const it of plan.items) {
+        const r = it.input
+        const where = it.kind === 'add' ? `新建 第${excelRow(it.rowIndex)}行` : `跳过（已有${it.rowIndex >= 0 ? ` 第${excelRow(it.rowIndex)}行` : ''}）`
+        out(`  ${where} ${r.pn} ×${r.qty ?? '?'}  ${[r.material, r.surfaceFinish, r.cleaningSpec, r.process].map((v) => v || '—').join(' / ')}`)
+      }
+      return
+    }
+    if (plan.addCount === 0) return
+    const op: MasterOp = { kind: 'addRows', batch, rows: rowsIn, origin: 'intake' }
+    const res = await call<PostOpResponse>('POST', '/api/ops', { baseVersion: snap.version, opId: crypto.randomUUID(), op })
+    if (res.applied) {
+      out(`已建 ${res.added?.add ?? plan.addCount} 行，总表版本 ${res.version}`)
+      return
+    }
+    if (res.reason === 'unchanged') {
+      out('总表没有变化（这些行组里都已有）')
+      return
+    }
+  }
+  throw new CliError('总表一直在变（期间有人删行/导入），预建没写进去，稍后重试')
+}
+
 /* ---------------- 查行 / 改格 ---------------- */
 
 const ROW_COLS = [
@@ -457,6 +512,7 @@ async function rows() {
       JSON.stringify(
         picked.map(({ row, index }) => ({
           excelRow: excelRow(index),
+          ...(row.origin ? { origin: row.origin } : {}),
           ...Object.fromEntries(ROW_COLS.map((c) => [colName(c), row.cells[c] ?? null])),
         })),
         null,
@@ -470,7 +526,7 @@ async function rows() {
     const parts = ROW_COLS.map((c) => [c, row.cells[c]] as const)
       .filter(([, v]) => v !== null && v !== undefined && v !== '')
       .map(([c, v]) => `${colName(c)}=${text(v)}`)
-    out(`  第${excelRow(index)}行  ${parts.join(' | ')}`)
+    out(`  第${excelRow(index)}行${row.origin === 'intake' ? '（预建）' : ''}  ${parts.join(' | ')}`)
   }
 }
 
@@ -818,7 +874,8 @@ export async function runCli(
       const input = await readJsonArg<RowInput[]>(values.rows, '--rows')
       if (!Array.isArray(input)) throw new CliError('--rows 应是数组')
       await runMerge(input.map(rowToQuote), vendor, values['dry-run'] ?? false)
-    } else if (cmd === 'batches') await batches()
+    } else if (cmd === 'add-rows') await addRowsCmd()
+    else if (cmd === 'batches') await batches()
     else if (cmd === 'rows') await rows()
     else if (cmd === 'set') await setCells()
     else if (cmd === 'recalc-h') await recalcH()

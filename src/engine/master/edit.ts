@@ -1,4 +1,4 @@
-import type { MasterCell, MasterData, MasterRow } from './model'
+import { withCells, type MasterCell, type MasterData, type MasterRow } from './model'
 
 /**
  * 汇总表结构性编辑（供界面选区操作调用，全部不可变更新）：
@@ -18,7 +18,7 @@ function renumberA(rows: MasterRow[]): MasterRow[] {
     if (num === n) return row
     const cells = [...row.cells]
     cells[0] = n
-    return { cells }
+    return withCells(row, cells)
   })
 }
 
@@ -46,7 +46,7 @@ export function clearMasterCells(
     if (!cols) return row
     const cells: MasterCell[] = [...row.cells]
     for (const c of cols) cells[c] = null
-    return { cells }
+    return withCells(row, cells)
   })
   return { ...master, rows }
 }

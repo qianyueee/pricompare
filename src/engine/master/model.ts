@@ -9,9 +9,22 @@ export const MASTER_MAX_ROWS = 20000
 
 export type MasterCell = string | number | null
 
+/**
+ * 行的来历（不导出、不显示，只影响并入规则）：
+ * intake = 收到客户 RFQ 时由询价邮箱流程预建的行（Zane 2026-11-18）。规格列（材料/表面处理/清洗/工艺）按图纸填好了，
+ * 之后供应商报价只填价格、交期、备注，不改这几列（凯维覆盖别家规格的规则对这种行不适用）。
+ */
+export type MasterRowOrigin = 'intake'
+
 /** 汇总表一行 = 34 个原始值（A–AH，按 KK_HEADERS 的列序），保持导入导出往返保真 */
 export interface MasterRow {
   cells: MasterCell[]
+  origin?: MasterRowOrigin
+}
+
+/** 换了 cells 的新行对象，保留行的来历 */
+export function withCells(row: MasterRow, cells: MasterCell[]): MasterRow {
+  return row.origin ? { cells, origin: row.origin } : { cells }
 }
 
 export interface PassthroughSheet {
@@ -179,7 +192,7 @@ export function migrateMasterLayout(master: MasterData): { master: MasterData; m
     row.cells.forEach((v, i) => {
       cells[LEGACY_TO_CURRENT[i]!] = v
     })
-    return { cells }
+    return withCells(row, cells)
   })
   return migratedRows === 0 ? { master, migratedRows } : { master: { ...master, rows }, migratedRows }
 }
