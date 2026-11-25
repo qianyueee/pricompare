@@ -38,6 +38,31 @@ const SEL_TINT = 'shadow-[inset_0_0_0_999px_rgba(59,130,246,0.16)]'
 /** 没选列时统一用这一个空集合：每次拖选都会新建空 Set，换成同一个才不会让每一行都重画 */
 const NO_COLS: ReadonlySet<number> = new Set()
 
+/** B 列批次格单击后等这么久再进编辑：期间再点一下就是双击（显示整批），编辑框不闪一下 */
+const BATCH_EDIT_DELAY = 300
+
+/** 页面上选中的一段文字（光标不算）。看 Range 本身：表格临时设成不可选时 isCollapsed 也会变 true */
+function textRange(): Selection | null {
+  const sel = typeof window !== 'undefined' ? window.getSelection() : null
+  return sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed ? sel : null
+}
+
+/** 格子里拖选/双击选中了文字 */
+function hasTextSelection(): boolean {
+  return (textRange()?.toString() ?? '') !== ''
+}
+
+function clearTextSelection(): void {
+  textRange()?.removeAllRanges()
+}
+
+/** 拖出了起点格（框格区 / 拖选行）时不让浏览器再选文字，松手再放开 */
+function setTextSelectable(el: HTMLElement | null, on: boolean): void {
+  if (!el) return
+  el.style.userSelect = on ? '' : 'none'
+  el.style.setProperty('-webkit-user-select', on ? '' : 'none')
+}
+
 /** 本行落在哪几块格区里，写成 "c1-c2,c1-c2"（不在任何一块里为 ''）：字符串传给行，内容不变时行不重画 */
 function rowSpansKey(ranges: readonly CellRange[], v: number): string {
   let key = ''
@@ -167,6 +192,8 @@ interface RowProps {
   rowIndex: number
   editingCol: number | null
   selected: boolean
+  /** 双击批次进来时刚才搜到的行：标黄 */
+  marked: boolean
   selectedCols: ReadonlySet<number>
   /** 本行落在哪几块拖选格区里（见 rowSpansKey） */
   rangeSpans: string
@@ -180,6 +207,7 @@ const MasterRowView = memo(function MasterRowView({
   rowIndex,
   editingCol,
   selected,
+  marked,
   selectedCols,
   rangeSpans,
   hiddenCols,
@@ -196,7 +224,8 @@ const MasterRowView = memo(function MasterRowView({
     <tr
       data-testid="master-row"
       style={{ height: ROW_H }}
-      className={`group ${selected ? 'bg-blue-100/70' : 'hover:bg-blue-50/40'}`}
+      data-marked={marked ? '' : undefined}
+      className={`group ${selected ? 'bg-blue-100/70' : marked ? 'bg-amber-100/70' : 'hover:bg-blue-50/40'}`}
     >
       {row.cells.map((v, c) => {
         if (hiddenCols.has(c)) return null
@@ -211,7 +240,13 @@ const MasterRowView = memo(function MasterRowView({
           <td
             key={c}
             data-cell={`${rowIndex}:${c}`}
-            title={c === 0 ? '点击选中本行；按住拖动可多选（用于比价/复制/删除）' : cellText(v)}
+            title={
+              c === 0
+                ? '点击选中本行；按住拖动可多选（用于比价/复制/删除）'
+                : c === KK_COL.name && cellText(v)
+                  ? `${cellText(v)}（双击显示整批）`
+                  : cellText(v)
+            }
             style={isSticky ? { position: 'sticky', left: stickyLeft[c], zIndex: 1 } : undefined}
             className={`overflow-hidden border-r border-b border-slate-100 text-xs text-ellipsis whitespace-nowrap ${
               isEditing ? 'p-0' : 'px-1.5 py-0.5' // 编辑框正好占满一行高，行不变高
@@ -225,7 +260,9 @@ const MasterRowView = memo(function MasterRowView({
               isSticky && c !== 0
                 ? selected
                   ? 'bg-blue-50'
-                  : 'bg-white group-hover:bg-blue-50'
+                  : marked
+                    ? 'bg-amber-50'
+                    : 'bg-white group-hover:bg-blue-50'
                 : ''
             } ${c === KK_COL.pn ? 'font-mono font-medium' : ''} ${
               isMin ? 'bg-green-100 font-semibold text-green-700' : ''
@@ -246,6 +283,12 @@ const MasterRowView = memo(function MasterRowView({
     </tr>
   )
 })
+
+/** 让表格滚到某一行（原表行号）；seq 每次新给一个数，同一行也照样再滚 */
+export interface ScrollTarget {
+  index: number
+  seq: number
+}
 
 export interface CellRange {
   /** 可见行序区间（含端点） */
@@ -275,6 +318,12 @@ export default function MasterTable(props: {
   /** 数据格按住拖动：框出一块格区，加在按下时已框的几块（base）后面 */
   onRangeDrag: (range: CellRange, base: readonly CellRange[]) => void
   onClearSelection: () => void
+  /** 双击 B 列批次格：显示整批（参数是原表行号） */
+  onOpenBatch?: (rowIndex: number) => void
+  /** 标黄的行（原表行号） */
+  marked?: ReadonlySet<number>
+  /** 滚到这一行，放在可视区中间 */
+  scrollTo?: ScrollTarget | null
 }) {
   const editMasterCell = useSession((s) => s.editMasterCell)
   const allRows = useSession((s) => s.master?.rows)
@@ -330,6 +379,28 @@ export default function MasterTable(props: {
   // rawRowIndex → 可见位置（拖选按可见顺序换算）
   const posOf = useMemo(() => new Map(props.rows.map((r, i) => [r.index, i])), [props.rows])
 
+  // 双击批次进整批 / 返回搜索时滚到那一行（放在中间）；每个 seq 只滚一次
+  const scrolledSeq = useRef(0)
+  useLayoutEffect(() => {
+    const t = props.scrollTo
+    const el = scrollRef.current
+    if (!t || !el || t.seq === scrolledSeq.current) return
+    scrolledSeq.current = t.seq
+    const v = posOf.get(t.index)
+    if (v === undefined) return
+    el.scrollTop = Math.max(0, (v + 1) * ROW_H - el.clientHeight / 2)
+    updateWindow()
+  }, [props.scrollTo, posOf, updateWindow])
+
+  const tableRef = useRef<HTMLTableElement>(null)
+  /** B 列单击后等着进编辑的计时器（双击时取消） */
+  const editTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelPendingEdit = () => {
+    if (editTimer.current !== null) clearTimeout(editTimer.current)
+    editTimer.current = null
+  }
+  useEffect(() => cancelPendingEdit, [])
+
   const drag = useRef<{
     kind: 'row' | 'col' | 'range'
     startV: number
@@ -363,8 +434,10 @@ export default function MasterTable(props: {
 
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return
+    if (e.detail >= 2) cancelPendingEdit() // 双击 B 列：第二下按下就不等着编辑了
     const hc = colFromHeader(e)
     if (hc !== null) {
+      clearTextSelection() // 选列后 Ctrl+C 复制的是列，不是之前选中的文字
       drag.current = {
         kind: 'col',
         startV: -1,
@@ -381,6 +454,8 @@ export default function MasterTable(props: {
     const cell = cellFromEvent(e)
     if (!cell) return
     if (editing && editing.rowIndex === cell.rawRow && editing.col === cell.col) return // 编辑中的格子让 input 正常工作
+    // A 列选行：清掉选中的文字；数据格单击：新起一段文字选择（也免得按在选中的文字上变成拖走文字）
+    if (cell.col === 0 || e.detail === 1) clearTextSelection()
     drag.current = {
       kind: cell.col === 0 ? 'row' : 'range',
       startV: cell.v,
@@ -414,10 +489,16 @@ export default function MasterTable(props: {
     if (!cell) return
     if (d.kind === 'row') {
       if (cell.v !== d.startV) d.moved = true
-      if (d.moved) report(String(cell.v), () => props.onRowDrag(d.startV, cell.v, d.base))
+      if (!d.moved) return
+      clearTextSelection()
+      setTextSelectable(tableRef.current, false)
+      report(String(cell.v), () => props.onRowDrag(d.startV, cell.v, d.base))
     } else {
+      // 在起点格里拖是选文字；拖出这一格才是框格区，这时把选到一半的文字清掉
       if (cell.v !== d.startV || cell.col !== d.startC) d.moved = true
       if (!d.moved) return
+      clearTextSelection()
+      setTextSelectable(tableRef.current, false)
       const r: CellRange = {
         v1: Math.min(d.startV, cell.v),
         v2: Math.max(d.startV, cell.v),
@@ -430,21 +511,53 @@ export default function MasterTable(props: {
 
   const { onToggleRow, onToggleCol, readOnly } = props
   useEffect(() => {
-    const onUp = () => {
+    // 拖出起点格以后不让浏览器接着往下选文字（取消 mousemove 的默认动作）
+    const onMove = (e: MouseEvent) => {
+      if (drag.current?.moved) e.preventDefault()
+    }
+    const onUp = (e: MouseEvent) => {
       const d = drag.current
       drag.current = null
+      if (d?.moved) clearTextSelection()
+      setTextSelectable(tableRef.current, true)
       if (!d || d.moved) return
       // 未拖动 = 单击：A 格切换选行；表头切换选列；数据格进入编辑（与旧版行为一致；只读账号不编辑）
       if (d.kind === 'col') onToggleCol(d.startC)
       else if (d.kind === 'row') onToggleRow(d.rawRow)
-      else if (!readOnly) setEditing({ rowIndex: d.rawRow, col: d.startC })
+      else if (readOnly || hasTextSelection()) return // 在格子里拖选了文字：留着给 Ctrl+C 复制，不进编辑
+      else if (d.startC === KK_COL.name) {
+        // B 列批次：双击是显示整批，单击稍等一下再编辑
+        cancelPendingEdit()
+        if (e.detail >= 2) return
+        const target = { rowIndex: d.rawRow, col: d.startC }
+        editTimer.current = setTimeout(() => {
+          editTimer.current = null
+          setEditing(target)
+        }, BATCH_EDIT_DELAY)
+      } else setEditing({ rowIndex: d.rawRow, col: d.startC })
     }
+    window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-    return () => window.removeEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
   }, [onToggleRow, onToggleCol, readOnly])
+
+  const { onOpenBatch } = props
+  const onDoubleClick = (e: React.MouseEvent) => {
+    const cell = cellFromEvent(e)
+    if (!cell || cell.col !== KK_COL.name || !onOpenBatch) return
+    // 双击慢了一点、编辑框已经出来了也一样：不保存（没改）、直接显示整批
+    cancelPendingEdit()
+    setEditing(null)
+    clearTextSelection()
+    onOpenBatch(cell.rawRow)
+  }
 
   const selectedCols = props.selectedCols.size === 0 ? NO_COLS : props.selectedCols
   const ranges = props.ranges
+  const marked = props.marked ?? NO_COLS
 
   return (
     <div
@@ -453,11 +566,14 @@ export default function MasterTable(props: {
       className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm"
     >
       <table
+        ref={tableRef}
         data-testid="master-table"
         onMouseDown={onMouseDown}
         onMouseOver={onMouseOver}
+        onDoubleClick={onDoubleClick}
+        onDragStart={(e) => e.preventDefault()} // 选中的文字不拖走，按住拖照样是框格区
         style={{ width: tableWidth }}
-        className="table-fixed border-separate border-spacing-0 select-none"
+        className="table-fixed border-separate border-spacing-0"
       >
         <colgroup>
           {shownCols.map((c) => (
@@ -500,6 +616,7 @@ export default function MasterTable(props: {
                 rowIndex={index}
                 editingCol={editing?.rowIndex === index ? editing.col : null}
                 selected={props.selected.has(index)}
+                marked={marked.has(index)}
                 selectedCols={selectedCols}
                 rangeSpans={rowSpansKey(ranges, i)}
                 hiddenCols={props.hiddenCols}

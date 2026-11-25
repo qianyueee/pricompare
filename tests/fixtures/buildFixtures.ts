@@ -289,6 +289,39 @@ export async function makeBigMasterFile(n: number): Promise<ArrayBuffer> {
   return toArrayBuffer(wb)
 }
 
+/** 多批次汇总表：最早一批 150 行，之后 64 批各 2 行（批次多于下拉列出的 60 个）；
+ *  零件号 0999999-000 在最早一批的第 121 行和最新一批的第 1 行各出现一次（测双击批次显示整批） */
+export const BATCH_FIRST = '20260801 Oldest'
+export const BATCH_LAST = '20261104 B64'
+export const SHARED_PN = '0999999-000'
+export async function makeBatchesMasterFile(): Promise<ArrayBuffer> {
+  const { KK_HEADERS } = await import('@engine/export/kkLayout')
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet('KK询价汇总')
+  ws.getRow(1).values = [...KK_HEADERS]
+  let n = 0
+  const add = (batch: string, item: number, pn: string, desc: string) => {
+    const r = ws.getRow(2 + n)
+    n++
+    r.getCell(1).value = n
+    r.getCell(2).value = batch
+    r.getCell(3).value = item
+    r.getCell(4).value = pn
+    r.getCell(5).value = 'AA'
+    r.getCell(6).value = desc
+    r.getCell(7).value = 1
+    r.getCell(10).value = 100 + n
+  }
+  for (let i = 0; i < 150; i++) add(BATCH_FIRST, i + 1, i === 120 ? SHARED_PN : `${2000000 + i}-000`, `BRACKET, OLDEST ${i + 1}`)
+  for (let b = 1; b <= 64; b++) {
+    const d = new Date(Date.UTC(2026, 8, 1 + b)) // 0902 起每批一天
+    const batch = b === 64 ? BATCH_LAST : `${d.toISOString().slice(0, 10).replace(/-/g, '')} B${String(b).padStart(2, '0')}`
+    add(batch, 1, b === 64 ? SHARED_PN : `${3000000 + b * 10}-000`, `PLATE, BATCH ${b} ROW 1`)
+    add(batch, 2, `${3000000 + b * 10 + 1}-000`, `PLATE, BATCH ${b} ROW 2`)
+  }
+  return toArrayBuffer(wb)
+}
+
 /** 双 sheet 工作簿：第一个 sheet 是空说明页，真数据在第二个 sheet（自动选 sheet 用例） */
 export async function makeMultiSheet(): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook()
