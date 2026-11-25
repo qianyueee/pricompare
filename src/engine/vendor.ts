@@ -23,7 +23,7 @@ export const SEED_VENDORS: Vendor[] = [
   { id: 'skw', display: 'SKW', kkSlot: 'K', aliases: ['skw', 'kv', '凯阔'] },
   { id: 'cl', display: 'CL', kkSlot: 'L', aliases: ['cl', '宸立', 'chenli'] },
   { id: 'xh', display: 'XH', kkSlot: 'M', aliases: ['xh', '兴华', '千昱'] },
-  { id: 'wk', display: 'WK', kkSlot: 'N', aliases: ['wk', '韦克', 'wayken'] },
+  { id: 'wk', display: 'WK', kkSlot: 'N', aliases: ['wk', '韦克', 'wayken', 'waykenrm'] },
   { id: 'yj', display: 'YJ', kkSlot: 'AG', aliases: ['yj'] },
 ]
 

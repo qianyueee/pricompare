@@ -146,7 +146,7 @@ describe('供应商注册表：JM 换成 WK', () => {
       id: 'wk',
       display: 'WK',
       kkSlot: 'N',
-      aliases: ['wk', '韦克', 'wayken'],
+      aliases: ['wk', '韦克', 'wayken', 'waykenrm'],
     })
     expect(migrateVendorRegistry(registry)).toEqual({ registry, migrated: false })
   })
