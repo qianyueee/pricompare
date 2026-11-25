@@ -1,0 +1,154 @@
+# PO 跟单列表页（po.kvstek.com）
+
+一个页面列出 PO，按供应商交期的紧急程度上色。起点是跟单总表（2026-11-11 那份，用 import_tracker.py 导入）加上从 zill@kvstek.com 邮件整理的 PO；之后状态由跟单的人在页面上改、写跟进、手动新增 PO。zill@ 的 PO 邮件每小时同步一次，只记原始信息（挂上相关邮件、加新 PO），不加备注、不判断状态（Zane 2026-11-15）。和 pricompare 桌面版/报价网页无关，单独跑在 Zane 的 Mac 上，只用 Python 标准库。
+
+```
+po-tracker/
+  po_server.py        网页服务（127.0.0.1:8792），密码登录，读 data/orders.json + mail_orders.json + overrides.json + edits.json
+  mailsync.py         把每小时邮件同步的 data/mail_orders.json 合进来：只挂邮件、只加新单
+  invoice.py          开 Invoice：费率默认值、检查和算钱、开过的记录（data/invoices.json）
+  invoice_xlsx.py     把 invoice 写成 .xlsx（照样张的格式）
+  edits.py            网页上的改动：检查、保存（data/edits.json）、跟进记录（data/history.jsonl）
+  tracker.py          读跟单总表 .xlsx 的「订单明细」，按 WO# + 供应商汇总（只用标准库）
+  import_tracker.py   把跟单总表导入成起点数据 data/orders.json（邮件那份另存 orders.mail.json）
+  static/             页面（index.html、app.js、app.css、favicon.svg）
+  deploy/             Mac 上的 LaunchAgent（local.po-tracker.plist）、健康检查、手动重启脚本
+  sample/make_sample.py  生成假数据，本地看效果
+  tests/               python3 -m unittest discover -s tests
+```
+
+邮件同步是 Mac 上的 `~/apps/po-tracker/po_sync.py`（hermes 任务 po-sync 每小时跑：只读 zill@ 邮箱 → `claude -p` 抽原始字段 → `data/mail_orders.json`）。那个脚本含邮件细节，只放在 Mac 上，不进这个公开仓库；**任何邮件内容、订单数据都不要提交到这里。**
+
+## 运行
+
+```
+python3 po_server.py --data ~/apps/po-tracker/data \
+  --password-from ~/apps/pricompare-data/config.json --host po.kvstek.com --port 8792
+```
+
+- 只监听 127.0.0.1。外面经 Cloudflare 通道进来（cloudflared ingress `po.kvstek.com → http://127.0.0.1:8792`）。
+- 密码和报价页同一个：每次登录都重新读 pricompare `config.json` 的 `password`（scrypt 哈希，和 `src/server/password.ts` 同格式）。报价页换密码后，这里马上要用新密码，旧登录全部失效。登录 cookie `po_auth`，30 天，用 `data/session.key` 签名。
+- 带 `cf-*` / `tailscale-*` 头或 Host 不是 localhost 的请求都要登录，且 Host 必须是 `--host` 里的域名；本机直接打开 `http://localhost:8792/` 不用密码。
+- 全站 10 分钟内输错 10 次密码就先停 10 分钟。http 自动转 https（看 `X-Forwarded-Proto`）。
+- Mac 上由 LaunchAgent 常驻：`deploy/local.po-tracker.plist` 放到 `~/Library/LaunchAgents/`，`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.po-tracker.plist`；开机自启，退出后 10 秒自动拉起。改了代码后跑 `deploy/po_tracker_up.sh`（kickstart -k）让新代码生效。
+- hermes 每 10 分钟跑 `deploy/po_tracker_check.sh`：只查 `/healthz`，不重启；连续两次不通才发一条 Telegram，恢复时再发一条。
+- `GET /healthz` 给健康检查用；`GET /api/orders` 返回数据；访问记录写 `data/access/YYYY-MM.jsonl`。
+
+## 邮件同步（data/mail_orders.json）
+
+格式跟下面 orders.json 一样（`{"generated_at", "orders": [...]}`），但每次同步整份重写，`generated_at` 是这次同步的时间（没有新信也更新，页面顶上显示「邮件同步 …」，超过 3 小时没更新会提示）。合进页面的规则在 `mailsync.py`：
+
+- 页面上已经有的 PO（总表导入的、手动加的、以前邮件来的）：同号同供应商、同供应商且号多一个字母（44278 → 44278A）或对上旧号、或一边供应商没定且号对上，都算已经有（号不完全相同的，客户 PO 或零件号两边都有时至少要重合一个，防止标题写错号把新单并到老单上）。**只把新的相关邮件挂上去**（按 文件夹+UID 或 日期+标题 去重），状态、交期、备注等一律不动。
+- 都没有的：用邮件里的原始字段（PO 号、旧号、供应商、下单主体、客户、客户 PO、End User、下单日期、交期、客户交期、金额、币种、含税、零件行（含跟单表里的 Next Step，原样照抄）、邮件）加成新的一行，**状态先记「已下单」**，标「邮件新单」。邮件里的 status / status_note / open_issues / tracking 之类一律不用。
+- 网页上的改动（edits.json）最后才盖上去，所以永远以人填的为准；邮件新单不能删（不要的改成「已取消」）。
+- 文件坏了不影响页面，只在顶上提示「mail_orders.json 读不了」。
+
+## 开 Invoice（Zane 2026-11-15）
+
+- 要编辑权限。右上角「开 Invoice」→ 列表切到「已发货 / 完成」，点一行就勾上（别的筛选里也能勾）→ 底下「预览 Invoice」。
+- 预览照样张：抬头、发票号（默认 发票日期 yymmdd + `K`）、发票日期、客户联系人、Ship To / Bill To；每行 完成日期、订单号、Vendor、订单金额、Service Tier（改了带出这一级的默认费率和勾选）、服务费 %、服务费小计、含不含订单金额、应收小计；每个 Vendor 一行总计（这一行可以一次改这家的等级、费率和勾选）。预览里不显示订单状态之类的提示（Zane 11-15），只提示已开过的和没有金额的，最后总计人民币、折合美元（填了汇率才算）。
+- 默认值（`invoice.py` 的 `DEFAULT_CONFIG`）：凯维 3 级 5%、华晨 2 级 25%、其他供应商 1 级 40%；2、3 级是美方付供应商，只收服务费；1 级是我们付，订单金额也收。Vendor 写 Kaikuo（凯阔）的单 = 我们付订单金额，按 1 级算，invoice 上的 Vendor 写下级 vendor（邮件同步抓到的 `sub_vendor`，没有就手填）。完成日期默认是最晚的发货日期，没有就取网页上改成已发货/已完成的那天。
+- 「导出 Excel」或「打印 / 存 PDF」时保存：服务器按自己的数据重新算钱（服务费四舍五入到分），存进 `data/invoices.json`（同一个发票号再存 = 改这张），每个新开进的 PO 在跟进记录里记一行，列表上标「已开票」。「以前开的」可以重新下载。Excel 里服务费、合计是公式，改了金额或费率会跟着变。
+- 抬头、电话、邮箱、客户联系人、地址放 `data/invoice.json`（只在 Mac 上，**不要提交到这个公开仓库**），格式见 `deploy/invoice.example.json`；也能在里面改费率（`tiers`）、供应商英文名和等级（`vendors`）。
+- 接口：`POST /api/invoice/save {by, invoice: {no, date, contact, usd_rate, rows: [{key, vendor, done, amount, rate, with_amount}]}}`、`GET /api/invoice/xlsx?no=…`。
+
+## 做采购订单（Zane 2026-11-15）
+
+- 展开一个 PO →「做采购订单」（要编辑权限）→ 预览，凯阔给供方的采购订单。都能改：订单编号（默认 `PO-` + PO 号）、订单日期（默认今天）、交付日期（默认供应商交期）、客户订单号（默认客户 PO，没有写「待定 (TBD)」）、供方、收货信息、零件行（行号、P/N、版本、描述、数量、单价，可加行、去掉）、税率、条款。
+- **单价按未税填**：Tony 的 PO 价都是含税价，所以带出来的单价 = PO 上的含税单价 ÷ (1 + 税率)，四舍五入到分（预览里每行下面标着 PO 上的含税单价，可以直接改成供方报的未税价）。小计 = 数量 × 单价，含税总计 = 总计 × (1 + 税率)；PO 上的含税金额跟算出来的不一样时预览里会提示差多少。
+- 供方默认找下级 vendor（没有就用供应商；供应商是凯阔又没写下级的空着）。存过的供方（全称 + 「地址：…」「联系人：… ｜ 电话：…」这两行）记在 `data/purchase_vendors.json`，简称记进 `names`，下次同一家自动带出。
+- 「导出 Excel」「打印 / 存 PDF」都会先保存到 `data/purchases.json`（按订单编号，同号再存就是改这张），PO 上标「采购订单」，跟进记录里记一条。再点同一个 PO 打开的是上次存的那张。Excel 里小计、合计、含税总计、大写都是公式（大写用 TEXT 的 [DBNum2]），打印版用服务器算好的数。
+- 抬头、收货信息、税率、条款放 `data/purchase.json`（只在 Mac 上，**不要提交到这个公开仓库**），格式见 `deploy/purchase.example.json`；条款里的 `{no}` 换成订单编号。
+- 零件行的客户行号（`customer_line`）总表里有；邮件来的单由 po_sync 从邮件里贴的跟单表原样抄。
+- **版式**（Zane 11-15 晚上定稿，打印 / 存 PDF 和 Excel 一个样子）：只用黑白灰的正式单据。左上 logo，右边「采购订单」（字顶和 logo 上沿对齐）和地址、电话邮箱两行，下面一粗一细双线；信息表、明细表外框粗、里面浅灰细线；条款「标题：」粗体；底部需方、供方各只有「盖章」「日期」，需方日期 = 订单日期，供方日期空着。标题和双方名称用思源宋体（Excel 里用宋体），其余等线。
+- **公章**：需方默认盖凯阔公章（40 mm，压在需方名称和盖章处），预览里「需方盖凯阔公章」可以去掉，跟着这张单存下来。
+- logo、公章图片在 `data/assets/logo.png`、`seal.png`（也可以是 .jpg），**不要提交到这个公开仓库**；预览底下「上传 / 换图」（要编辑权限，PNG 或 JPG，小于 3 MB，公章用透明底 PNG）。只有有编辑权限的人能看到这两张图。没有 logo 时左上写公司名，没有公章就不盖。
+- 字体文件放 `data/fonts/`（登录后 `/fonts/…` 才给）：`Deng.ttf`、`Dengb.ttf`（等线，微软字体，从 Mac 上 Office 的 DFonts 拷，**不进仓库**）；`NotoSerifSC-Bold.otf`（思源宋体粗，OFL，从 github.com/notofonts/noto-cjk 的 `Serif/SubsetOTF/SC/` 下载）。打印前会等字体和图片下完。
+
+## 导入跟单总表（起点数据）
+
+```
+python3 import_tracker.py 跟单总表20261111.xlsx --data ~/apps/po-tracker/data --dry-run   # 先看对得上多少
+python3 import_tracker.py 跟单总表20261111.xlsx --data ~/apps/po-tracker/data
+```
+
+- 读「订单明细」：前 10 行里有 `WO#` 和 `WO Due` 的那行是表头；按 (WO#, Vendor) 汇总，Vendor 英文名换成 华晨/凯维/兴华。
+- 一行算结束：`备注` 是「完成」、含「取消」，或填了 `发货日期`（1/1/2000 这种占位不算）。一个 WO 全部行结束才算结束：全取消 → 已取消，全完成/取消 → 已完成，其余 → 已发货。没结束的：邮件里已是「已确认」的保留，其余「已下单」；交期取没结束那些行里最早的 `WO Due`；`备注` 原文放进跟进备注，`预计发货日期` 放进预计发货。
+- 邮件整理的 PO：同号同供应商（或总表把重号改成 `44278A` 这种多一个字母的）的把相关邮件和旧号带过来；总表里没有的原样保留。打印的结果里列出对不上的、状态或交期跟邮件不一样的，供人工核对。
+- 网页上的改动（edits.json）不动，照样盖在导入的数据上。
+
+## 列表上的列
+
+供应商交期（颜色按它算）· PO · 供应商 · 状态 · 客户 PO / End User · 客户交期（终端客户 PO 的 Due Date，可点表头按它排序）· Next Step（还没结束的零件行写的 Next Step 去重；都结束了就看全部行）· 零件 · 金额 · 下单日期。窄屏先收起零件、下单，再把供应商并到 PO 下面；手机上客户交期、Next Step 各占一行，没有就不显示。
+
+## 在网页上改状态
+
+- 编辑密码和查看密码分开（查看密码 Tony 也有，只能看）。设编辑密码（只存 scrypt 哈希到 `data/config.json`，权限 600）：
+  `python3 po_server.py set-edit-password --data ~/apps/po-tracker/data`
+- 页面右上角「编辑」→ 输编辑密码 → 这台设备 30 天内能改（cookie `po_edit`，换编辑密码后全部作废）。本机直接打开不用密码。
+- 展开一个 PO：改状态（未定/已下单/已确认/已发货/已完成/已取消）、供应商交期、预计发货（日期或文字）、运单号，写「这次跟进了什么」，填名字（浏览器记住），保存。每次保存在 `data/history.jsonl` 记一行（谁、什么时候、改了什么旧→新、备注），页面上显示成「跟进记录」。
+- 「新增 PO」：PO 号 + 供应商必填（同一对不能重复），可填交期、金额、客户 PO、零件（每行「零件号 数量」）。手动加的可以删，邮件来的不能删（不要的改成「已取消」）。
+- 当前值存在 `data/edits.json`（`patches` 按 `PO|供应商`，`added` 是手动新增的），优先级最高：盖过 orders.json 和 overrides.json。
+- 接口（都要登录 + 编辑权限，`Content-Type: application/json`，带 Origin 时必须是本站）：`POST /api/edit-login {password}`、`/api/edit-logout`、`/api/order/update {key, by, changes, note}`、`/api/order/add {by, order}`、`/api/order/delete {key, by}`。编辑密码输错算进全站 10 次限速。
+
+## orders.json 格式（从邮件整理的旧数据）
+
+```jsonc
+{
+  "version": 1,
+  "generated_at": "2026-11-12T13:07:00+09:00",
+  "source": "zill@kvstek.com",
+  "po_mail_count": 140,
+  "orders": [{
+    "po": "44277",                 // 我方 PO/WO 号，可带后缀（44276A）；改过号用最终号
+    "aliases": ["44259"],          // 旧号
+    "supplier": "华晨",            // 华晨 / 凯维 / 兴华 / 其他简称；"" = 未定
+    "buyer_entity": "Kavis Tech LLC",   // 或 深圳凯阔
+    "customer_po": "22542184",     // 多个用 " / " 连接
+    "customer": "KLA", "end_user": "Trudi Lootens",
+    "order_date": "2026-10-26",    // 发给供应商的日期
+    "due_date": "2026-11-15",      // 供应商交期（区间取最后一天）；null = 没写
+    "due_text": "11/15",           // 原文
+    "customer_due": null,
+    "amount": 35400, "currency": "RMB", "tax": "含税",   // 兴华是未税价
+    "status": "已确认",            // 未定 / 已下单 / 已确认 / 已发货 / 已完成 / 已取消
+    "status_note": "华晨 10-27 回 confirmed",
+    "tracking": "",
+    "lines": [{"pn": "0712615-000", "rev": "AA", "desc": "…", "qty": 10, "unit_price": 53, "amount": 530}],
+    "open_issues": ["改成 10 行后没看到华晨确认"],
+    "mails": [{"folder": "收件箱", "uid": 812, "date": "…", "from": "Gene", "subject": "PO 44277 Due 11/15"}],
+    "last_mail_at": "…", "updated_at": "…"
+  }]
+}
+```
+
+## 颜色
+
+按 `due_date` 和今天差几天（日历天）：逾期（深红）、0–3 天（红）、4–7 天（黄）、7 天以上（绿）、没写交期（灰）。状态是已发货 / 已完成 / 已取消的一律变淡、排最后。阈值在 `static/app.js` 开头。
+
+## 手工更正
+
+`data/overrides.json`（可选），按 PO 号覆盖字段，下次读取就生效，不用重启：
+
+```json
+{
+  "_说明": "下划线开头的键会被忽略",
+  "44233": {"status": "已完成", "status_note": "Zane 11-12：已收货"},
+  "44999": {"hidden": true}
+}
+```
+
+同一个 PO 号给了两家供应商时（如 44278），键写成 `"44278|兴华"` 只改那一条；只写 PO 号就两条都改。页面上被更正过的 PO 展开后会标「手工更正过」。
+
+`orders.json` 里的 `open_issues`、`doubts` 页面已经不显示（2026-11-12 起状态改由人跟进）。网页上的改动优先于这里的手工更正。
+
+## 本地看效果
+
+```
+python3 sample/make_sample.py /tmp/po-data/orders.json
+echo '{}' > /tmp/po-cfg.json
+python3 po_server.py --data /tmp/po-data --password-from /tmp/po-cfg.json --host po.kvstek.com
+# 打开 http://localhost:8792/
+```
+
+本机打开就能改；要试编辑密码，用 `--host localhost` 启动、请求带一个 `cf-ray` 头（当成公网），先 `set-edit-password`。

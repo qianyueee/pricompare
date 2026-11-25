@@ -1,0 +1,51 @@
+{
+ "_说明": "复制成 data/invoice.json 再填。只放 Mac，不要提交。没写的项用 invoice.py 里的默认值。",
+ "company": "（抬头公司名）",
+ "phone": "+86 …",
+ "email": "…@…",
+ "contact": "（客户联系人）",
+ "ship_to": [
+  "Attn: …",
+  "（公司）",
+  "（地址）",
+  "（城市、州、邮编、国家）"
+ ],
+ "bill_to": [
+  "Attn: …",
+  "（公司）",
+  "（地址）",
+  "（城市、州、邮编、国家）"
+ ],
+ "number_suffix": "K",
+ "tiers": {
+  "3": {
+   "rate": 5,
+   "with_amount": false
+  },
+  "2": {
+   "rate": 25,
+   "with_amount": false
+  },
+  "1": {
+   "rate": 40,
+   "with_amount": true
+  }
+ },
+ "vendors": {
+  "凯维": {
+   "en": "Shenzhen Kaiwei",
+   "tier": 3
+  },
+  "华晨": {
+   "en": "Huachen",
+   "tier": 2
+  },
+  "兴华": {
+   "en": "Xinghua"
+  },
+  "凯阔": {
+   "en": "",
+   "tier": 1
+  }
+ }
+}

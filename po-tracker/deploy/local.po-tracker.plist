@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- PO 跟单页常驻服务：放到 ~/Library/LaunchAgents/，launchctl bootstrap gui/$(id -u) 这个文件。
+     开机（登录）自动起，进程退出 10 秒后自动拉起。 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.po-tracker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/hanzj/apps/pdf-locator-app/.venv/bin/python3</string>
+    <string>/Users/hanzj/apps/po-tracker/po_server.py</string>
+    <string>--port</string>
+    <string>8792</string>
+    <string>--data</string>
+    <string>/Users/hanzj/apps/po-tracker/data</string>
+    <string>--password-from</string>
+    <string>/Users/hanzj/apps/pricompare-data/config.json</string>
+    <string>--host</string>
+    <string>po.kvstek.com</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/hanzj/apps/po-tracker</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/hanzj/apps/po-tracker/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/hanzj/apps/po-tracker/server.log</string>
+</dict>
+</plist>
