@@ -14,9 +14,10 @@ export interface Vendor {
  * 依据真实样本播种：凯阔的文件名是 KV*、单号 KV*、落 KK 的 SKW 列；HC 文件名 HCQuote*、单号 KT*；
  * 宸立（CL）多在邮件正文报价。列位按 10-07 新布局：L 列 CL、M 列 BY、YJ 挪到 AG。
  * 2026-11-06 起 M 列 BY 换成 XH（东莞兴华，钣金；它家 PO 上的公司名是东莞千昱精密五金）。
+ * 2026-11-17 起 I 列 Mao 换成 ZTL（正泰隆，报价单抬头 Zintilon Technology）。
  */
 export const SEED_VENDORS: Vendor[] = [
-  { id: 'mao', display: 'Mao', kkSlot: 'I', aliases: ['mao'] },
+  { id: 'ztl', display: 'ZTL', kkSlot: 'I', aliases: ['ztl', '正泰隆', 'zintilon'] },
   { id: 'hc', display: 'HC', kkSlot: 'J', aliases: ['hc', 'hcquote', 'kt', 'kavis'] },
   { id: 'skw', display: 'SKW', kkSlot: 'K', aliases: ['skw', 'kv', '凯阔'] },
   { id: 'cl', display: 'CL', kkSlot: 'L', aliases: ['cl', '宸立', 'chenli'] },
@@ -28,10 +29,17 @@ export const SEED_VENDORS: Vendor[] = [
 /** 旧布局的列字母 → 新布局里同一表头的列字母（L 的 BY 挪到 M，M 的 YJ 挪到 AG） */
 const LEGACY_SLOT_MOVES: Record<string, string> = { L: 'M', M: 'AG' }
 
+/** 换了供应商的列：旧 id → 新 id（落列不变）。BY → XH（M 列，11-06）、Mao → ZTL（I 列，11-17） */
+const RENAMED_VENDORS: readonly [string, string][] = [
+  ['by', 'xh'],
+  ['mao', 'ztl'],
+]
+
 /**
  * 旧版本存下的供应商注册表迁移到当前布局：
  * - 没有 CL 的（10-07 之前）：各家的落列跟着原表头走，再补上 CL；
- * - 还有 BY、没有 XH 的（11-06 之前）：BY 换成 XH，落列不变（M 列）。
+ * - 还有 BY、没有 XH 的（11-06 之前）：BY 换成 XH，落列不变（M 列）；
+ * - 还有 Mao、没有 ZTL 的（11-17 之前）：Mao 换成 ZTL，落列不变（I 列）。
  * 已是当前布局的注册表原样返回。
  */
 export function migrateVendorRegistry(registry: Vendor[]): { registry: Vendor[]; migrated: boolean } {
@@ -46,9 +54,10 @@ export function migrateVendorRegistry(registry: Vendor[]): { registry: Vendor[];
     out = [...moved, { ...cl, aliases: [...cl.aliases] }]
     migrated = true
   }
-  if (out.some((v) => v.id === 'by') && !out.some((v) => v.id === 'xh')) {
-    const xh = SEED_VENDORS.find((v) => v.id === 'xh')!
-    out = out.map((v) => (v.id === 'by' ? { ...xh, kkSlot: v.kkSlot ?? xh.kkSlot, aliases: [...xh.aliases] } : v))
+  for (const [from, to] of RENAMED_VENDORS) {
+    if (!out.some((v) => v.id === from) || out.some((v) => v.id === to)) continue
+    const seed = SEED_VENDORS.find((v) => v.id === to)!
+    out = out.map((v) => (v.id === from ? { ...seed, kkSlot: v.kkSlot ?? seed.kkSlot, aliases: [...seed.aliases] } : v))
     migrated = true
   }
   return { registry: out, migrated }
