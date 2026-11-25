@@ -89,7 +89,7 @@ describe('M 列 BY 换成 XH（2026-11-06）', () => {
     const ws = await sheetOf(out.buffer)
     expect(ws.getCell('M1').value).toBe('XH')
     expect(ws.getCell('L1').value).toBe('CL')
-    expect(ws.getCell('N1').value).toBe('JM')
+    expect(ws.getCell('N1').value).toBe('WK') // N 列 11-25 起由 JM 换成 WK，原表的 JM 表头一起改写
     expect(ws.getCell('M2').value).toBe(1130)
     expect(ws.getCell('J2').value).toBe(2000)
     const names = tableColumnNames(out.buffer)

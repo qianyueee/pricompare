@@ -44,10 +44,10 @@ async function sheetOf(buffer: ArrayBuffer): Promise<ExcelJS.Worksheet> {
 }
 
 describe('10-07 新布局（34 列，L 列 CL，YJ 在 AG）', () => {
-  it('表头 34 列，供应商槽位 I–N 为 ZTL/HC/SKW/CL/XH/JM（M 列 11-06 起由 BY 换成 XH，I 列 11-17 起由 Mao 换成 ZTL），YJ 在 AG', () => {
+  it('表头 34 列，供应商槽位 I–N 为 ZTL/HC/SKW/CL/XH/WK（M 列 11-06 起由 BY 换成 XH，I 列 11-17 起由 Mao 换成 ZTL，N 列 11-25 起由 JM 换成 WK），YJ 在 AG', () => {
     expect(KK_HEADERS).toHaveLength(34)
     expect(KK_COL_COUNT).toBe(34)
-    expect(KK_HEADERS.slice(8, 14)).toEqual(['ZTL', 'HC', 'SKW', 'CL', 'XH', 'JM'])
+    expect(KK_HEADERS.slice(8, 14)).toEqual(['ZTL', 'HC', 'SKW', 'CL', 'XH', 'WK'])
     expect(KK_HEADERS[KK_COL.yj]).toBe('YJ')
     expect(KK_HEADERS[KK_COL.basePn]).toBe('Base P/N')
     expect(KK_HEADERS[KK_COL.baseId]).toBe('Base ID')
@@ -141,7 +141,7 @@ describe('10-07 新布局（34 列，L 列 CL，YJ 在 AG）', () => {
 })
 
 describe('供应商注册表', () => {
-  it('旧注册表迁移：落列跟着原表头走（L→M、M→AG），补上 CL，BY 换成 XH；已迁移的原样返回', () => {
+  it('旧注册表迁移：落列跟着原表头走（L→M、M→AG），补上 CL，BY 换成 XH，JM 换成 WK；已迁移的原样返回', () => {
     const old: Vendor[] = [
       { id: 'hc', display: 'HC', kkSlot: 'J', aliases: ['hc'] },
       { id: 'by', display: 'BY', kkSlot: 'L', aliases: ['by'] },
@@ -152,8 +152,9 @@ describe('供应商注册表', () => {
     const { registry, migrated } = migrateVendorRegistry(old)
     expect(migrated).toBe(true)
     const slot = (id: string): string | undefined => registry.find((v) => v.id === id)?.kkSlot
-    expect([slot('hc'), slot('xh'), slot('yj'), slot('jm'), slot('cl')]).toEqual(['J', 'M', 'AG', 'N', 'L'])
+    expect([slot('hc'), slot('xh'), slot('yj'), slot('wk'), slot('cl')]).toEqual(['J', 'M', 'AG', 'N', 'L'])
     expect(slot('by')).toBeUndefined()
+    expect(slot('jm')).toBeUndefined()
     expect(slot('custom')).toBeUndefined()
     expect(migrateVendorRegistry(registry)).toEqual({ registry, migrated: false })
     expect(migrateVendorRegistry(SEED_VENDORS).migrated).toBe(false)

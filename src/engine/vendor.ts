@@ -15,6 +15,7 @@ export interface Vendor {
  * 宸立（CL）多在邮件正文报价。列位按 10-07 新布局：L 列 CL、M 列 BY、YJ 挪到 AG。
  * 2026-11-06 起 M 列 BY 换成 XH（东莞兴华，钣金；它家 PO 上的公司名是东莞千昱精密五金）。
  * 2026-11-17 起 I 列 Mao 换成 ZTL（正泰隆，报价单抬头 Zintilon Technology）。
+ * 2026-11-25 起 N 列 JM 换成 WK（韦克，深圳韦克快速成型 WayKen）。
  */
 export const SEED_VENDORS: Vendor[] = [
   { id: 'ztl', display: 'ZTL', kkSlot: 'I', aliases: ['ztl', '正泰隆', 'zintilon'] },
@@ -22,24 +23,26 @@ export const SEED_VENDORS: Vendor[] = [
   { id: 'skw', display: 'SKW', kkSlot: 'K', aliases: ['skw', 'kv', '凯阔'] },
   { id: 'cl', display: 'CL', kkSlot: 'L', aliases: ['cl', '宸立', 'chenli'] },
   { id: 'xh', display: 'XH', kkSlot: 'M', aliases: ['xh', '兴华', '千昱'] },
-  { id: 'jm', display: 'JM', kkSlot: 'N', aliases: ['jm'] },
+  { id: 'wk', display: 'WK', kkSlot: 'N', aliases: ['wk', '韦克', 'wayken'] },
   { id: 'yj', display: 'YJ', kkSlot: 'AG', aliases: ['yj'] },
 ]
 
 /** 旧布局的列字母 → 新布局里同一表头的列字母（L 的 BY 挪到 M，M 的 YJ 挪到 AG） */
 const LEGACY_SLOT_MOVES: Record<string, string> = { L: 'M', M: 'AG' }
 
-/** 换了供应商的列：旧 id → 新 id（落列不变）。BY → XH（M 列，11-06）、Mao → ZTL（I 列，11-17） */
+/** 换了供应商的列：旧 id → 新 id（落列不变）。BY → XH（M 列，11-06）、Mao → ZTL（I 列，11-17）、JM → WK（N 列，11-25） */
 const RENAMED_VENDORS: readonly [string, string][] = [
   ['by', 'xh'],
   ['mao', 'ztl'],
+  ['jm', 'wk'],
 ]
 
 /**
  * 旧版本存下的供应商注册表迁移到当前布局：
  * - 没有 CL 的（10-07 之前）：各家的落列跟着原表头走，再补上 CL；
  * - 还有 BY、没有 XH 的（11-06 之前）：BY 换成 XH，落列不变（M 列）；
- * - 还有 Mao、没有 ZTL 的（11-17 之前）：Mao 换成 ZTL，落列不变（I 列）。
+ * - 还有 Mao、没有 ZTL 的（11-17 之前）：Mao 换成 ZTL，落列不变（I 列）；
+ * - 还有 JM、没有 WK 的（11-25 之前）：JM 换成 WK，落列不变（N 列）。
  * 已是当前布局的注册表原样返回。
  */
 export function migrateVendorRegistry(registry: Vendor[]): { registry: Vendor[]; migrated: boolean } {
