@@ -1,0 +1,14 @@
+{
+  "_说明": "自动判断已发单 / 已发货的配置，放 data/auto.json（只在 Mac 上，不进仓库）。下划线开头的键忽略。",
+  "shipdocs": "/Users/<你>/agent/shippingdocs-mail/orders.json",
+  "us_domains": ["us-partner.example.com"],
+  "vendor_mail": {
+    "华晨": ["huachen.example.com"],
+    "凯维": ["kaiwei.example.cn"],
+    "兴华": ["12345678@qq.example.com"]
+  },
+  "vendor_alias": {
+    "ZTL": ["正泰隆"]
+  },
+  "ignore_mail": ["someone@gmail.example.com"]
+}

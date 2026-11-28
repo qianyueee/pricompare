@@ -17,6 +17,12 @@ const LEVELS = [
   { key: 'all', label: '全部' },
 ];
 const RANK = { overdue: 0, red: 1, amber: 2, green: 3, nodate: 4, done: 5 };
+// 自动判断（服务器从 zill@ 发给供应商的信、shipping@ 的出货单据看出来的，只作提示，不改状态）：两个检查筛选
+const CHECKS = [
+  { key: 'nosent', label: '未见发单', title: 'zill@ 里有这张单的信（比如 Tony 发来的 PO），但没看到我们或美方发给供应商的 PO 信；状态还是未定 / 已下单' },
+  { key: 'newship', label: '出货了没改状态', title: 'shipping@ 来了出货单据，状态还是未定 / 已下单 / 已确认，而且出货以后没人在这里改过、写过跟进' },
+];
+const NOT_SENT = new Set(['未定', '已下单']);
 const WEEK = '日一二三四五六';
 const PREF_KEY = 'po-tracker-prefs-2';
 const NAME_KEY = 'po-tracker-name';
@@ -159,6 +165,7 @@ function haystack(o) {
   if (!h) {
     const parts = [o.po, ...(o.aliases || []), o.supplier, o.sub_vendor, o.customer_po, o.customer, o.end_user, o.status, o.status_note, o.tracking, o.due_text, o.note, o.eta];
     for (const l of o.lines || []) parts.push(l.pn, l.rev, l.desc, l.next_step);
+    for (const sh of (o.auto && o.auto.ships) || []) parts.push(...(sh.awb || []));
     h = parts.filter(Boolean).join(' ').toLowerCase();
     haystacks.set(o, h);
   }
@@ -207,12 +214,79 @@ const SORTS = {
 // ---------------------------------------------------------------- 渲染：列表
 
 function renderChips(counts) {
-  $('chips').innerHTML = LEVELS.map((lv) => {
+  const levels = LEVELS.map((lv) => {
     const n = counts[lv.key] || 0;
     const cls = ['chip', lv.key === 'all' || lv.key === 'open' ? '' : `u-${lv.key}`, n ? '' : 'zero'].join(' ');
     const dot = lv.key === 'all' || lv.key === 'open' ? '' : '<span class="dot"></span>';
     return `<button type="button" class="${cls}" data-level="${lv.key}" aria-pressed="${state.level === lv.key}">${dot}${esc(lv.label)} <span class="n">${n}</span></button>`;
-  }).join('');
+  });
+  const checks = state.meta.auto && !state.meta.auto.failed
+    ? CHECKS.map((c) => {
+        const n = counts[c.key] || 0;
+        return `<button type="button" class="chip chk${n ? '' : ' zero'}" data-level="${c.key}" title="${esc(c.title)}" aria-pressed="${state.level === c.key}"><span class="dot"></span>${esc(c.label)} <span class="n">${n}</span></button>`;
+      })
+    : [];
+  $('chips').innerHTML = levels.join('') + (checks.length ? `<span class="chip-sep" aria-hidden="true"></span>${checks.join('')}` : '');
+}
+
+function flagged(o, key) {
+  return !!(o.auto && (o.auto.flags || []).includes(key));
+}
+
+function autoAwb(o) {
+  const ships = (o.auto && o.auto.ships) || [];
+  for (let i = ships.length - 1; i >= 0; i--) if ((ships[i].awb || []).length) return ships[i].awb[0];
+  return '';
+}
+
+function sentText(s) {
+  const who = s.vendor || s.to || '供应商';
+  return `${fmtDateTime(s.date)} ${s.from || ''} ${s.cc ? '抄送' : '发给'}${who}${s.reply ? '（回复里）' : ''}：${s.subject || ''}`;
+}
+
+function shipText(sh) {
+  return [fmtDay(sh.day), sh.fac, (sh.awb || []).length ? `运单 ${sh.awb.join('、')}` : '', (sh.with || []).length ? `同票 ${sh.with.map((w) => `PO${w}`).join('、')}` : '']
+    .filter(Boolean)
+    .join(' ');
+}
+
+// 状态下面的小标签：只在还没发货的单上显示；虚线框 = 自动看出来的，不是人填的
+function autoTags(o) {
+  const a = o.auto;
+  if (!a || DONE.has(o.status)) return '';
+  const ships = a.ships || [];
+  let tag = '';
+  if (ships.length) {
+    const last = ships[ships.length - 1];
+    const hot = flagged(o, 'newship');
+    const title = `shipping@ 的出货单据${hot ? '（出货以后这里还没人改过状态）' : ''}：\n${ships.map(shipText).join('\n')}`;
+    tag = `<span class="auto auto-ship${hot ? ' hot' : ''}" title="${esc(title)}">出货 ${esc(fmtDay(last.day))}${ships.length > 1 ? ` · ${ships.length} 批` : ''}</span>`;
+  } else if (a.sent) {
+    if (NOT_SENT.has(o.status)) tag = `<span class="auto auto-sent" title="${esc(sentText(a.sent))}">已发单 ${esc(fmtDay(a.sent.day))}</span>`;
+  } else if (flagged(o, 'nosent')) {
+    tag = `<span class="auto auto-nosent" title="${esc(CHECKS[0].title)}">未见发单</span>`;
+  }
+  return tag ? `<span class="autos">${tag}</span>` : '';
+}
+
+function autoBlock(o) {
+  const a = o.auto || {};
+  const m = state.meta.auto || {};
+  if (!state.meta.auto) return '';
+  if (m.failed) return `<h3>自动判断</h3><p class="muted">${esc(m.error)}</p>`;
+  const items = [];
+  if (a.sent) items.push(`<li><b>已发单</b><span>${esc(sentText(a.sent))} <span class="muted">${esc(a.sent.folder || '')}${a.sent.uid ? ` #${esc(a.sent.uid)}` : ''}</span></span></li>`);
+  else if (flagged(o, 'nosent')) items.push(`<li><b class="warn">未见发单</b><span>zill@ 里有这张单的信，但没看到发给供应商的 PO 信</span></li>`);
+  else items.push(`<li><b class="none">发单</b><span class="muted">${(o.mails || []).length ? 'zill@ 里没看到发给供应商的 PO 信' : 'zill@ 里没有这张单的邮件，判断不了'}</span></li>`);
+  const ships = a.ships || [];
+  if (ships.length) {
+    const hot = flagged(o, 'newship');
+    items.push(`<li><b class="${hot ? 'warn' : ''}">出货${ships.length > 1 ? ` ${ships.length} 批` : ''}</b><span>${ships.map((sh) => esc(shipText(sh))).join('<br>')}${hot ? '<br><span class="warn">出货以后这里还没人改过状态</span>' : ''}</span></li>`);
+  } else {
+    items.push(`<li><b class="none">出货</b><span class="muted">shipping@ 还没有这张单的出货单据</span></li>`);
+  }
+  const when = [m.mail_at && `邮件 ${fmtDateTime(m.mail_at)}`, m.shipdocs_at && `出货单据 ${fmtDateTime(m.shipdocs_at)}`].filter(Boolean).join('、');
+  return `<h3>自动判断 <span class="muted">只作提示，不会改状态</span></h3><ul class="auto-d">${items.join('')}</ul>${when ? `<p class="muted auto-when">${esc(when)} 更新</p>` : ''}`;
 }
 
 function renderSuppliers() {
@@ -240,8 +314,10 @@ function statusCell(o) {
   } else if (o.status_note) {
     parts.push(`<span class="muted st-note clip">${esc(o.status_note)}</span>`);
   }
-  const extra = [o.eta && `预计发货 ${dayOrText(o.eta)}`, o.tracking && `运单 ${o.tracking}`].filter(Boolean);
+  const awb = !o.tracking && !['已完成', '已取消'].includes(o.status) ? autoAwb(o) : '';
+  const extra = [o.eta && `预计发货 ${dayOrText(o.eta)}`, o.tracking && `运单 ${o.tracking}`, awb && `运单 ${awb}（出货单据）`].filter(Boolean);
   if (extra.length) parts.push(`<span class="eta">${esc(extra.join(' · '))}</span>`);
+  parts.push(autoTags(o));
   const total = (o.lines || []).length;
   if (!DONE.has(o.status) && typeof o.open_lines === 'number' && total > 1 && o.open_lines < total) {
     parts.push(`<span class="muted">${total - o.open_lines}/${total} 行已结束</span>`);
@@ -346,7 +422,7 @@ function editForm(o) {
         <label>状态<select name="status">${statusOpts}</select></label>
         <label>供应商交期<input type="date" name="due_date" value="${esc(val('due_date'))}" /></label>
         <label>预计发货<input name="eta" maxlength="40" placeholder="日期或「随时」" value="${esc(val('eta'))}" /></label>
-        <label>运单号<input name="tracking" maxlength="80" value="${esc(val('tracking'))}" /></label>
+        <label>运单号<input name="tracking" maxlength="80" placeholder="${esc(autoAwb(o) ? `出货单据：${autoAwb(o)}` : '')}" value="${esc(val('tracking'))}" /></label>
       </div>
       <label class="fu-note">这次跟进了什么<textarea name="note" rows="2" maxlength="500" placeholder="例如：凯维说 11/20 发货">${esc(d.note || '')}</textarea></label>
       <div class="fu-actions">
@@ -414,6 +490,7 @@ function detail(o) {
   return `<div class="dl">
       <div class="facts">${facts.join('')}${fixed}</div>
       <div class="fu">
+        ${autoBlock(o)}
         <h3>跟进</h3>
         ${canEdit ? editForm(o) : lockHint}
         <h3>跟进记录</h3>${historyHtml(o)}
@@ -426,6 +503,11 @@ function detail(o) {
 }
 
 function render() {
+  let isCheck = CHECKS.some((c) => c.key === state.level);
+  if (isCheck && (!state.meta.auto || state.meta.auto.failed)) {
+    state.level = 'open'; // 存着的筛选是自动判断的，但这次没有自动判断结果
+    isCheck = false;
+  }
   const q = state.q.trim().toLowerCase();
   const terms = q ? q.split(/\s+/) : [];
   const base = state.orders.filter((o) => {
@@ -435,9 +517,11 @@ function render() {
   const counts = { all: base.length };
   for (const o of base) counts[o._u.key] = (counts[o._u.key] || 0) + 1;
   counts.open = base.length - (counts.done || 0);
+  for (const c of CHECKS) counts[c.key] = base.filter((o) => flagged(o, c.key)).length;
   renderChips(counts);
 
-  const keep = (o) => state.level === 'all' || (state.level === 'open' ? o._u.key !== 'done' : o._u.key === state.level);
+  const keep = (o) =>
+    state.level === 'all' || (isCheck ? flagged(o, state.level) : state.level === 'open' ? o._u.key !== 'done' : o._u.key === state.level);
   const list = base.filter(keep).sort(SORTS[state.sort] || SORTS.urgency);
   $('rows').innerHTML = list
     .map((o) => {
@@ -480,7 +564,7 @@ function renderHeader() {
   $('inv-start').hidden = !m.can_edit || !m.invoice;
   $('edit').hidden = !!m.can_edit;
   $('edit-off').hidden = !m.can_edit || !!m.edit_local;
-  const warn = [m.edit_error, m.mail_error];
+  const warn = [m.edit_error, m.mail_error, m.auto && m.auto.error];
   const synced = m.mail_synced_at ? Date.parse(m.mail_synced_at) : NaN;
   if (synced && Date.now() - synced > MAIL_STALE_HOURS * 3600e3) {
     warn.push(`邮件同步停在 ${fmtDateTime(m.mail_synced_at)}，超过 ${MAIL_STALE_HOURS} 小时没更新，新邮件可能还没进来`);
