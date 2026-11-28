@@ -77,7 +77,8 @@
   <span class="lg u-green">7 天以上</span>
   <span class="lg u-nodate">没写交期</span>
   <span class="lg u-done">已发货 / 完成 / 取消</span><br />
-  起点数据来自跟单总表；zill@kvstek.com 的 PO 邮件每小时同步一次，只挂上相关邮件、新 PO 先记「已下单」，状态和备注都由跟单的人在这里更新；点一行看跟进记录和零件明细。
+  起点数据来自跟单总表；zill@kvstek.com 的 PO 邮件每小时同步一次，只挂上相关邮件、新 PO 先记「已下单」，状态和备注都由跟单的人在这里更新；点一行看跟进记录和零件明细。<br />
+  状态下面虚线框的「已发单」「出货」是自动看出来的：已发单 = zill@ 里有我们或美方发给供应商的 PO 信，出货 = shipping@ 来了出货单据；只作提示，不会改状态和运单号。
 </footer>
 
 <dialog id="ed-dialog" class="dlg" aria-labelledby="ed-title">

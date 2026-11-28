@@ -17,6 +17,8 @@
 - 开 Invoice（要编辑权限）：勾 PO → 预览 → 导出 Excel / 打印，见 invoice.py；开过的存 data/invoices.json，抬头地址在 data/invoice.json。
 - 做采购订单（要编辑权限）：展开一个 PO →「做采购订单」→ 预览 → 导出 Excel / 打印，见 purchase.py；做过的存 data/purchases.json，
   抬头、收货信息、条款在 data/purchase.json，供方资料记在 data/purchase_vendors.json。
+- 自动判断「已发单」「已发货」（autoflags.py）：从 zill@ 发给供应商的信（data/mail_index.json）和 shipping@ 的出货单据
+  （data/auto.json 里配的 shippingdocs-mail orders.json）看出来，只作提示（每个 PO 的 "auto"），不改人填的任何字段。
 - 访问记录：data/access/YYYY-MM.jsonl（打开页面、登录成功/失败、编辑登录）。
 """
 from __future__ import annotations
@@ -40,6 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
+import autoflags
 import edits
 import invoice
 import invoice_xlsx
@@ -135,6 +138,7 @@ class App:
         self.store = edits.Store(data)
         self.invoices = invoice.InvoiceStore(data)
         self.purchases = purchase.PurchaseStore(data)
+        self.auto = autoflags.Source(data)
         self.fails: list[float] = []
 
     def _session_key(self) -> bytes:
@@ -233,6 +237,14 @@ class App:
                 last = h[0]
         if last:
             meta["last_edit"] = {k: last.get(k) for k in ("at", "by", "key")}
+        try:  # 自动判断坏了也不能耽误看列表；mail_index.json、出货单据都没有就不判断（页面上也不显示）
+            cfg, auto = self.auto.load()
+            if auto:
+                meta["auto"] = autoflags.annotate(orders, auto, cfg, autoflags.sheet_day(meta))
+        except Exception as e:  # noqa: BLE001
+            for o in orders:
+                o.pop("auto", None)
+            meta["auto"] = {"error": f"自动判断出错：{e.__class__.__name__}", "failed": True}
         return {"meta": meta, "orders": orders}
 
     # ---- 网页上的改动（edits.py）

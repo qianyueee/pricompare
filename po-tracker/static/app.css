@@ -130,6 +130,9 @@ button, input, select { font: inherit; color: inherit; }
 .chip.u-green { --c: var(--u-green); }
 .chip.u-nodate { --c: var(--u-nodate); }
 .chip.u-done { --c: var(--u-done); }
+.chip.chk { border-style: dashed; --c: var(--warn); }
+.chip.chk[aria-pressed="true"] { border-style: solid; }
+.chip-sep { width: 1px; align-self: stretch; margin: 4px 2px; background: var(--line); }
 
 /* ---------- 工具栏 ---------- */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
@@ -299,6 +302,20 @@ ul.hist .h-origin .h-note { color: var(--muted); font-size: 12px; }
 .c-status > .muted { display: block; margin-top: 1px; }
 .tag-manual, .tag-mail { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 11px; line-height: 17px; vertical-align: 2px; background: var(--warn-bg); color: var(--warn); }
 .tag-mail { background: var(--st-teal-bg); color: var(--st-teal); }
+/* 自动判断的小标签：虚线框 = 机器看出来的，不是人填的 */
+.c-status .autos { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.auto { display: inline-block; padding: 0 6px; border: 1px dashed currentColor; border-radius: 4px; font-size: 11px; line-height: 17px; white-space: nowrap; }
+.auto-sent { color: var(--st-green); }
+.auto-ship { color: var(--st-teal); }
+.auto-ship.hot, .auto-nosent { color: var(--warn); background: var(--warn-bg); }
+ul.auto-d { margin: 0 0 4px; padding: 0; list-style: none; font-size: 13px; }
+ul.auto-d li { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+ul.auto-d li:last-child { border-bottom: 0; }
+ul.auto-d b { font-weight: 600; }
+ul.auto-d .warn, .dl h3 .warn { color: var(--warn); }
+ul.auto-d span { overflow-wrap: anywhere; }
+.auto-when { margin: 0 0 6px; }
+.dl h3 .muted { font-weight: 400; margin-left: 4px; }
 
 .toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10; max-width: calc(100vw - 32px);
